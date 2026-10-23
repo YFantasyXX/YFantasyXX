@@ -60,6 +60,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 
 @Composable
 fun SettingsScreen(onOpenTemplates: () -> Unit) {
@@ -225,11 +229,40 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         singleLine = true,
                     )
                     Spacer(Modifier.height(8.dp))
+                    var showPassword by remember { mutableStateOf(false) }
                     TextField(
                         value = pass,
                         onValueChange = { pass = it },
                         label = "密码 / 应用专用密码",
                         singleLine = true,
+                        visualTransformation = if (showPassword) {
+                            androidx.compose.ui.text.input.VisualTransformation.None
+                        } else {
+                            androidx.compose.ui.text.input.PasswordVisualTransformation()
+                        },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password
+                        ),
+                        trailingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(androidx.compose.foundation.shape.CircleShape)
+                                    .clickable { showPassword = !showPassword },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = if (showPassword) {
+                                        Icons.Filled.VisibilityOff
+                                    } else {
+                                        Icons.Filled.Visibility
+                                    },
+                                    contentDescription = if (showPassword) "隐藏密码" else "显示密码",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                            }
+                        },
                     )
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
