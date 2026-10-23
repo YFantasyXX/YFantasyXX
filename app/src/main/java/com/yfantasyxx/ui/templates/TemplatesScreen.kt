@@ -40,6 +40,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.yfantasyxx.ui.components.ActionText
+import com.yfantasyxx.ui.components.AppDialog
 
 @Composable
 fun TemplatesScreen(
@@ -235,12 +236,12 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
         var keyword by remember { mutableStateOf("") }
         val list by container.workoutRepository.observeExercises(keyword, null)
             .collectAsState(initial = emptyList())
-        top.yukonga.miuix.kmp.window.WindowDialog(
-            show = true,
+        AppDialog(
             title = "选择动作",
+            fullWidth = true,
             onDismissRequest = { showPicker = false },
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 top.yukonga.miuix.kmp.basic.TextField(
                     value = keyword,
                     onValueChange = { keyword = it },

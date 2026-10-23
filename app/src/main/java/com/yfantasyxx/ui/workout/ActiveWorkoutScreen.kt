@@ -33,7 +33,7 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Surface
@@ -58,6 +58,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val elapsed by vm.elapsedSeconds.collectAsState()
     val restTimer by vm.restTimer.collectAsState()
     val lastPerformance by vm.lastPerformance.collectAsState()
+    val error by vm.error.collectAsState()
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -91,8 +92,34 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
             ) {
-                if (restTimer.running) {
+                // 操作异常提示（不闪退，显示原因）
+                if (error != null) {
                     item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "操作失败",
+                                    style = MiuixTheme.textStyles.main,
+                                    color = MiuixTheme.colorScheme.error,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = error.orEmpty(),
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                ActionText(text = "知道了", onClick = vm::clearError)
+                            }
+                        }
+                    }
+                }
+
+                if (restTimer.running) {                    item {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -189,16 +216,14 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         }
 
         if (showDiscardDialog) {
-            OverlayDialog(
-                show = true,
+            AppDialog(
                 title = "放弃本次训练？",
                 summary = "草稿和已记录的组都会被删除",
                 onDismissRequest = { showDiscardDialog = false },
             ) {
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
                 ) {
                     ActionText(text = "取消", onClick = { showDiscardDialog = false })
@@ -357,12 +382,11 @@ private fun FinishDialog(
 ) {
     var name by remember { mutableStateOf(defaultName) }
     var note by remember { mutableStateOf("") }
-    OverlayDialog(
-        show = true,
+    AppDialog(
         title = "完成训练",
         onDismissRequest = onDismiss,
     ) {
-        Column(modifier = Modifier.padding(24.dp)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             top.yukonga.miuix.kmp.basic.TextField(
                 value = name,
                 onValueChange = { name = it },
@@ -403,12 +427,12 @@ private fun ExercisePickerDialog(
         container.workoutRepository.observeExercises(keyword, category)
     }.collectAsState(initial = emptyList())
 
-    OverlayDialog(
-        show = true,
+    AppDialog(
         title = "选择动作",
+        fullWidth = true,
         onDismissRequest = onDismiss,
     ) {
-        Column(modifier = Modifier.padding(24.dp)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             top.yukonga.miuix.kmp.basic.TextField(
                 value = keyword,
                 onValueChange = { keyword = it },

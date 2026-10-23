@@ -40,7 +40,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Surface
@@ -312,12 +312,11 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
 
     if (showBackups) {
         vm.refreshBackups()
-        WindowDialog(
-            show = true,
+        AppDialog(
             title = "云端备份",
             onDismissRequest = { showBackups = false },
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 if (backupState.running) {
                     Text("处理中…", style = MiuixTheme.textStyles.paragraph)
                 }
@@ -374,16 +373,14 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
     }
 
     toastMessage?.let { msg ->
-        WindowDialog(
-            show = true,
+        AppDialog(
             title = null,
             summary = msg,
             onDismissRequest = { toastMessage = null },
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
+                    .fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
                 ActionText(text = "好", onClick = { toastMessage = null })

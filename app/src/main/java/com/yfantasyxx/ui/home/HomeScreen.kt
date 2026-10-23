@@ -29,7 +29,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.yfantasyxx.util.CrashLogger
 import com.yfantasyxx.ui.components.ActionText
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.AnnotatedString
 
 @Composable
 fun HomeScreen(
@@ -64,8 +65,8 @@ fun HomeScreen(
     var showWeightDialog by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
-    var showCrash by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { SmallTopAppBar(title = "YFantasyXX") },
@@ -76,7 +77,7 @@ fun HomeScreen(
                 .padding(padding),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
         ) {
-            // ---- 上次崩溃提示（便于反馈问题） ----
+            // ---- 上次崩溃提示（直接展示，无需点击，避免二次崩溃） ----
             if (crashText != null) {
                 item {
                     Spacer(Modifier.height(8.dp))
@@ -84,7 +85,6 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
-                        onClick = { showCrash = true },
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
@@ -92,11 +92,29 @@ fun HomeScreen(
                                 style = MiuixTheme.textStyles.main,
                                 color = MiuixTheme.colorScheme.error,
                             )
+                            Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "点此查看错误信息（截图发给开发者）",
+                                text = "请截图这一段发给开发者",
                                 style = MiuixTheme.textStyles.footnote1,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = summarizeCrash(crashText.orEmpty()),
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                                ActionText(text = "复制", onClick = {
+                                    clipboard.setText(AnnotatedString(crashText.orEmpty()))
+                                })
+                                Spacer(Modifier.width(8.dp))
+                                ActionText(text = "清除", onClick = {
+                                    CrashLogger.clear(context)
+                                    crashText = null
+                                })
+                            }
                         }
                     }
                 }
@@ -286,53 +304,13 @@ fun HomeScreen(
         }
     }
 
-    if (showCrash && crashText != null) {
-        WindowDialog(
-            show = true,
-            title = "错误信息",
-            onDismissRequest = {
-                showCrash = false
-            },
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                val scrollState = androidx.compose.foundation.rememberScrollState()
-                androidx.compose.foundation.layout.Box(modifier = Modifier.height(320.dp)) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(scrollState)
-                    ) {
-                        Text(
-                            text = crashText.orEmpty(),
-                            style = MiuixTheme.textStyles.footnote1,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    ActionText(text = "清除记录", onClick = {
-                        CrashLogger.clear(context)
-                        crashText = null
-                        showCrash = false
-                    })
-                    Spacer(Modifier.width(8.dp))
-                    ActionText(text = "关闭", onClick = { showCrash = false })
-                }
-            }
-        }
-    }
-
     if (showWeightDialog) {
         var weightValue by remember { mutableStateOf(weightInput.toFloatOrNull() ?: 60f) }
-        WindowDialog(
-            show = true,
+        AppDialog(
             title = "记录今日体重",
             onDismissRequest = { showWeightDialog = false },
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = "单位：${state.weightUnitLabel}",
                     style = MiuixTheme.textStyles.paragraph,
@@ -427,4 +405,14 @@ private fun formatElapsed(startTime: Long): String {
     } else {
         "$minutes 分钟"
     }
+}
+
+/** 提取崩溃堆栈的关键信息：异常行 + 前几帧本应用调用 */
+private fun summarizeCrash(raw: String): String {
+    val lines = raw.lines().filter { it.isNotBlank() }
+    if (lines.isEmpty()) return raw.take(500)
+    val head = lines.first().take(300)
+    val appFrames = lines.filter { it.trimStart().startsWith("at com.yfantasyxx") }.take(6)
+    val frames = appFrames.ifEmpty { lines.filter { it.trimStart().startsWith("at ") }.take(6) }
+    return (listOf(head) + frames).joinToString("\n")
 }

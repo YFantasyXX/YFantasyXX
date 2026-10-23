@@ -46,6 +46,14 @@ class WorkoutViewModel(
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
     val lastPerformance: StateFlow<Map<Long, List<SetLog>>> = _lastPerformance.asStateFlow()
 
+    /** 操作错误提示（避免异常直接导致闪退） */
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error.asStateFlow()
+
+    fun clearError() {
+        _error.value = null
+    }
+
     /** 本次会话的训练总秒数 */
     private val _elapsedSeconds = MutableStateFlow(0)
     val elapsedSeconds: StateFlow<Int> = _elapsedSeconds.asStateFlow()
@@ -61,12 +69,16 @@ class WorkoutViewModel(
             return
         }
         viewModelScope.launch {
-            // 注意：空训练草稿的动作列表是空 List（非 null），不能用 first()
-            val draftId = repo.getActiveDraft()?.firstOrNull()?.sessionExercise?.sessionId
-            val existingId = draftId ?: repo.getActiveSessionId()
-            val id = existingId ?: repo.startSession()
-            startObserving(id)
-            startTicker()
+            runCatching {
+                // 注意：空训练草稿的动作列表是空 List（非 null），不能用 first()
+                val draftId = repo.getActiveDraft()?.firstOrNull()?.sessionExercise?.sessionId
+                val existingId = draftId ?: repo.getActiveSessionId()
+                val id = existingId ?: repo.startSession()
+                startObserving(id)
+                startTicker()
+            }.onFailure { e ->
+                _error.value = "加载训练失败：${e.javaClass.simpleName} ${e.message.orEmpty()}"
+            }
             onReady()
         }
     }
@@ -104,16 +116,31 @@ class WorkoutViewModel(
     }
 
     fun addExercise(exerciseId: Long) {
-        val id = _sessionId.value ?: return
-        viewModelScope.launch { repo.addExerciseToSession(id, exerciseId) }
+        val id = _sessionId.value
+        if (id == null) {
+            _error.value = "训练还没准备好，请稍等一秒再试"
+            return
+        }
+        viewModelScope.launch {
+            runCatching { repo.addExerciseToSession(id, exerciseId) }
+                .onFailure { e ->
+                    _error.value = "添加动作失败：${e.javaClass.simpleName} ${e.message.orEmpty()}"
+                }
+        }
     }
 
     fun addSet(sessionExerciseId: Long) {
-        viewModelScope.launch { repo.addSet(sessionExerciseId) }
+        viewModelScope.launch {
+            runCatching { repo.addSet(sessionExerciseId) }
+                .onFailure { e -> _error.value = "添加组失败：${e.message.orEmpty()}" }
+        }
     }
 
     fun removeExercise(sessionExerciseId: Long) {
-        viewModelScope.launch { repo.removeSessionExercise(sessionExerciseId) }
+        viewModelScope.launch {
+            runCatching { repo.removeSessionExercise(sessionExerciseId) }
+                .onFailure { e -> _error.value = "移除动作失败：${e.message.orEmpty()}" }
+        }
     }
 
     /** 更新一组的重量/次数/RPE（不改变完成状态） */

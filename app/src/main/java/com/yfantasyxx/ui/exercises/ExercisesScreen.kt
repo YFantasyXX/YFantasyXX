@@ -27,7 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Surface
@@ -202,12 +202,11 @@ private fun AddExerciseDialog(
     var equipment by remember { mutableStateOf(ExercisesViewModel.equipments.first()) }
     var muscle by remember { mutableStateOf("") }
 
-    WindowDialog(
-        show = true,
+    AppDialog(
         title = "添加自定义动作",
         onDismissRequest = onDismiss,
     ) {
-        Column(modifier = Modifier.padding(24.dp)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             TextField(
                 value = name,
                 onValueChange = { name = it },

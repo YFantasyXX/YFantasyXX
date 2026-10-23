@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -187,16 +187,14 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     }
 
     if (showDelete) {
-        WindowDialog(
-            show = true,
+        AppDialog(
             title = "删除这条训练记录？",
             summary = "删除后无法恢复",
             onDismissRequest = { showDelete = false },
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
+                    .fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
                 ActionText(text = "取消", onClick = { showDelete = false })
