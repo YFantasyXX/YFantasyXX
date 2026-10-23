@@ -145,9 +145,18 @@ object RestNotifier {
         runCatching { manager(context)?.cancel(NOTIF_DONE) }
     }
 
-    /** 四段强震动，确保能感知 */
+    /**
+     * 四段强震动，确保能感知。
+     * 带 2.6 秒去重：一次完整波形约 2.5 秒，避免前台轮询与服务/闹钟
+     * 同时触发时后一次把前一次的波形重置掉（表现为只震一下）。
+     */
     fun vibrate(context: Context) {
         runCatching {
+            val prefs = context.getSharedPreferences("rest_vibrate", Context.MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            if (now - prefs.getLong("last_at", 0L) < 2_600L) return
+            prefs.edit().putLong("last_at", now).apply()
+
             val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val manager = ContextCompat.getSystemService(context, VibratorManager::class.java)
                 manager?.defaultVibrator
