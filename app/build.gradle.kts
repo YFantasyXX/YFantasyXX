@@ -33,7 +33,7 @@ android {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 64
+        versionCode = 65
         versionName = "2026.10.23"
         resourceConfigurations += listOf("zh", "en")
     }

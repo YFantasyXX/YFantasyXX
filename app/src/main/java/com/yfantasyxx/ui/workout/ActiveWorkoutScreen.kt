@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -70,7 +71,7 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.mutableStateMapOf
@@ -292,27 +293,29 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             },
                         verticalAlignment = Alignment.Top,
                     ) {
-                        // 拖动把手：长按上下拖动；拖动过程中实时交换位置
+                        // 拖动把手：直接上下拖动即开始排序（无需长按）；
+                        // 拖动过程中实时交换位置
                         Box(
                             modifier = Modifier
                                 .width(40.dp)
-                                .padding(top = 20.dp)
+                                .heightIn(min = 56.dp)
+                                .padding(top = 12.dp)
                                 .pointerInput(item.sessionExercise.id) {
-                                    detectDragGesturesAfterLongPress(
+                                    detectVerticalDragGestures(
                                         onDragStart = {
                                             draggingId = item.sessionExercise.id
                                             dragOffsetY = 0f
                                             haptics.performHapticFeedback(
-                                                HapticFeedbackType.LongPress
+                                                HapticFeedbackType.TextHandleMove
                                             )
                                         },
-                                        onDrag = { change, amount ->
+                                        onVerticalDrag = { change, amount ->
                                             change.consume()
                                             val id = draggingId
-                                                ?: return@detectDragGesturesAfterLongPress
-                                            dragOffsetY += amount.y
+                                                ?: return@detectVerticalDragGestures
+                                            dragOffsetY += amount
                                             // 拖动中实时交换：被拖项中心落在谁身上，就换到谁的位置
-                                            val bounds = itemBounds[id] ?: return@detectDragGesturesAfterLongPress
+                                            val bounds = itemBounds[id] ?: return@detectVerticalDragGestures
                                             val center =
                                                 bounds.first + dragOffsetY + bounds.second / 2
                                             val targetEntry = itemBounds.entries
@@ -323,23 +326,17 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             val targetId = targetEntry?.key
                                             if (targetId != null) {
                                                 vm.moveExerciseById(id, targetId)
-                                                // 交换后该项布局位置改变，补偿偏移让卡片继续跟着手指
+                                                // 交换后该项布局位置改变，补偿偏移让卡片继续跟着手指。
+                                                // 用实时坐标判断方向（不能用闭包里的旧列表）
                                                 val gap = 12.dp.toPx()
-                                                val targetH =
-                                                    targetEntry.value.second
-                                                dragOffsetY += if (
-                                                    exercises.indexOfFirst {
-                                                        it.sessionExercise.id == id
-                                                    } >
-                                                    exercises.indexOfFirst {
-                                                        it.sessionExercise.id == targetId
-                                                    }
-                                                ) {
-                                                    // 被拖项换到了目标下方：布局下移，抵消平移
+                                                val movingDown =
+                                                    targetEntry.value.first > bounds.first
+                                                dragOffsetY += if (movingDown) {
+                                                    // 换到目标下方：布局整体下移，抵消平移
                                                     -(bounds.second + gap)
                                                 } else {
-                                                    // 换到目标上方：布局上移，补偿平移
-                                                    targetH + gap
+                                                    // 换到目标上方：布局整体上移，补偿平移
+                                                    targetEntry.value.second + gap
                                                 }
                                             }
                                         },

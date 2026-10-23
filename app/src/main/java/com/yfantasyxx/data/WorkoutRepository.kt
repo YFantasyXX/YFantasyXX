@@ -15,6 +15,7 @@ import com.yfantasyxx.data.db.TemplateExercise
 import com.yfantasyxx.data.db.TemplateWithExercises
 import com.yfantasyxx.data.db.WorkoutSession
 import com.yfantasyxx.data.db.WorkoutTemplate
+import androidx.room.withTransaction
 import com.yfantasyxx.data.seed.ExerciseSeed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -354,7 +355,8 @@ class WorkoutRepository(private val db: AppDatabase) {
     // ---------- 身体数据 ----------
 
     /** 训练内拖动排序：按给定顺序重写 sortOrder */
-    suspend fun reorderSessionExercises(sessionId: Long, orderedIds: List<Long>) {
+    suspend fun reorderSessionExercises(sessionId: Long, orderedIds: List<Long>) = db.withTransaction {
+        // 单事务写入：否则逐条 UPDATE 会触发 Flow 发射中间态，覆盖本地排序
         orderedIds.forEachIndexed { index, id ->
             sessionExerciseDao.updateSortOrder(id, index)
         }
