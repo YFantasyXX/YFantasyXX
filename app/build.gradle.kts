@@ -7,18 +7,34 @@ plugins {
 
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.util.Properties
+
+// 正式版签名信息放在 local.properties（已被 .gitignore，不会入库）
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
 
 android {
     namespace = "com.yfantasyxx"
+    signingConfigs {
+        create("release") {
+            keystoreProps.getProperty("RELEASE_STORE_FILE")?.let { path ->
+                storeFile = file(path)
+                storePassword = keystoreProps.getProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = keystoreProps.getProperty("RELEASE_KEY_ALIAS")
+                keyPassword = keystoreProps.getProperty("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
     compileSdk = 37
 
     defaultConfig {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 61
-        // 测试版本用日期命名，每次构建自动取当天日期；versionCode 手动 +1 保证可覆盖安装
-        versionName = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy.MM.dd"))
+        versionCode = 62
+        versionName = "1.0"
         resourceConfigurations += listOf("zh", "en")
     }
 
@@ -26,8 +42,12 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // 用 debug 签名，方便直接安装测试；正式发布请替换为自己的 keystore
-            signingConfig = signingConfigs.getByName("debug")
+            // 有 keystore 配置时用正式签名，否则回退 debug（便于 CI/他人构建）
+            signingConfig = if (keystoreProps.getProperty("RELEASE_STORE_FILE") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

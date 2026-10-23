@@ -353,6 +353,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                     InfoRow("屏幕刷新率", refreshRateLabel)
                     InfoRow("数据存储", "本地 Room + WebDAV 备份")
                     InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
+                    InfoRow("开源地址", "github.com/YFantasyXX/YFantasyXX")
                 }
             }
         }
