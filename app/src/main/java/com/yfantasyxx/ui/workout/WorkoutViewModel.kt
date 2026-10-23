@@ -141,6 +141,28 @@ class WorkoutViewModel(
         }
     }
 
+    /** 新建自定义动作，保存到动作库并直接加入当前训练 */
+    fun addCustomExerciseToSession(
+        name: String,
+        category: String,
+        equipment: String,
+        muscle: String,
+    ) {
+        val sessionId = _sessionId.value
+        if (sessionId == null) {
+            _error.value = "训练还没准备好，请稍等一秒再试"
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                val exerciseId = repo.addCustomExercise(name, category, equipment, muscle)
+                repo.addExerciseToSession(sessionId, exerciseId)
+            }.onFailure { e ->
+                _error.value = "新建动作失败：${e.message.orEmpty()}"
+            }
+        }
+    }
+
     fun addSet(sessionExerciseId: Long) {
         viewModelScope.launch {
             runCatching { repo.addSet(sessionExerciseId) }
