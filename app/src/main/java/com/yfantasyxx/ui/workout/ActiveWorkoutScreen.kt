@@ -55,6 +55,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Close
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -373,6 +374,7 @@ private fun ExerciseBlock(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
+                Spacer(Modifier.width(24.dp))
                 Spacer(Modifier.width(44.dp))
             }
             item.sets.sortedBy { it.setNumber }.forEach { set ->
@@ -466,6 +468,21 @@ private fun SetRow(
             step = 1f,
             modifier = Modifier.weight(1f),
         )
+        // 删除该组
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .clickable { onDeleteSet(set) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "删除第 ${set.setNumber} 组",
+                modifier = Modifier.size(14.dp),
+                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
         Checkbox(
             state = if (completed) {
                 androidx.compose.ui.state.ToggleableState.On

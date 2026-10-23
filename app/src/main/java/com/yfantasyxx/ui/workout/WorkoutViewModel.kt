@@ -167,7 +167,10 @@ class WorkoutViewModel(
     }
 
     fun deleteSet(set: SetLog) {
-        viewModelScope.launch { repo.deleteSet(set.id) }
+        viewModelScope.launch {
+            runCatching { repo.deleteSetAndRenumber(set.id) }
+                .onFailure { e -> _error.value = "删除该组失败：${e.message.orEmpty()}" }
+        }
     }
 
     /**

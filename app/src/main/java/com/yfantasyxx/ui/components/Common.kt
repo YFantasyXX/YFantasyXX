@@ -47,6 +47,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 
 /** 页面分组标题 */
 @Composable
@@ -110,8 +112,11 @@ fun NumberStepper(
 ) {
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
+    val bringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
     var editing by remember { mutableStateOf(false) }
     var text by remember { mutableStateOf("") }
+    // 记录是否真正获得过焦点：刚显示时 onFocusChanged 会先报一次 false
+    var hasFocused by remember { mutableStateOf(false) }
 
     val displayText = if (value == value.toInt().toFloat()) {
         value.toInt().toString() + unit
@@ -121,17 +126,17 @@ fun NumberStepper(
 
     fun exitEditing() {
         editing = false
+        hasFocused = false
         text = ""
         focusManager.clearFocus()
     }
 
-    /** 提交输入；返回可作为后续加减基准的值 */
+    /** 提交输入，返回可继续加减的基准值 */
     fun commit(): Float {
         val parsed = text.toFloatOrNull()
-        val result = if (parsed != null && (allowNegative || parsed >= 0f)) parsed else value
-        if (parsed != null && (allowNegative || parsed >= 0f)) {
-            onValueChange(result)
-        }
+        val valid = parsed != null && (allowNegative || parsed >= 0f)
+        val result = if (valid) parsed!! else value
+        if (valid) onValueChange(result)
         exitEditing()
         return result
     }
@@ -148,18 +153,32 @@ fun NumberStepper(
             icon = Icons.Filled.Remove,
             description = "减少",
             onClick = {
-                // 编辑中先以输入值为基准，避免覆盖刚输入的数字
                 val base = if (editing) commit() else value
                 val next = base - step
                 onValueChange(if (next < 0f && !allowNegative) 0f else next)
             },
         )
 
-        // 数字区域：点击切换到输入态，支持直接键盘输入
+        // 数字区：点击进入输入态
         Box(
             modifier = Modifier
-                .widthIn(min = 54.dp)
-                .clip(RoundedCornerShape(10.dp)),
+                .width(58.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .then(
+                    if (!editing) {
+                        Modifier.clickable {
+                            text = if (value == value.toInt().toFloat()) {
+                                value.toInt().toString()
+                            } else {
+                                String.format("%.1f", value)
+                            }
+                            hasFocused = false
+                            editing = true
+                        }
+                    } else {
+                        Modifier
+                    }
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (editing) {
@@ -182,17 +201,27 @@ fun NumberStepper(
                         keyboardType = KeyboardType.Decimal,
                         imeAction = ImeAction.Done,
                     ),
-                    keyboardActions = KeyboardActions(onDone = { commit(); Unit }),
+                    keyboardActions = KeyboardActions(onDone = { commit() }),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 24.dp)
+                        .bringIntoViewRequester(bringIntoView)
                         .focusRequester(focusRequester)
                         .onFocusChanged { state ->
-                            // 点到别处（失焦）也提交
-                            if (!state.isFocused && editing) commit()
+                            if (state.isFocused) {
+                                hasFocused = true
+                            } else if (hasFocused) {
+                                // 真正的失焦（点到别处）才提交
+                                commit()
+                            }
                         },
                 )
                 LaunchedEffect(Unit) {
-                    focusRequester.requestFocus()
+                    // 等输入框挂载后请求焦点，再滚动到可视区（避免被键盘遮挡）
+                    kotlinx.coroutines.delay(60)
+                    runCatching { focusRequester.requestFocus() }
+                    kotlinx.coroutines.delay(120)
+                    runCatching { bringIntoView.bringIntoView() }
                 }
             } else {
                 Text(
@@ -203,17 +232,7 @@ fun NumberStepper(
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            text = if (value == value.toInt().toFloat()) {
-                                value.toInt().toString()
-                            } else {
-                                String.format("%.1f", value)
-                            }
-                            editing = true
-                        }
-                        .padding(vertical = 4.dp),
+                    modifier = Modifier.padding(vertical = 5.dp),
                 )
             }
         }

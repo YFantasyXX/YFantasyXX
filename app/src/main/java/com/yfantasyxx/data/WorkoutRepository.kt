@@ -195,6 +195,19 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun deleteSet(id: Long) = setLogDao.delete(id)
 
+    /** 删除某一组并把剩余组重新编号，避免出现 1、2、4 这样的空缺 */
+    suspend fun deleteSetAndRenumber(id: Long) {
+        val target = setLogDao.getById(id) ?: return
+        val sessionExerciseId = target.sessionExerciseId
+        setLogDao.delete(id)
+        val remaining = setLogDao.getForSessionExercise(sessionExerciseId).sortedBy { it.setNumber }
+        remaining.forEachIndexed { index, item ->
+            if (item.setNumber != index + 1) {
+                setLogDao.update(item.copy(setNumber = index + 1))
+            }
+        }
+    }
+
     suspend fun getSet(id: Long): SetLog? = setLogDao.getById(id)
 
     /** 完成训练 */
