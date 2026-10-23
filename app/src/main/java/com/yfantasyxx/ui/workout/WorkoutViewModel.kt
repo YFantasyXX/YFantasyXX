@@ -16,6 +16,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,9 +124,12 @@ class WorkoutViewModel(
         _sessionId.value = id
         _session.value = repo.getSession(id)
         refreshDefaultName()
+        startReorderWorker()
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
+                // 拖动排序中：Flow 里可能是旧顺序，忽略它以本地顺序为准
+                if (reorderInProgress) return@collectLatest
                 _exercises.value = list
                 // 仅在动作增减时刷新"上次表现"参考（组数据变化不需要重查）
                 val ids = list.map { it.sessionExercise.exerciseId }
@@ -195,11 +201,37 @@ class WorkoutViewModel(
         val moved = items.removeAt(from)
         items.add(to, moved)
         _exercises.value = items
-        val sessionId = _sessionId.value ?: return
+        // 排序落库走串行队列：拖动中连续交换，并发事务交叉提交会让旧顺序
+        // 最后落地，Room Flow 再一发射就把界面拉回旧顺序
+        reorderInProgress = true
+        reorderChannel.trySend(items.map { it.sessionExercise.id })
+    }
+
+    /** 排序请求队列（CONFLATED：积压时只保留最新顺序，最终状态一定正确） */
+    private val reorderChannel = Channel<List<Long>>(Channel.CONFLATED)
+    private val reorderMutex = Mutex()
+    /** 排序进行中：此期间忽略 Room Flow 的顺序发射，以本地顺序为准 */
+    private var reorderInProgress = false
+
+    private var reorderWorkerStarted = false
+
+    private fun startReorderWorker() {
+        if (reorderWorkerStarted) return
+        reorderWorkerStarted = true
         viewModelScope.launch {
-            runCatching {
-                repo.reorderSessionExercises(sessionId, items.map { it.sessionExercise.id })
-            }.onFailure { e -> _error.value = "调整顺序失败：${e.message.orEmpty()}" }
+            for (order in reorderChannel) {
+                val sessionId = _sessionId.value ?: continue
+                reorderMutex.withLock {
+                    runCatching {
+                        repo.reorderSessionExercises(sessionId, order)
+                    }.onFailure { e ->
+                        _error.value = "调整顺序失败：${e.message.orEmpty()}"
+                    }
+                }
+                // 还有待写入的新顺序时继续保持「排序中」，
+                // 防止上一笔的 Flow 发射（旧顺序）覆盖本地更新
+                if (reorderChannel.isEmpty) reorderInProgress = false
+            }
         }
     }
 
