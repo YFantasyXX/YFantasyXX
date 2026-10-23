@@ -42,6 +42,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Edit
+import com.yfantasyxx.ui.components.AppDialog
+import androidx.compose.foundation.layout.width
+import com.yfantasyxx.ui.components.ActionText
+import top.yukonga.miuix.kmp.basic.Button
 
 @Composable
 fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
@@ -50,6 +55,11 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     var exercise by remember { mutableStateOf<Exercise?>(null) }
     var lastSets by remember { mutableStateOf<List<SetLog>>(emptyList()) }
     var showRestPicker by remember { mutableStateOf(false) }
+    var showEdit by remember { mutableStateOf(false) }
+    var editName by remember { mutableStateOf("") }
+    var editCategory by remember { mutableStateOf("") }
+    var editEquipment by remember { mutableStateOf("") }
+    var editMuscle by remember { mutableStateOf("") }
 
     LaunchedEffect(exerciseId) {
         exercise = vm.getExercise(exerciseId)
@@ -71,6 +81,20 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                 },
                 actions = {
                     if (exercise?.isCustom == true) {
+                        IconButton(onClick = {
+                            val ex = exercise ?: return@IconButton
+                            editName = ex.name
+                            editCategory = ex.category
+                            editEquipment = ex.equipment
+                            editMuscle = ex.primaryMuscle
+                            showEdit = true
+                        }) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "编辑",
+                                tint = MiuixTheme.colorScheme.primary,
+                            )
+                        }
                         IconButton(onClick = {
                             vm.deleteExercise(exerciseId)
                             onBack()
@@ -170,6 +194,70 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showEdit) {
+        exercise?.let { ex ->
+            AppDialog(
+                title = "编辑动作",
+                onDismissRequest = { showEdit = false },
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    top.yukonga.miuix.kmp.basic.TextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = "动作名称",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    top.yukonga.miuix.kmp.basic.TextField(
+                        value = editCategory,
+                        onValueChange = { editCategory = it },
+                        label = "分类（如 胸 / 背 / 腿）",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    top.yukonga.miuix.kmp.basic.TextField(
+                        value = editEquipment,
+                        onValueChange = { editEquipment = it },
+                        label = "器械（如 杠铃 / 哑铃）",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    top.yukonga.miuix.kmp.basic.TextField(
+                        value = editMuscle,
+                        onValueChange = { editMuscle = it },
+                        label = "主要部位",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ActionText(text = "取消", onClick = { showEdit = false })
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val updated = ex.copy(
+                                    name = editName.trim(),
+                                    category = editCategory.ifBlank { ex.category },
+                                    equipment = editEquipment.ifBlank { ex.equipment },
+                                    primaryMuscle = editMuscle.trim(),
+                                )
+                                vm.updateExercise(updated)
+                                exercise = updated
+                                showEdit = false
+                            },
+                            enabled = editName.isNotBlank(),
+                        ) {
+                            Text("保存", style = MiuixTheme.textStyles.button)
                         }
                     }
                 }
