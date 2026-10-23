@@ -35,8 +35,16 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     // ---------- 动作库 ----------
 
-    fun observeExercises(keyword: String = "", category: String? = null): Flow<List<Exercise>> =
-        exerciseDao.observeFiltered(keyword.trim(), category)
+    fun observeExercises(
+        keyword: String = "",
+        category: String? = null,
+        equipment: String? = null,
+    ): Flow<List<Exercise>> = exerciseDao.observeFiltered(keyword.trim(), category, equipment)
+
+    /** 数据库里实际存在的分类 / 器械，供筛选条动态展示 */
+    fun observeExerciseCategories(): Flow<List<String>> = exerciseDao.observeCategories()
+
+    fun observeExerciseEquipments(): Flow<List<String>> = exerciseDao.observeEquipments()
 
     suspend fun getExercise(id: Long): Exercise? = exerciseDao.getById(id)
 

@@ -291,15 +291,20 @@ fun FilterChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        color = if (selected) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            MiuixTheme.colorScheme.surfaceContainer
-        },
-        modifier = Modifier.padding(vertical = 4.dp),
+    // 用 Box 显式裁剪成胶囊，避免依赖组件默认 shape
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(percent = 50))
+            .background(
+                if (selected) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.surfaceContainer
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
@@ -314,7 +319,7 @@ fun FilterChip(
             } else {
                 MiuixTheme.colorScheme.onSurfaceVariantSummary
             },
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            maxLines = 1,
         )
     }
 }

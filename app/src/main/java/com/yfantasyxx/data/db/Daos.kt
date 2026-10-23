@@ -22,11 +22,28 @@ interface ExerciseDao {
         SELECT * FROM exercises
         WHERE archived = 0
           AND (:category IS NULL OR category = :category)
+          AND (:equipment IS NULL OR equipment = :equipment)
           AND (:keyword = '' OR name LIKE '%' || :keyword || '%' OR primaryMuscle LIKE '%' || :keyword || '%')
         ORDER BY category, name
         """
     )
-    fun observeFiltered(keyword: String, category: String?): Flow<List<Exercise>>
+    fun observeFiltered(
+        keyword: String,
+        category: String?,
+        equipment: String?,
+    ): Flow<List<Exercise>>
+
+    /** 数据库中实际存在的分类（用于筛选条动态生成） */
+    @Query(
+        "SELECT DISTINCT category FROM exercises WHERE archived = 0 AND category != '' ORDER BY category"
+    )
+    fun observeCategories(): Flow<List<String>>
+
+    /** 数据库中实际存在的器械 */
+    @Query(
+        "SELECT DISTINCT equipment FROM exercises WHERE archived = 0 AND equipment != '' ORDER BY equipment"
+    )
+    fun observeEquipments(): Flow<List<String>>
 
     @Query("SELECT * FROM exercises WHERE id = :id")
     suspend fun getById(id: Long): Exercise?

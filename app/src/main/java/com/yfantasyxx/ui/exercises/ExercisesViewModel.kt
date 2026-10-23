@@ -16,18 +16,36 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 
 class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
 
     private val _keyword = MutableStateFlow("")
     private val _category = MutableStateFlow<String?>(null)
+    private val _equipment = MutableStateFlow<String?>(null)
 
-    val exercises = combine(_keyword, _category) { kw, cat -> kw to cat }
-        .flatMapLatest { (kw, cat) -> repo.observeExercises(kw, cat) }
+    /** 分类：预设顺序优先，再补充数据库中出现的自定义分类 */
+    val categories = repo.observeExerciseCategories()
+        .map { dbList ->
+            (ExerciseCategory.all + dbList.filterNot { it in ExerciseCategory.all }).distinct()
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            ExerciseCategory.all,
+        )
+
+    /** 器械：完全按数据库中实际存在的内容动态生成 */
+    val equipments = repo.observeExerciseEquipments()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val exercises = combine(_keyword, _category, _equipment) { kw, cat, eq -> Triple(kw, cat, eq) }
+        .flatMapLatest { (kw, cat, eq) -> repo.observeExercises(kw, cat, eq) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun setKeyword(value: String) { _keyword.value = value }
     fun setCategory(value: String?) { _category.value = value }
+    fun setEquipment(value: String?) { _equipment.value = value }
 
     suspend fun getExercise(id: Long): Exercise? = repo.getExercise(id)
 
@@ -50,9 +68,6 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
     }
 
     companion object {
-        val categories = ExerciseCategory.all
-        val equipments = Equipment.all
-
         fun factory(container: AppContainer) = viewModelFactory {
             initializer { ExercisesViewModel(container.workoutRepository) }
         }

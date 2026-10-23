@@ -50,6 +50,9 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     var showAdd by remember { mutableStateOf(false) }
     var keyword by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
+    var equipment by remember { mutableStateOf<String?>(null) }
+    val categories by vm.categories.collectAsState()
+    val equipments by vm.equipments.collectAsState()
 
     Scaffold(
         topBar = {
@@ -100,7 +103,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                         },
                     )
                 }
-                items(ExercisesViewModel.categories) { cat ->
+                items(categories) { cat ->
                     FilterChip(
                         label = cat,
                         selected = category == cat,
@@ -109,6 +112,35 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                             vm.setCategory(cat)
                         },
                     )
+                }
+            }
+
+            // 器械筛选（按数据库中实际存在的器械动态生成）
+            if (equipments.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            label = "全部器械",
+                            selected = equipment == null,
+                            onClick = {
+                                equipment = null
+                                vm.setEquipment(null)
+                            },
+                        )
+                    }
+                    items(equipments) { eq ->
+                        FilterChip(
+                            label = eq,
+                            selected = equipment == eq,
+                            onClick = {
+                                equipment = eq
+                                vm.setEquipment(eq)
+                            },
+                        )
+                    }
                 }
             }
 
