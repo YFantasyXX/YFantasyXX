@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
@@ -28,7 +29,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -44,6 +45,10 @@ import com.yfantasyxx.ui.rememberAppContainer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.ui.platform.LocalContext
+import com.yfantasyxx.util.CrashLogger
+import com.yfantasyxx.ui.components.ActionText
+import androidx.compose.foundation.layout.width
 
 @Composable
 fun HomeScreen(
@@ -58,6 +63,9 @@ fun HomeScreen(
     val latestWeight by vm.latestWeightKg.collectAsState()
     var showWeightDialog by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
+    var showCrash by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { SmallTopAppBar(title = "YFantasyXX") },
@@ -68,6 +76,32 @@ fun HomeScreen(
                 .padding(padding),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
         ) {
+            // ---- 上次崩溃提示（便于反馈问题） ----
+            if (crashText != null) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        onClick = { showCrash = true },
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "上次运行出现异常",
+                                style = MiuixTheme.textStyles.main,
+                                color = MiuixTheme.colorScheme.error,
+                            )
+                            Text(
+                                text = "点此查看错误信息（截图发给开发者）",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                    }
+                }
+            }
+
             // ---- 进行中的训练 ----
             state.activeSession?.let { active ->
                 item {
@@ -252,9 +286,48 @@ fun HomeScreen(
         }
     }
 
+    if (showCrash && crashText != null) {
+        WindowDialog(
+            show = true,
+            title = "错误信息",
+            onDismissRequest = {
+                showCrash = false
+            },
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                val scrollState = androidx.compose.foundation.rememberScrollState()
+                androidx.compose.foundation.layout.Box(modifier = Modifier.height(320.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(scrollState)
+                    ) {
+                        Text(
+                            text = crashText.orEmpty(),
+                            style = MiuixTheme.textStyles.footnote1,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    ActionText(text = "清除记录", onClick = {
+                        CrashLogger.clear(context)
+                        crashText = null
+                        showCrash = false
+                    })
+                    Spacer(Modifier.width(8.dp))
+                    ActionText(text = "关闭", onClick = { showCrash = false })
+                }
+            }
+        }
+    }
+
     if (showWeightDialog) {
         var weightValue by remember { mutableStateOf(weightInput.toFloatOrNull() ?: 60f) }
-        OverlayDialog(
+        WindowDialog(
             show = true,
             title = "记录今日体重",
             onDismissRequest = { showWeightDialog = false },

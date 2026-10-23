@@ -40,7 +40,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Surface
@@ -312,7 +312,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
 
     if (showBackups) {
         vm.refreshBackups()
-        OverlayDialog(
+        WindowDialog(
             show = true,
             title = "云端备份",
             onDismissRequest = { showBackups = false },
@@ -374,7 +374,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
     }
 
     toastMessage?.let { msg ->
-        OverlayDialog(
+        WindowDialog(
             show = true,
             title = null,
             summary = msg,

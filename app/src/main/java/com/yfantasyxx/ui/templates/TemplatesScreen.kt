@@ -235,7 +235,7 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
         var keyword by remember { mutableStateOf("") }
         val list by container.workoutRepository.observeExercises(keyword, null)
             .collectAsState(initial = emptyList())
-        top.yukonga.miuix.kmp.overlay.OverlayDialog(
+        top.yukonga.miuix.kmp.window.WindowDialog(
             show = true,
             title = "选择动作",
             onDismissRequest = { showPicker = false },

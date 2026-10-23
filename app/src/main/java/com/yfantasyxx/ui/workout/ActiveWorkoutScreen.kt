@@ -165,49 +165,49 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 }
             }
         }
-    }
 
-    if (showExercisePicker) {
-        ExercisePickerDialog(
-            container = container,
-            onDismiss = { showExercisePicker = false },
-            onPick = { exerciseId ->
-                vm.addExercise(exerciseId)
-                showExercisePicker = false
-            },
-        )
-    }
+        if (showExercisePicker) {
+            ExercisePickerDialog(
+                container = container,
+                onDismiss = { showExercisePicker = false },
+                onPick = { exerciseId ->
+                    vm.addExercise(exerciseId)
+                    showExercisePicker = false
+                },
+            )
+        }
 
-    if (showFinishDialog) {
-        FinishDialog(
-            defaultName = "",
-            onDismiss = { showFinishDialog = false },
-            onConfirm = { name, note ->
-                showFinishDialog = false
-                vm.finishWorkout(name, note) { onBack() }
-            },
-        )
-    }
+        if (showFinishDialog) {
+            FinishDialog(
+                defaultName = "",
+                onDismiss = { showFinishDialog = false },
+                onConfirm = { name, note ->
+                    showFinishDialog = false
+                    vm.finishWorkout(name, note) { onBack() }
+                },
+            )
+        }
 
-    if (showDiscardDialog) {
-        OverlayDialog(
-            show = true,
-            title = "放弃本次训练？",
-            summary = "草稿和已记录的组都会被删除",
-            onDismissRequest = { showDiscardDialog = false },
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalArrangement = Arrangement.End,
+        if (showDiscardDialog) {
+            OverlayDialog(
+                show = true,
+                title = "放弃本次训练？",
+                summary = "草稿和已记录的组都会被删除",
+                onDismissRequest = { showDiscardDialog = false },
             ) {
-                ActionText(text = "取消", onClick = { showDiscardDialog = false })
-                Spacer(Modifier.width(12.dp))
-                ActionText(text = "放弃", onClick = {
-                    showDiscardDialog = false
-                    vm.discardWorkout { onBack() }
-                }, color = MiuixTheme.colorScheme.error)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    ActionText(text = "取消", onClick = { showDiscardDialog = false })
+                    Spacer(Modifier.width(12.dp))
+                    ActionText(text = "放弃", onClick = {
+                        showDiscardDialog = false
+                        vm.discardWorkout { onBack() }
+                    }, color = MiuixTheme.colorScheme.error)
+                }
             }
         }
     }

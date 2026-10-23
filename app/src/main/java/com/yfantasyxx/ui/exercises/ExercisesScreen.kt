@@ -27,7 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Surface
@@ -202,7 +202,7 @@ private fun AddExerciseDialog(
     var equipment by remember { mutableStateOf(ExercisesViewModel.equipments.first()) }
     var muscle by remember { mutableStateOf("") }
 
-    OverlayDialog(
+    WindowDialog(
         show = true,
         title = "添加自定义动作",
         onDismissRequest = onDismiss,

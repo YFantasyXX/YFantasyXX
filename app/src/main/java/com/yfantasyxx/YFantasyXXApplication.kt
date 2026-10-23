@@ -6,6 +6,7 @@ import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.data.prefs.SettingsRepository
 import com.yfantasyxx.sync.BackupManager
+import com.yfantasyxx.util.CrashLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +20,7 @@ class YFantasyXXApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        CrashLogger.install(this)
         // 首次启动写入内置动作库；清理异常退出留下的重复草稿
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()
