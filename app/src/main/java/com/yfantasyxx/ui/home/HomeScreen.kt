@@ -100,6 +100,11 @@ fun HomeScreen(
                                 style = MiuixTheme.textStyles.footnote1,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             )
+                            Text(
+                                text = "日志同时保存在 Android/data/${context.packageName}/files/logs/",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
                             Spacer(Modifier.height(8.dp))
                             Text(
                                 text = summarizeCrash(crashText.orEmpty()),
