@@ -11,18 +11,21 @@ object RestTimerStore {
     private const val PREFS = "rest_timer_state"
     private const val KEY_END = "end_time"
     private const val KEY_TOTAL = "total_seconds"
+    private const val KEY_LABEL = "label"
 
     data class Snapshot(
         val running: Boolean,
         val remainingSeconds: Int,
         val totalSeconds: Int,
         val endTime: Long,
+        val label: String? = null,
     )
 
-    fun save(context: Context, endTime: Long, totalSeconds: Int) {
+    fun save(context: Context, endTime: Long, totalSeconds: Int, label: String? = null) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putLong(KEY_END, endTime)
             .putInt(KEY_TOTAL, totalSeconds)
+            .putString(KEY_LABEL, label)
             .apply()
     }
 
@@ -36,6 +39,7 @@ object RestTimerStore {
             remainingSeconds = remaining.coerceAtLeast(0),
             totalSeconds = total,
             endTime = end,
+            label = prefs.getString(KEY_LABEL, null),
         )
     }
 

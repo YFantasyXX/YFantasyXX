@@ -73,7 +73,13 @@ object RestNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-    fun buildCountdown(context: Context, endTime: Long, remainingSeconds: Int, totalSeconds: Int): Notification {
+    fun buildCountdown(
+        context: Context,
+        endTime: Long,
+        remainingSeconds: Int,
+        totalSeconds: Int,
+        label: String? = null,
+    ): Notification {
         val skip = PendingIntent.getService(
             context, 1,
             Intent(context, RestTimerService::class.java).setAction(RestTimerService.ACTION_SKIP),
@@ -89,8 +95,8 @@ object RestNotifier {
 
         return NotificationCompat.Builder(context, CHANNEL_COUNTDOWN)
             .setSmallIcon(R.drawable.ic_timer_notification)
-            .setContentTitle("组间休息 · 剩余 ${remainingSeconds}s")
-            .setContentText("结束后会提醒你")
+            .setContentTitle(label ?: "组间休息")
+            .setContentText("休息 $remainingSeconds 秒 · 结束后提醒你")
             .setContentIntent(openAppIntent(context))
             .setWhen(endTime)
             .setUsesChronometer(true)
@@ -110,12 +116,14 @@ object RestNotifier {
     }
 
     /** 休息结束：弹横幅通知 + 震动 */
-    fun notifyRestFinished(context: Context) {
+    fun notifyRestFinished(context: Context, label: String? = null) {
         ensureChannels(context)
         val notification = NotificationCompat.Builder(context, CHANNEL_DONE)
             .setSmallIcon(R.drawable.ic_timer_notification)
             .setContentTitle("休息结束")
-            .setContentText("可以开始下一组了")
+            .setContentText(
+                if (label != null) "$label 完成，可以开始下一组了" else "可以开始下一组了"
+            )
             .setContentIntent(openAppIntent(context))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

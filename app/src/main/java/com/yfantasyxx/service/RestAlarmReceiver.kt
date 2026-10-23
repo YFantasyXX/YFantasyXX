@@ -20,7 +20,7 @@ class RestAlarmReceiver : BroadcastReceiver() {
         // 还在计时中说明是提前唤醒，忽略
         if (snapshot.running) return
 
-        RestNotifier.notifyRestFinished(context)
+        RestNotifier.notifyRestFinished(context, snapshot.label)
         RestTimerStore.clear(context)
         RestAlarmScheduler.cancel(context)
         // 关闭倒计时通知与前台服务

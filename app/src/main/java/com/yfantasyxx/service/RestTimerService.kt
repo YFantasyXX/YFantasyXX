@@ -22,6 +22,7 @@ class RestTimerService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var endTime = 0L
     private var totalSeconds = 0
+    private var label: String? = null
 
     private val finishRunnable = Runnable { onFinished() }
 
@@ -36,7 +37,8 @@ class RestTimerService : Service() {
                             this@RestTimerService,
                             endTime,
                             remaining,
-                            totalSeconds
+                            totalSeconds,
+                            label,
                         )
                     )
                 }
@@ -54,12 +56,15 @@ class RestTimerService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 totalSeconds = intent.getIntExtra(EXTRA_SECONDS, 90)
+                label = intent.getStringExtra(EXTRA_LABEL)
                 endTime = System.currentTimeMillis() + totalSeconds * 1000L
-                RestTimerStore.save(this, endTime, totalSeconds)
+                RestTimerStore.save(this, endTime, totalSeconds, label)
                 RestNotifier.ensureChannels(this)
                 startForeground(
                     RestNotifier.NOTIF_COUNTDOWN,
-                    RestNotifier.buildCountdown(this, endTime, totalSeconds, totalSeconds)
+                    RestNotifier.buildCountdown(
+                        this, endTime, totalSeconds, totalSeconds, label
+                    )
                 )
                 // 兜底：系统闹钟到点必定唤醒，不依赖本服务存活
                 RestAlarmScheduler.schedule(this, endTime)
@@ -72,13 +77,15 @@ class RestTimerService : Service() {
                 if (endTime > System.currentTimeMillis()) {
                     endTime += extra * 1000L
                     totalSeconds += extra
-                    RestTimerStore.save(this, endTime, totalSeconds)
+                    RestTimerStore.save(this, endTime, totalSeconds, label)
                     RestNotifier.ensureChannels(this)
                     val remaining = ((endTime - System.currentTimeMillis()) / 1000).toInt()
                     runCatching {
                         notificationManager()?.notify(
                             RestNotifier.NOTIF_COUNTDOWN,
-                            RestNotifier.buildCountdown(this, endTime, remaining, totalSeconds)
+                            RestNotifier.buildCountdown(
+                                this, endTime, remaining, totalSeconds, label
+                            )
                         )
                     }
                     RestAlarmScheduler.schedule(this, endTime)
@@ -122,7 +129,7 @@ class RestTimerService : Service() {
         RestTimerStore.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         RestNotifier.cancelCountdown(this)
-        RestNotifier.notifyRestFinished(this)
+        RestNotifier.notifyRestFinished(this, label)
         stopSelf()
     }
 
@@ -138,11 +145,13 @@ class RestTimerService : Service() {
         const val ACTION_SKIP = "com.yfantasyxx.action.REST_SKIP"
         const val ACTION_STOP = "com.yfantasyxx.action.REST_STOP"
         const val EXTRA_SECONDS = "extra_seconds"
+        const val EXTRA_LABEL = "extra_label"
 
-        fun start(context: Context, seconds: Int) {
+        fun start(context: Context, seconds: Int, label: String? = null) {
             val intent = Intent(context, RestTimerService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SECONDS, seconds)
+                .putExtra(EXTRA_LABEL, label)
             ContextCompat.startForegroundService(context, intent)
         }
 

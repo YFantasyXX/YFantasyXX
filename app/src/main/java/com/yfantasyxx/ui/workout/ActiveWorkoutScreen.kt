@@ -164,7 +164,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                     .padding(16.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Text("休息中", style = MiuixTheme.textStyles.subtitle)
+                                Text(
+                                    text = restTimer.label ?: "休息中",
+                                    style = MiuixTheme.textStyles.subtitle,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier

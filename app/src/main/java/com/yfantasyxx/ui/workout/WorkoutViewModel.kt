@@ -25,6 +25,8 @@ data class RestTimerState(
     val running: Boolean = false,
     val remainingSeconds: Int = 0,
     val totalSeconds: Int = 0,
+    /** 例如「杠铃卧推 · 第 2 组」 */
+    val label: String? = null,
 )
 
 class WorkoutViewModel(
@@ -48,6 +50,9 @@ class WorkoutViewModel(
     /** 当前这次休息对应的动作（用于"设为该动作默认"） */
     private val _currentExerciseId = MutableStateFlow<Long?>(null)
     val currentExerciseId: StateFlow<Long?> = _currentExerciseId.asStateFlow()
+
+    /** 当前休息对应的「动作 · 第 N 组」，用于通知与界面展示 */
+    private var restLabel: String? = null
 
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
@@ -235,15 +240,21 @@ class WorkoutViewModel(
      * 开始休息计时：交给前台服务在通知栏倒计时，退出 App 也不会重置。
      * [exerciseId] 用于读取该动作自己的休息时长。
      */
-    fun startRestTimerFor(exerciseId: Long?, sessionExerciseId: Long? = null) {
+    fun startRestTimerFor(
+        exerciseId: Long?,
+        sessionExerciseId: Long? = null,
+        label: String? = null,
+    ) {
         viewModelScope.launch {
             val seconds = resolveRestSeconds(exerciseId, sessionExerciseId)
             _currentExerciseId.value = exerciseId
-            RestTimerService.start(context, seconds)
+            restLabel = label
+            RestTimerService.start(context, seconds, label)
             _restTimer.value = RestTimerState(
                 running = true,
                 remainingSeconds = seconds,
                 totalSeconds = seconds,
+                label = label,
             )
             startRestTicker()
         }
@@ -256,11 +267,12 @@ class WorkoutViewModel(
     /** 用波轮选的时长重设本次休息（不影响动作默认值） */
     fun restartRestTimer(seconds: Int) {
         viewModelScope.launch {
-            RestTimerService.start(context, seconds)
+            RestTimerService.start(context, seconds, restLabel)
             _restTimer.value = RestTimerState(
                 running = true,
                 remainingSeconds = seconds,
                 totalSeconds = seconds,
+                label = restLabel,
             )
             startRestTicker()
         }
@@ -281,10 +293,12 @@ class WorkoutViewModel(
     fun restoreRestTimer() {
         val snapshot = RestTimerStore.snapshot(context)
         if (snapshot.running) {
+            restLabel = snapshot.label
             _restTimer.value = RestTimerState(
                 running = true,
                 remainingSeconds = snapshot.remainingSeconds,
                 totalSeconds = snapshot.totalSeconds,
+                label = snapshot.label,
             )
             startRestTicker()
         }
@@ -299,6 +313,7 @@ class WorkoutViewModel(
                     running = snapshot.running,
                     remainingSeconds = snapshot.remainingSeconds,
                     totalSeconds = snapshot.totalSeconds,
+                    label = snapshot.label,
                 )
                 if (!snapshot.running) break
                 delay(400)
@@ -309,6 +324,7 @@ class WorkoutViewModel(
     fun skipRestTimer() {
         RestTimerService.skip(context)
         restTickerJob?.cancel()
+        restLabel = null
         _restTimer.value = RestTimerState()
     }
 
