@@ -189,6 +189,15 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                     exercise = updated
                     showRestPicker = false
                 },
+                onClear = if (ex.restSeconds != null) {
+                    {
+                        val updated = ex.copy(restSeconds = null)
+                        vm.updateExercise(updated)
+                        exercise = updated
+                    }
+                } else {
+                    null
+                },
             )
         }
     }

@@ -37,6 +37,8 @@ fun RestSecondsPickerDialog(
     showSaveAsDefault: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (seconds: Int, saveAsDefault: Boolean) -> Unit,
+    /** 传入则显示「跟随全局」，用于清除动作的自定义时长 */
+    onClear: (() -> Unit)? = null,
 ) {
     val initialStep = (initialSeconds / REST_STEP_SECONDS).coerceIn(1, 20)
     var step by remember { mutableStateOf(initialStep) }
@@ -83,15 +85,25 @@ fun RestSecondsPickerDialog(
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ActionText(text = "取消", onClick = onDismiss)
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = {
-                    onConfirm(step * REST_STEP_SECONDS, saveAsDefault)
-                }) {
-                    Text("确定", style = MiuixTheme.textStyles.button)
+                if (onClear != null) {
+                    ActionText(text = "跟随全局", onClick = {
+                        onClear()
+                        onDismiss()
+                    })
+                } else {
+                    Spacer(Modifier.width(8.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ActionText(text = "取消", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = {
+                        onConfirm(step * REST_STEP_SECONDS, saveAsDefault)
+                    }) {
+                        Text("确定", style = MiuixTheme.textStyles.button)
+                    }
                 }
             }
         }
