@@ -114,7 +114,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
             modifier = Modifier
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 24.dp),
+                .padding(bottom = 24.dp + com.yfantasyxx.ui.LocalBottomBarSpace.current),
         ) {
             // ---- 外观 ----
             SectionHeader("外观")

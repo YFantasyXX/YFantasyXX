@@ -40,7 +40,9 @@ fun StatsScreen() {
     ) { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                bottom = 24.dp + com.yfantasyxx.ui.LocalBottomBarSpace.current
+            ),
         ) {
             // 周训练量
             item {

@@ -99,17 +99,19 @@ private fun YFantasyXXNavHost() {
     // 底栏毛玻璃的效果来源：采集这个内容层
     val backdrop = rememberLayerBackdrop()
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MiuixTheme.colorScheme.surface)
+    CompositionLocalProvider(
+        LocalBottomBarSpace provides if (showBottomBar) bottomSpace else 0.dp
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .layerBackdrop(backdrop)
-                .padding(bottom = if (showBottomBar) bottomSpace else 0.dp)
+                .background(MiuixTheme.colorScheme.surface)
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .layerBackdrop(backdrop)
+            ) {
         NavHost(
             navController = navController,
             startDestination = Routes.HOME,
@@ -190,6 +192,7 @@ private fun YFantasyXXNavHost() {
                 },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
+        }
         }
     }
 }

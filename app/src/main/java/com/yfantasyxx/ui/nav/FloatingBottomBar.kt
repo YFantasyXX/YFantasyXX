@@ -28,9 +28,6 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.blur.Backdrop
-import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.blendColors
 import top.yukonga.miuix.kmp.blur.blur
 import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -60,7 +57,7 @@ fun FloatingBottomBar(
 ) {
     val shape = RoundedCornerShape(28.dp)
     val surface = MiuixTheme.colorScheme.surface
-    val blurRadiusPx = with(LocalDensity.current) { 22.dp.toPx() }
+    val blurRadiusPx = with(LocalDensity.current) { 16.dp.toPx() }
 
     Surface(
         shape = shape,
@@ -82,13 +79,9 @@ fun FloatingBottomBar(
                             shape = { shape },
                             effects = {
                                 blur(blurRadiusPx)
-                                blendColors(
-                                    BlurColors(
-                                        blendColors = listOf(
-                                            BlendColorEntry(surface.copy(alpha = 0.55f))
-                                        )
-                                    )
-                                )
+                            },
+                            onDrawSurface = {
+                                drawRect(color = surface.copy(alpha = 0.42f))
                             },
                         )
                     } else {
@@ -116,7 +109,7 @@ fun FloatingBottomBar(
                             .clip(RoundedCornerShape(20.dp))
                             .then(
                                 if (selected) {
-                                    Modifier.background(MiuixTheme.colorScheme.primaryContainer)
+                                    Modifier.background(MiuixTheme.colorScheme.primary)
                                 } else {
                                     Modifier
                                 }
@@ -131,9 +124,9 @@ fun FloatingBottomBar(
                             contentDescription = tab.label,
                             modifier = Modifier.size(22.dp),
                             tint = if (selected) {
-                                MiuixTheme.colorScheme.primary
+                                MiuixTheme.colorScheme.onPrimary
                             } else {
-                                MiuixTheme.colorScheme.onSurfaceContainer.copy(alpha = 0.65f)
+                                MiuixTheme.colorScheme.onSurfaceVariantSummary
                             },
                         )
                         if (selected) {
@@ -142,7 +135,7 @@ fun FloatingBottomBar(
                                 text = tab.label,
                                 fontSize = 12.sp,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                                color = MiuixTheme.colorScheme.primary,
+                                color = MiuixTheme.colorScheme.onPrimary,
                                 maxLines = 1,
                             )
                         }

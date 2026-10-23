@@ -75,7 +75,9 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                bottom = 24.dp + com.yfantasyxx.ui.LocalBottomBarSpace.current
+            ),
         ) {
             // ---- 上次崩溃提示（直接展示，无需点击，避免二次崩溃） ----
             if (crashText != null) {

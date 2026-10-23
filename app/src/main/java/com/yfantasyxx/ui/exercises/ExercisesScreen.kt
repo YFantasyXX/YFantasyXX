@@ -113,7 +113,11 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
             if (exercises.isEmpty()) {
                 EmptyState(text = "没有找到相关动作\n试试其他关键词或分类")
             } else {
-                LazyColumn {
+                LazyColumn(
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        bottom = com.yfantasyxx.ui.LocalBottomBarSpace.current
+                    )
+                ) {
                     items(exercises, key = { it.id }) { exercise ->
                         Card(
                             modifier = Modifier
