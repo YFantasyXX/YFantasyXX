@@ -10,7 +10,12 @@ import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SetLog
 import com.yfantasyxx.data.db.WorkoutSession
 import com.yfantasyxx.data.prefs.SettingsRepository
+import com.yfantasyxx.sync.BackupManager
+import com.yfantasyxx.sync.WebDavClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +38,7 @@ class WorkoutViewModel(
     private val repo: WorkoutRepository,
     private val settingsRepo: SettingsRepository,
     private val context: android.content.Context,
+    private val backupManager: BackupManager,
 ) : ViewModel() {
 
     private val _sessionId = MutableStateFlow<Long?>(null)
@@ -429,6 +435,32 @@ class WorkoutViewModel(
             RestTimerService.skip(context)
             tickerJob?.cancel()
             onDone()
+            // 训练完成后按设置自动备份（独立协程，不阻塞导航）
+            autoBackupAfterFinish()
+        }
+    }
+
+    /** 设置开启「训练完成后自动备份」且 WebDAV 已配置时，备份到远端 */
+    private fun autoBackupAfterFinish() {
+        // 用应用级协程：finish 后界面导航离开、ViewModel 可能被清除，
+        // viewModelScope 会被取消导致备份半途而废
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            val s = settingsRepo.settings.first()
+            if (!s.autoBackup) return@launch
+            if (s.webdavUrl.isBlank() || s.webdavUsername.isBlank()) return@launch
+            val client = WebDavClient(s.webdavUrl, s.webdavUsername, s.webdavPassword)
+            val result = backupManager.backup(client)
+            if (result.isSuccess) {
+                settingsRepo.setLastBackupTime(System.currentTimeMillis())
+            }
+            val msg = result.fold(
+                onSuccess = { "已完成训练并自动备份" },
+                onFailure = { "自动备份失败：${it.message ?: "未知错误"}" },
+            )
+            // Toast 需要在主线程
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -460,6 +492,7 @@ class WorkoutViewModel(
                     container.workoutRepository,
                     container.settingsRepository,
                     container.appContext,
+                    container.backupManager,
                 )
             }
         }
