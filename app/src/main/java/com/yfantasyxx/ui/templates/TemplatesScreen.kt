@@ -62,6 +62,7 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
@@ -179,6 +180,10 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
     var newEquipment by remember { mutableStateOf("") }
     var newMuscle by remember { mutableStateOf("") }
     var loaded by remember(templateId) { mutableStateOf(false) }
+
+    // 键盘弹出时隐藏底部「添加动作」栏，把空间让给输入框
+    val imeVisible = androidx.compose.foundation.layout.WindowInsets.ime
+        .getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
 
     androidx.compose.runtime.LaunchedEffect(templateId) {
         vm.load(templateId)
@@ -425,14 +430,16 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                     }
                 }
             }
-            Button(
-                onClick = { showPicker = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-            ) {
-                Icon(imageVector = Icons.Filled.Add, contentDescription = null)
-                Text("  添加动作", style = MiuixTheme.textStyles.button)
+            if (!imeVisible) {
+                Button(
+                    onClick = { showPicker = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Icon(imageVector = Icons.Filled.Add, contentDescription = null)
+                    Text("  添加动作", style = MiuixTheme.textStyles.button)
+                }
             }
         }
     }
