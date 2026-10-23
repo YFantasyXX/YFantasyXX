@@ -26,6 +26,13 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 
 /** 页面分组标题 */
 @Composable
@@ -76,7 +83,7 @@ fun EmptyState(
 }
 
 /**
- * 数字步进器（重量/次数输入）
+ * 数字步进器：胶囊形外壳 + 圆形加减按钮。
  */
 @Composable
 fun NumberStepper(
@@ -88,24 +95,21 @@ fun NumberStepper(
     allowNegative: Boolean = false,
 ) {
     Row(
-        modifier = modifier,
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 3.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        IconButton(
+        StepButton(
+            icon = Icons.Filled.Remove,
+            description = "减少",
             onClick = {
                 val next = value - step
                 onValueChange(if (next < 0f && !allowNegative) 0f else next)
             },
-            modifier = Modifier.size(28.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Remove,
-                contentDescription = "减少",
-                modifier = Modifier.size(16.dp),
-                tint = MiuixTheme.colorScheme.onSurface,
-            )
-        }
+        )
         Text(
             text = if (value == value.toInt().toFloat()) {
                 value.toInt().toString() + unit
@@ -114,19 +118,89 @@ fun NumberStepper(
             },
             style = MiuixTheme.textStyles.main,
             color = MiuixTheme.colorScheme.onSurface,
-            modifier = Modifier.width(64.dp),
             fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.widthIn(min = 52.dp),
         )
-        IconButton(
+        StepButton(
+            icon = Icons.Filled.Add,
+            description = "增加",
             onClick = { onValueChange(value + step) },
-            modifier = Modifier.size(28.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Add,
-                contentDescription = "增加",
-                modifier = Modifier.size(16.dp),
-                tint = MiuixTheme.colorScheme.onSurface,
-            )
+        )
+    }
+}
+
+@Composable
+private fun StepButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(MiuixTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            modifier = Modifier.size(15.dp),
+            tint = MiuixTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/**
+ * 分段选择器：圆角胶囊容器 + 选中态浮起卡片。
+ */
+@Composable
+fun SegmentedSelector(
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainer)
+            .padding(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        options.forEachIndexed { index, label ->
+            val selected = index == selectedIndex
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(11.dp))
+                    .then(
+                        if (selected) {
+                            Modifier.background(MiuixTheme.colorScheme.surface)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .clickable { onSelect(index) }
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = label,
+                    style = MiuixTheme.textStyles.footnote1,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

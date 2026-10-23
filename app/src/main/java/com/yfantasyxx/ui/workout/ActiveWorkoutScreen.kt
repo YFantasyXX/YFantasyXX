@@ -49,6 +49,11 @@ import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.rememberAppContainer
 import kotlinx.coroutines.flow.first
 import com.yfantasyxx.ui.components.ActionText
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.size
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -287,8 +292,13 @@ private fun ExerciseBlock(
                 }
                 Text(
                     text = "$completed/${item.sets.size}",
-                    style = MiuixTheme.textStyles.subtitle,
+                    style = MiuixTheme.textStyles.footnote1,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
                     color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MiuixTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
                 IconButton(onClick = onRemoveExercise) {
                     Icon(
@@ -299,12 +309,37 @@ private fun ExerciseBlock(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            // 表头
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("组", style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.width(32.dp))
-                Text("重量($unitLabel)", style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.weight(1f))
-                Text("次数", style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(40.dp))
+            // 表头（与下方组行的布局对齐）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "组",
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(26.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "重量($unitLabel)",
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "次数",
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(44.dp))
             }
             item.sets.sortedBy { it.setNumber }.forEach { set ->
                 SetRow(
@@ -329,57 +364,82 @@ private fun SetRow(
 ) {
     var weight by remember(set.id) { mutableStateOf(set.weightKg) }
     var reps by remember(set.id) { mutableStateOf(set.reps) }
-    // 本地编辑同步到 DB（防抖简化：直接写）
+    // 本地编辑同步到 DB
     LaunchedEffect(weight, reps) {
         if (weight != set.weightKg || reps != set.reps) {
             onUpdateSet(set, weight, reps)
         }
     }
 
-    Surface(
-        color = if (set.completed) {
-            MiuixTheme.colorScheme.primaryContainer
+    val completed = set.completed
+    val background by androidx.compose.animation.animateColorAsState(
+        targetValue = if (completed) {
+            MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        } else {
+            MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f)
+        },
+        animationSpec = androidx.compose.animation.core.tween(220),
+        label = "setRowBackground",
+    )
+    val badgeColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (completed) {
+            MiuixTheme.colorScheme.primary
         } else {
             MiuixTheme.colorScheme.surface
         },
+        animationSpec = androidx.compose.animation.core.tween(220),
+        label = "setBadge",
+    )
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(background)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
+        // 组号圆形徽章
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(badgeColor),
+            contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = set.setNumber.toString(),
-                style = MiuixTheme.textStyles.paragraph,
-                modifier = Modifier.width(32.dp),
-            )
-            Box(modifier = Modifier.weight(1f)) {
-                NumberStepper(
-                    value = weight,
-                    onValueChange = { weight = it },
-                    step = 2.5f,
-                )
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                NumberStepper(
-                    value = reps.toFloat(),
-                    onValueChange = { reps = it.toInt() },
-                    step = 1f,
-                )
-            }
-            Checkbox(
-                state = if (set.completed) {
-                    androidx.compose.ui.state.ToggleableState.On
+                fontSize = 12.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = if (completed) {
+                    MiuixTheme.colorScheme.onPrimary
                 } else {
-                    androidx.compose.ui.state.ToggleableState.Off
+                    MiuixTheme.colorScheme.onSurfaceVariantSummary
                 },
-                onClick = { onToggleSet(set) },
             )
         }
+        Spacer(Modifier.width(8.dp))
+        NumberStepper(
+            value = weight,
+            onValueChange = { weight = it },
+            step = 2.5f,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(6.dp))
+        NumberStepper(
+            value = reps.toFloat(),
+            onValueChange = { reps = it.toInt() },
+            step = 1f,
+            modifier = Modifier.weight(1f),
+        )
+        Checkbox(
+            state = if (completed) {
+                androidx.compose.ui.state.ToggleableState.On
+            } else {
+                androidx.compose.ui.state.ToggleableState.Off
+            },
+            onClick = { onToggleSet(set) },
+        )
     }
 }
 

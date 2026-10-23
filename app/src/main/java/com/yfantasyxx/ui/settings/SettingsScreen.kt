@@ -52,6 +52,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.yfantasyxx.ui.components.ActionText
+import com.yfantasyxx.ui.components.SegmentedSelector
 
 @Composable
 fun SettingsScreen(onOpenTemplates: () -> Unit) {
@@ -114,60 +115,24 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
             Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("深色模式", style = MiuixTheme.textStyles.main)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ThemeMode.entries.forEach { mode ->
-                            Surface(
-                                onClick = { vm.setThemeMode(mode) },
-                                color = if (settings.themeMode == mode) {
-                                    MiuixTheme.colorScheme.primaryContainer
-                                } else {
-                                    MiuixTheme.colorScheme.surfaceContainer
-                                },
-                            ) {
-                                Text(
-                                    text = when (mode) {
-                                        ThemeMode.SYSTEM -> "跟随系统"
-                                        ThemeMode.LIGHT -> "浅色"
-                                        ThemeMode.DARK -> "深色"
-                                    },
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = if (settings.themeMode == mode) {
-                                        MiuixTheme.colorScheme.primary
-                                    } else {
-                                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    },
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(10.dp))
+                    SegmentedSelector(
+                        options = listOf("跟随系统", "浅色", "深色"),
+                        selectedIndex = ThemeMode.entries.indexOf(settings.themeMode),
+                        onSelect = { index ->
+                            ThemeMode.entries.getOrNull(index)?.let(vm::setThemeMode)
+                        },
+                    )
+                    Spacer(Modifier.height(16.dp))
                     Text("重量单位", style = MiuixTheme.textStyles.main)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WeightUnit.entries.forEach { unit ->
-                            Surface(
-                                onClick = { vm.setWeightUnit(unit) },
-                                color = if (settings.weightUnit == unit) {
-                                    MiuixTheme.colorScheme.primaryContainer
-                                } else {
-                                    MiuixTheme.colorScheme.surfaceContainer
-                                },
-                            ) {
-                                Text(
-                                    text = unit.label,
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = if (settings.weightUnit == unit) {
-                                        MiuixTheme.colorScheme.primary
-                                    } else {
-                                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    },
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                )
-                            }
-                        }
-                    }
+                    Spacer(Modifier.height(10.dp))
+                    SegmentedSelector(
+                        options = WeightUnit.entries.map { it.label },
+                        selectedIndex = WeightUnit.entries.indexOf(settings.weightUnit),
+                        onSelect = { index ->
+                            WeightUnit.entries.getOrNull(index)?.let(vm::setWeightUnit)
+                        },
+                    )
                 }
             }
 
