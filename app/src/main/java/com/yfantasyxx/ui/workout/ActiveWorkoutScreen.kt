@@ -452,9 +452,9 @@ private fun SetRow(
     val completed = set.completed
     val background by androidx.compose.animation.animateColorAsState(
         targetValue = if (completed) {
-            MiuixTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+            MiuixTheme.colorScheme.primaryContainer
         } else {
-            MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f)
+            MiuixTheme.colorScheme.surfaceContainer
         },
         animationSpec = androidx.compose.animation.core.tween(220),
         label = "setRowBackground",
@@ -480,14 +480,20 @@ private fun SetRow(
         label = "setSwipeOffset",
     )
 
-    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        // 底层：右侧删除按钮
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MiuixTheme.colorScheme.surface),
+    ) {
+        // 底层：右侧删除按钮（被上层组行完全遮住，滑开才露出）
         Box(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .padding(end = 6.dp)
-                .width(72.dp)
-                .height(34.dp)
+                .width(76.dp)
+                .height(40.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MiuixTheme.colorScheme.error)
                 .clickable {
