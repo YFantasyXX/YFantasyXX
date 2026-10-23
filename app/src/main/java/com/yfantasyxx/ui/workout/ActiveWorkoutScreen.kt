@@ -541,14 +541,25 @@ private fun ExerciseBlock(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
+                val allDone = item.sets.isNotEmpty() && completed == item.sets.size
                 Text(
                     text = "$completed/${item.sets.size}",
                     style = MiuixTheme.textStyles.footnote1,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.primary,
+                    color = if (allDone) {
+                        MiuixTheme.colorScheme.onPrimary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(MiuixTheme.colorScheme.primaryContainer)
+                        .background(
+                            if (allDone) {
+                                MiuixTheme.colorScheme.primary
+                            } else {
+                                MiuixTheme.colorScheme.surfaceContainer
+                            }
+                        )
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
                 Spacer(Modifier.width(6.dp))
