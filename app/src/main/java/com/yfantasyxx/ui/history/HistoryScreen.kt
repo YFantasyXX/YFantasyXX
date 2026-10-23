@@ -235,14 +235,9 @@ private fun DayCell(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val background = when {
-        selected -> MiuixTheme.colorScheme.primary
-        hasSession -> MiuixTheme.colorScheme.primaryContainer
-        else -> Color.Transparent
-    }
     val textColor = when {
         selected -> MiuixTheme.colorScheme.onPrimary
-        hasSession -> MiuixTheme.colorScheme.primary
+        hasSession -> MiuixTheme.colorScheme.onSurface
         else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
     }
     Box(
@@ -251,16 +246,35 @@ private fun DayCell(
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(CircleShape)
-            .background(background)
+            .background(
+                if (selected) MiuixTheme.colorScheme.primary else Color.Transparent
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = "${date.dayOfMonth}",
             fontSize = 13.sp,
-            fontWeight = if (selected || hasSession) FontWeight.SemiBold else FontWeight.Normal,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = textColor,
         )
+        // 有训练的日子：日期下方一个小圆点
+        if (hasSession) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 4.dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (selected) {
+                            MiuixTheme.colorScheme.onPrimary
+                        } else {
+                            MiuixTheme.colorScheme.primary
+                        }
+                    ),
+            )
+        }
     }
 }
 
