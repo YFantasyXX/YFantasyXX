@@ -207,10 +207,18 @@ class WorkoutViewModel(
                     _session.value = _session.value?.copy(activeStartedAt = now)
                     startTicker()
                 }
-                val exerciseId = _exercises.value
+                val item = _exercises.value
                     .firstOrNull { it.sessionExercise.id == set.sessionExerciseId }
-                    ?.sessionExercise?.exerciseId
-                startRestTimerFor(exerciseId)
+                val exerciseId = item?.sessionExercise?.exerciseId
+                // 兜底查询，避免 flow 尚未 emit 时拿不到动作名
+                val exerciseName = item?.exercise?.name
+                    ?: exerciseId?.let { runCatching { repo.getExercise(it)?.name }.getOrNull() }
+                val label = if (exerciseName != null) {
+                    "$exerciseName · 第 ${set.setNumber} 组"
+                } else {
+                    "第 ${set.setNumber} 组"
+                }
+                startRestTimerFor(exerciseId, set.sessionExerciseId, label)
             }
         }
     }
