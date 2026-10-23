@@ -86,6 +86,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val error by vm.error.collectAsState()
     val currentExerciseId by vm.currentExerciseId.collectAsState()
     val restFinished by vm.restFinished.collectAsState()
+    val defaultSessionName by vm.defaultSessionName.collectAsState()
 
     // 训练内动作拖动排序
     val haptics = LocalHapticFeedback.current
@@ -430,7 +431,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
         if (showFinishDialog) {
             FinishDialog(
-                defaultName = "",
+                defaultName = defaultSessionName,
                 onDismiss = { showFinishDialog = false },
                 onConfirm = { name, note ->
                     showFinishDialog = false

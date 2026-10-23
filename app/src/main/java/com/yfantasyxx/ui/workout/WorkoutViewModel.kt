@@ -54,6 +54,13 @@ class WorkoutViewModel(
     /** 当前休息对应的「动作 · 第 N 组」，用于通知与界面展示 */
     private var restLabel: String? = null
 
+    /**
+     * 完成训练时名称输入框的默认值：
+     * 从模板开始 → 模板名；空训练 →「计划」
+     */
+    private val _defaultSessionName = MutableStateFlow("计划")
+    val defaultSessionName: StateFlow<String> = _defaultSessionName
+
     /** 休息刚结束时置 true，界面显示提示；用户点掉后置回 false */
     private val _restFinished = MutableStateFlow(false)
     val restFinished: StateFlow<Boolean> = _restFinished
@@ -94,6 +101,7 @@ class WorkoutViewModel(
                 val draftId = repo.getActiveDraft()?.firstOrNull()?.sessionExercise?.sessionId
                 val existingId = draftId ?: repo.getActiveSessionId()
                 val id = existingId ?: repo.startSession()
+                _session.value = repo.getSession(id)
                 startObserving(id)
                 startTicker()
             }.onFailure { e ->
@@ -106,6 +114,7 @@ class WorkoutViewModel(
     private suspend fun startObserving(id: Long) {
         _sessionId.value = id
         _session.value = repo.getSession(id)
+        refreshDefaultName()
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
@@ -151,6 +160,16 @@ class WorkoutViewModel(
                 .onFailure { e ->
                     _error.value = "添加动作失败：${e.javaClass.simpleName} ${e.message.orEmpty()}"
                 }
+        }
+    }
+
+    /** 计算默认训练名：模板名优先，空训练用「计划」 */
+    private suspend fun refreshDefaultName() {
+        val templateId = _session.value?.templateId
+        _defaultSessionName.value = when {
+            templateId != null -> repo.getTemplate(templateId)?.template?.name
+                ?.takeIf { it.isNotBlank() } ?: "训练"
+            else -> "计划"
         }
     }
 
@@ -401,8 +420,10 @@ class WorkoutViewModel(
     /** 完成训练 */
     fun finishWorkout(name: String, note: String, onDone: () -> Unit) {
         val id = _sessionId.value ?: return
+        // 名称为空时用默认名（模板名或「计划」）
+        val finalName = name.trim().ifBlank { _defaultSessionName.value }
         viewModelScope.launch {
-            repo.finishSession(id, name, note)
+            repo.finishSession(id, finalName, note)
             tickerJob?.cancel()
             restTickerJob?.cancel()
             RestTimerService.skip(context)
