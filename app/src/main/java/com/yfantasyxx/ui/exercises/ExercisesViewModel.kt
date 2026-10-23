@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.asStateFlow
 
 class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
 
@@ -35,13 +36,28 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
             ExerciseCategory.all,
         )
 
-    /** 器械：完全按数据库中实际存在的内容动态生成 */
-    val equipments = repo.observeExerciseEquipments()
+    /** 器械：跟随当前分类，只列出该分类下实际存在的器械 */
+    val equipments = _category
+        .flatMapLatest { cat -> repo.observeExerciseEquipments(cat) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        // 切换分类后，若已选器械在新分类里不存在则自动取消
+        viewModelScope.launch {
+            equipments.collect { list ->
+                _equipment.value?.let { current ->
+                    if (current !in list) _equipment.value = null
+                }
+            }
+        }
+    }
 
     val exercises = combine(_keyword, _category, _equipment) { kw, cat, eq -> Triple(kw, cat, eq) }
         .flatMapLatest { (kw, cat, eq) -> repo.observeExercises(kw, cat, eq) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val selectedCategory = _category.asStateFlow()
+    val selectedEquipment = _equipment.asStateFlow()
 
     fun setKeyword(value: String) { _keyword.value = value }
     fun setCategory(value: String?) { _category.value = value }

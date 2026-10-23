@@ -49,8 +49,8 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     val exercises by vm.exercises.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
     var keyword by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf<String?>(null) }
-    var equipment by remember { mutableStateOf<String?>(null) }
+    val category by vm.selectedCategory.collectAsState()
+    val equipment by vm.selectedEquipment.collectAsState()
     val categories by vm.categories.collectAsState()
     val equipments by vm.equipments.collectAsState()
 
@@ -97,20 +97,14 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                     FilterChip(
                         label = "全部",
                         selected = category == null,
-                        onClick = {
-                            category = null
-                            vm.setCategory(null)
-                        },
+                        onClick = { vm.setCategory(null) },
                     )
                 }
                 items(categories) { cat ->
                     FilterChip(
                         label = cat,
                         selected = category == cat,
-                        onClick = {
-                            category = cat
-                            vm.setCategory(cat)
-                        },
+                        onClick = { vm.setCategory(cat) },
                     )
                 }
             }
@@ -125,20 +119,14 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                         FilterChip(
                             label = "全部器械",
                             selected = equipment == null,
-                            onClick = {
-                                equipment = null
-                                vm.setEquipment(null)
-                            },
+                            onClick = { vm.setEquipment(null) },
                         )
                     }
                     items(equipments) { eq ->
                         FilterChip(
                             label = eq,
                             selected = equipment == eq,
-                            onClick = {
-                                equipment = eq
-                                vm.setEquipment(eq)
-                            },
+                            onClick = { vm.setEquipment(eq) },
                         )
                     }
                 }

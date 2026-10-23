@@ -39,11 +39,16 @@ interface ExerciseDao {
     )
     fun observeCategories(): Flow<List<String>>
 
-    /** 数据库中实际存在的器械 */
+    /** 数据库中实际存在的器械；传入分类时只返回该分类下的器械 */
     @Query(
-        "SELECT DISTINCT equipment FROM exercises WHERE archived = 0 AND equipment != '' ORDER BY equipment"
+        """
+        SELECT DISTINCT equipment FROM exercises
+        WHERE archived = 0 AND equipment != ''
+          AND (:category IS NULL OR category = :category)
+        ORDER BY equipment
+        """
     )
-    fun observeEquipments(): Flow<List<String>>
+    fun observeEquipments(category: String?): Flow<List<String>>
 
     @Query("SELECT * FROM exercises WHERE id = :id")
     suspend fun getById(id: Long): Exercise?
