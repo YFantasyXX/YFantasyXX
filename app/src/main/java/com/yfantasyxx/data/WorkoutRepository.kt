@@ -238,6 +238,7 @@ class WorkoutRepository(private val db: AppDatabase) {
                     sortOrder = item.templateExercise.sortOrder,
                     restSeconds = item.templateExercise.restSeconds,
                     plannedSets = item.templateExercise.targetSets,
+                    plannedReps = item.templateExercise.targetReps,
                 )
             )
             // 重量优先用模板设定，其次沿用该动作上次的表现

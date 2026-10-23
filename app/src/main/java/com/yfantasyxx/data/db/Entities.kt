@@ -168,6 +168,8 @@ data class SessionExercise(
     val restSeconds: Int? = null,
     /** 模板计划的组数（快照，模板后续修改不影响历史记录）；null 表示手动添加 */
     val plannedSets: Int? = null,
+    /** 模板设定的目标次数（如 8-12），快照保存 */
+    val plannedReps: String? = null,
 )
 
 /**

@@ -150,23 +150,17 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(item.exercise.name, style = MiuixTheme.textStyles.main)
-                            val doneSets = item.sets.count { it.completed }
-                            val planned = item.sessionExercise.plannedSets
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = if (planned != null) {
-                                    "做组 $doneSets/$planned" +
-                                        if (doneSets >= planned) " · 已完成" else ""
-                                } else {
-                                    "做组 $doneSets"
-                                },
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = if (planned != null && doneSets >= planned) {
-                                    MiuixTheme.colorScheme.primary
-                                } else {
-                                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                },
-                            )
+                            // 模板设定的目标次数，如「目标 8-12」
+                            item.sessionExercise.plannedReps
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { reps ->
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = "目标 $reps",
+                                        style = MiuixTheme.textStyles.footnote1,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    )
+                                }
                             Spacer(Modifier.height(8.dp))
                             item.sets.sortedBy { it.setNumber }.forEach { set ->
                                 Row(

@@ -436,7 +436,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -449,6 +449,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v9 -> v10：训练动作记录模板设定的目标次数 */
+        val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedReps TEXT")
+            }
+        }
 
         /** v8 -> v9：训练动作记录模板计划的组数 */
         val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
