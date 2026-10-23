@@ -143,6 +143,12 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     fun observeFolders(): Flow<List<TemplateFolder>> = templateDao.observeFolders()
 
+    /** 首页快捷开始用：排除隐藏文件夹里的模板 */
+    fun observeHomeTemplates(): Flow<List<WorkoutTemplate>> = templateDao.observeHomeTemplates()
+
+    suspend fun setFolderShowOnHome(id: Long, show: Boolean) =
+        templateDao.setFolderShowOnHome(id, show)
+
     suspend fun createFolder(name: String): Long =
         templateDao.insertFolder(TemplateFolder(name = name.trim()))
 

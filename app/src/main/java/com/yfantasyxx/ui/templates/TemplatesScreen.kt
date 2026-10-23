@@ -68,6 +68,9 @@ import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.CreateNewFolder
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 import com.yfantasyxx.ui.components.AddExerciseDialog
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.foundation.shape.CircleShape
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
@@ -150,10 +153,17 @@ fun TemplatesScreen(
             ) {
                 groups.forEach { group ->
                     item(key = "folder_${group.folderId}") {
+                        val folderEntity = folders.firstOrNull { it.id == group.folderId }
                         FolderHeader(
                             name = group.folderName ?: "未分组",
                             count = group.templates.size,
                             isRealFolder = group.folderId != null,
+                            showOnHome = folderEntity?.showOnHome ?: true,
+                            onToggleHome = {
+                                group.folderId?.let { id ->
+                                    vm.toggleFolderHome(id, folderEntity?.showOnHome ?: true)
+                                }
+                            },
                             onAddTemplate = { onCreateTemplate(group.folderId) },
                             onRename = {
                                 renamingFolder = folders.firstOrNull { it.id == group.folderId }
@@ -422,6 +432,8 @@ private fun FolderHeader(
     name: String,
     count: Int,
     isRealFolder: Boolean,
+    showOnHome: Boolean,
+    onToggleHome: () -> Unit,
     onAddTemplate: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -450,6 +462,29 @@ private fun FolderHeader(
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
         )
         if (isRealFolder) {
+            // 首页可见开关
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onToggleHome),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (showOnHome) {
+                        Icons.Filled.Visibility
+                    } else {
+                        Icons.Filled.VisibilityOff
+                    },
+                    contentDescription = if (showOnHome) "首页显示中，点击隐藏" else "首页已隐藏，点击显示",
+                    modifier = Modifier.size(18.dp),
+                    tint = if (showOnHome) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f)
+                    },
+                )
+            }
             ActionText(text = "改名", onClick = onRename)
             ActionText(text = "删除", onClick = onDelete, color = MiuixTheme.colorScheme.error)
         }

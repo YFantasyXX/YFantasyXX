@@ -40,7 +40,7 @@ class HomeViewModel(
 
     val uiState: StateFlow<HomeUiState> = combine(
         repo.observeActiveSession(),
-        repo.observeTemplates(),
+        repo.observeHomeTemplates(),
         repo.observeHistory(),
         repo.observeSessionCount(weekStart()),
         repo.observeTotalVolume(weekStart()),

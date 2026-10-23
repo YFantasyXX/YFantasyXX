@@ -80,6 +80,8 @@ data class TemplateFolder(
     val id: Long = 0,
     val name: String,
     val sortOrder: Int = 0,
+    /** 该文件夹下的模板是否在首页快捷开始区显示 */
+    val showOnHome: Boolean = true,
 )
 
 /**

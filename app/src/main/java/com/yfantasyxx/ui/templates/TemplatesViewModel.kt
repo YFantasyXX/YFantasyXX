@@ -90,6 +90,11 @@ class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         viewModelScope.launch { repo.renameFolder(id, name) }
     }
 
+    /** 切换该文件夹的模板是否在首页显示 */
+    fun toggleFolderHome(id: Long, current: Boolean) {
+        viewModelScope.launch { repo.setFolderShowOnHome(id, !current) }
+    }
+
     fun deleteFolder(id: Long) {
         viewModelScope.launch { repo.deleteFolder(id) }
     }

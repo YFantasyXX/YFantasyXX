@@ -98,6 +98,23 @@ interface TemplateDao {
     @Query("UPDATE templates SET folderId = :folderId, sortOrder = :order WHERE id = :id")
     suspend fun updateTemplatePlacement(id: Long, folderId: Long?, order: Int)
 
+    /** 首页只显示：未分组模板 + 勾选了「显示在首页」的文件夹内模板 */
+    @Query(
+        """
+        SELECT t.* FROM templates t
+        WHERE t.folderId IS NULL
+           OR EXISTS (
+               SELECT 1 FROM template_folders f
+               WHERE f.id = t.folderId AND f.showOnHome = 1
+           )
+        ORDER BY t.sortOrder, t.createdAt DESC
+        """
+    )
+    fun observeHomeTemplates(): Flow<List<WorkoutTemplate>>
+
+    @Query("UPDATE template_folders SET showOnHome = :show WHERE id = :id")
+    suspend fun setFolderShowOnHome(id: Long, show: Boolean)
+
     @Transaction
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
     fun observeAllWithExercises(): Flow<List<TemplateWithExercises>>
@@ -392,7 +409,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -405,6 +422,15 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v7 -> v8：文件夹可控制是否在首页展示其模板 */
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN showOnHome INTEGER NOT NULL DEFAULT 1"
+                )
+            }
+        }
 
         /** v6 -> v7：组可标记为 PR 极限组 */
         val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
