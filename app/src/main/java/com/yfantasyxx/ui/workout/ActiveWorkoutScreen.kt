@@ -527,6 +527,12 @@ private fun ExerciseBlock(
                                 append(" · ")
                                 append(item.exercise.equipment)
                             }
+                            // 模板设定的目标次数，如「目标 8-12」
+                            val planned = item.sessionExercise.plannedReps
+                            if (!planned.isNullOrBlank()) {
+                                append(" · 目标 ")
+                                append(planned)
+                            }
                             if (lastSummary.isNotEmpty()) {
                                 append(" · ")
                                 append(lastSummary)
