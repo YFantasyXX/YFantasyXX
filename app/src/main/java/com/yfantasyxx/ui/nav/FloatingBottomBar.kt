@@ -19,12 +19,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.Backdrop
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.blendColors
+import top.yukonga.miuix.kmp.blur.blur
+import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 悬浮底栏的 tab 定义 */
@@ -38,24 +46,25 @@ data class FloatingTab(
 /**
  * 悬浮底栏：浮在内容之上、圆角胶囊 + 细描边 + 阴影。
  *
- * 背景使用半透明色（[glass] 开启时约 93% 不透明度），视觉上是磨砂玻璃质感。
- * 这里刻意没有用真实的背景模糊：GPU 每帧对整条底栏做高斯模糊有 1~3ms 开销，
- * 在高刷屏上会明显吃掉帧预算；半透明方案性能开销接近零。
+ * [glass] 开启时用 miuix-blur 采样并模糊下方内容（真毛玻璃效果）；
+ * 关闭时使用不透明背景（默认），避免高刷屏上额外的 GPU 模糊开销。
  */
 @Composable
 fun FloatingBottomBar(
     tabs: List<FloatingTab>,
     selectedRoute: String?,
+    backdrop: Backdrop,
     glass: Boolean,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(28.dp)
     val surface = MiuixTheme.colorScheme.surface
+    val blurRadiusPx = with(LocalDensity.current) { 22.dp.toPx() }
 
     Surface(
         shape = shape,
-        color = if (glass) surface.copy(alpha = 0.93f) else surface,
+        color = if (glass) Color.Transparent else surface,
         shadowElevation = 12.dp,
         modifier = modifier
             .fillMaxWidth()
@@ -66,6 +75,26 @@ fun FloatingBottomBar(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .then(
+                    if (glass) {
+                        Modifier.drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { shape },
+                            effects = {
+                                blur(blurRadiusPx)
+                                blendColors(
+                                    BlurColors(
+                                        blendColors = listOf(
+                                            BlendColorEntry(surface.copy(alpha = 0.55f))
+                                        )
+                                    )
+                                )
+                            },
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
                 .clip(shape)
                 .border(
                     width = 0.6.dp,

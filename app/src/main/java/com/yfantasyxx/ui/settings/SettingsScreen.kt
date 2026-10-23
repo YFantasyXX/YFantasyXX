@@ -142,9 +142,9 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("底栏玻璃质感", style = MiuixTheme.textStyles.main)
+                            Text("底栏毛玻璃", style = MiuixTheme.textStyles.main)
                             Text(
-                                text = "半透明悬浮底栏；关闭则完全不透明",
+                                text = "模糊底栏下方内容，会增加 GPU 开销",
                                 style = MiuixTheme.textStyles.footnote1,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             )

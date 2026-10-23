@@ -18,8 +18,10 @@
   - 个人纪录（PR）排行
 - **WebDAV 备份**：整库备份 / 恢复 / 保留最近 5 份；支持训练完成后自动备份
 - **CSV 导出**：训练记录导出为 CSV，方便二次分析
+- **悬浮底栏**：胶囊形底部导航，可选毛玻璃（默认关闭，开启会有额外 GPU 开销）
 - **深色模式**：跟随系统 / 浅色 / 深色
 - **单位切换**：kg / lb
+- **高刷新率**：启动时请求屏幕最高刷新率（设置页可查看当前实际 Hz）
 
 ## UI
 
@@ -38,10 +40,14 @@
 | 网络 | OkHttp `5.x`（自实现轻量 WebDAV 客户端） |
 | 偏好存储 | DataStore Preferences + AndroidKeyStore 加密密码 |
 | 构建 | AGP `8.13.x` / Gradle `8.14.3` / Kotlin `2.3.20` |
+| 运行要求 | Android 12L+（minSdk 32）、compileSdk 37 |
 
 ## 构建
 
-环境要求：JDK 17+、Android SDK（compileSdk 35）。
+环境要求：JDK 17+、Android SDK Platform 37。
+
+> 本应用 minSdk 为 **32（Android 12L）**：悬浮底栏的毛玻璃效果依赖 `miuix-blur`，
+> 该库要求 API 32+。如需支持更低版本，可移除 `miuix-blur` 依赖并把底栏改为纯色。
 
 ```bash
 git clone https://github.com/YFantasyXX/YFantasyXX.git

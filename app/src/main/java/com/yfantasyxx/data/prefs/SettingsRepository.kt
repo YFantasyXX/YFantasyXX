@@ -41,8 +41,8 @@ data class AppSettings(
     val webdavPassword: String = "",
     val autoBackup: Boolean = false,
     val lastBackupTime: Long? = null,
-    /** 悬浮底栏毛玻璃效果（关闭可省电、提升帧率） */
-    val blurBottomBar: Boolean = true,
+    /** 悬浮底栏毛玻璃效果（默认关闭，开启会增加 GPU 开销） */
+    val blurBottomBar: Boolean = false,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -71,7 +71,7 @@ class SettingsRepository(private val context: Context) {
             webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
             autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
             lastBackupTime = prefs[Keys.LAST_BACKUP],
-            blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: true,
+            blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
         )
     }
 

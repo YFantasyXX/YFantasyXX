@@ -11,10 +11,10 @@ android {
 
     defaultConfig {
         applicationId = "com.yfantasyxx"
-        minSdk = 26
+        minSdk = 32
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.0.8"
+        versionCode = 10
+        versionName = "1.0.9"
         resourceConfigurations += listOf("zh", "en")
     }
 
@@ -76,6 +76,7 @@ dependencies {
 
     // MIUIX - HyperOS style Compose UI library
     implementation(libs.miuix.ui)
+    implementation(libs.miuix.blur)
 
     // Room
     implementation(libs.androidx.room.runtime)

@@ -46,6 +46,8 @@ import com.yfantasyxx.ui.templates.TemplateEditScreen
 import com.yfantasyxx.ui.templates.TemplatesScreen
 import com.yfantasyxx.ui.workout.ActiveWorkoutScreen
 import androidx.compose.ui.unit.dp
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 
 object Routes {
     const val HOME = "home"
@@ -94,6 +96,8 @@ private fun YFantasyXXNavHost() {
     val navBarInset = androidx.compose.foundation.layout.WindowInsets.navigationBars
         .asPaddingValues().calculateBottomPadding()
     val bottomSpace = 92.dp + navBarInset
+    // 底栏毛玻璃的效果来源：采集这个内容层
+    val backdrop = rememberLayerBackdrop()
 
     Box(
         modifier = Modifier
@@ -103,6 +107,7 @@ private fun YFantasyXXNavHost() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .layerBackdrop(backdrop)
                 .padding(bottom = if (showBottomBar) bottomSpace else 0.dp)
         ) {
         NavHost(
@@ -172,6 +177,7 @@ private fun YFantasyXXNavHost() {
             FloatingBottomBar(
                 tabs = tabs,
                 selectedRoute = currentRoute,
+                backdrop = backdrop,
                 glass = settings.blurBottomBar,
                 onSelect = { route ->
                     navController.navigate(route) {
