@@ -366,17 +366,21 @@ fun InfoRow(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
     ) {
         Text(
             text = label,
             style = MiuixTheme.textStyles.paragraph,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.weight(1f),
         )
+        // 值靠右对齐，长文本（如链接）换行后仍贴右边
         Text(
             text = value,
             style = MiuixTheme.textStyles.paragraph,
             color = MiuixTheme.colorScheme.onSurface,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1.4f),
         )
     }
 }
