@@ -314,29 +314,54 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             val id = draggingId
                                                 ?: return@detectVerticalDragGestures
                                             dragOffsetY += amount
-                                            // 拖动中实时交换：被拖项中心落在谁身上，就换到谁的位置
                                             val bounds = itemBounds[id] ?: return@detectVerticalDragGestures
-                                            val center =
+                                            // 被拖卡片中心（视觉位置 = 布局位置 + 平移）
+                                            val draggedCenter =
                                                 bounds.first + dragOffsetY + bounds.second / 2
-                                            val targetEntry = itemBounds.entries
-                                                .firstOrNull { (tid, b) ->
-                                                    tid != id && center >= b.first &&
-                                                        center < b.first + b.second
+                                            // 交换条件：中心越过了移动方向上最近那个动作的中心。
+                                            // 不能用「中心落在谁范围内」——补偿后卡片本就浮在邻居
+                                            // 身上，会立刻换回来，导致原地抽搐
+                                            val downTarget = itemBounds.entries
+                                                .filter { (tid, b) ->
+                                                    tid != id && b.first > bounds.first
                                                 }
-                                            val targetId = targetEntry?.key
-                                            if (targetId != null) {
+                                                .minByOrNull { (_, b) -> b.first + b.second / 2 }
+                                            val upTarget = itemBounds.entries
+                                                .filter { (tid, b) ->
+                                                    tid != id && b.first < bounds.first
+                                                }
+                                                .maxByOrNull { (_, b) -> b.first + b.second / 2 }
+                                            val targetEntry = when {
+                                                downTarget != null &&
+                                                    draggedCenter > downTarget.value.let {
+                                                        it.first + it.second / 2
+                                                    } -> downTarget
+                                                upTarget != null &&
+                                                    draggedCenter < upTarget.value.let {
+                                                        it.first + it.second / 2
+                                                    } -> upTarget
+                                                else -> null
+                                            }
+                                            if (targetEntry != null) {
+                                                val targetId = targetEntry.key
+                                                val targetTop = targetEntry.value.first
+                                                val targetH = targetEntry.value.second
+                                                val movingDown = targetTop > bounds.first
                                                 vm.moveExerciseById(id, targetId)
-                                                // 交换后该项布局位置改变，补偿偏移让卡片继续跟着手指。
-                                                // 用实时坐标判断方向（不能用闭包里的旧列表）
+                                                // 交换后布局位移量 = 目标高度 + 卡片间距；
+                                                // 补偿平移量，让卡片继续贴在手指下方
                                                 val gap = 12.dp.toPx()
-                                                val movingDown =
-                                                    targetEntry.value.first > bounds.first
-                                                dragOffsetY += if (movingDown) {
-                                                    // 换到目标下方：布局整体下移，抵消平移
-                                                    -(bounds.second + gap)
+                                                val shift = targetH + gap
+                                                dragOffsetY += if (movingDown) -shift else shift
+                                                // 立即刷新两行坐标记录，防止下一帧用过期坐标重复交换
+                                                if (movingDown) {
+                                                    itemBounds[id] =
+                                                        (bounds.first + shift) to bounds.second
+                                                    itemBounds[targetId] = bounds.first to targetH
                                                 } else {
-                                                    // 换到目标上方：布局整体上移，补偿平移
-                                                    targetEntry.value.second + gap
+                                                    itemBounds[id] = targetTop to bounds.second
+                                                    itemBounds[targetId] =
+                                                        (bounds.first + bounds.second + gap) to targetH
                                                 }
                                             }
                                         },
