@@ -33,6 +33,20 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /** 页面分组标题 */
 @Composable
@@ -83,7 +97,7 @@ fun EmptyState(
 }
 
 /**
- * 数字步进器：胶囊形外壳 + 圆形加减按钮。
+ * 数字步进器：胶囊形外壳 + 圆形加减按钮，中间数字可直接点击输入。
  */
 @Composable
 fun NumberStepper(
@@ -94,6 +108,34 @@ fun NumberStepper(
     unit: String = "",
     allowNegative: Boolean = false,
 ) {
+    val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    var editing by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf("") }
+
+    val displayText = if (value == value.toInt().toFloat()) {
+        value.toInt().toString() + unit
+    } else {
+        String.format("%.1f%s", value, unit)
+    }
+
+    fun exitEditing() {
+        editing = false
+        text = ""
+        focusManager.clearFocus()
+    }
+
+    /** 提交输入；返回可作为后续加减基准的值 */
+    fun commit(): Float {
+        val parsed = text.toFloatOrNull()
+        val result = if (parsed != null && (allowNegative || parsed >= 0f)) parsed else value
+        if (parsed != null && (allowNegative || parsed >= 0f)) {
+            onValueChange(result)
+        }
+        exitEditing()
+        return result
+    }
+
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
@@ -106,27 +148,83 @@ fun NumberStepper(
             icon = Icons.Filled.Remove,
             description = "减少",
             onClick = {
-                val next = value - step
+                // 编辑中先以输入值为基准，避免覆盖刚输入的数字
+                val base = if (editing) commit() else value
+                val next = base - step
                 onValueChange(if (next < 0f && !allowNegative) 0f else next)
             },
         )
-        Text(
-            text = if (value == value.toInt().toFloat()) {
-                value.toInt().toString() + unit
+
+        // 数字区域：点击切换到输入态，支持直接键盘输入
+        Box(
+            modifier = Modifier
+                .widthIn(min = 54.dp)
+                .clip(RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (editing) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { input ->
+                        if (input.length <= 6 && input.all { it.isDigit() || it == '.' }) {
+                            text = input
+                        }
+                    },
+                    textStyle = TextStyle(
+                        color = MiuixTheme.colorScheme.onSurface,
+                        fontSize = 15.sp,
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    cursorBrush = SolidColor(MiuixTheme.colorScheme.primary),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { commit(); Unit }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { state ->
+                            // 点到别处（失焦）也提交
+                            if (!state.isFocused && editing) commit()
+                        },
+                )
+                LaunchedEffect(Unit) {
+                    focusRequester.requestFocus()
+                }
             } else {
-                String.format("%.1f%s", value, unit)
-            },
-            style = MiuixTheme.textStyles.main,
-            color = MiuixTheme.colorScheme.onSurface,
-            fontSize = 15.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            modifier = Modifier.widthIn(min = 52.dp),
-        )
+                Text(
+                    text = displayText,
+                    style = MiuixTheme.textStyles.main,
+                    color = MiuixTheme.colorScheme.onSurface,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            text = if (value == value.toInt().toFloat()) {
+                                value.toInt().toString()
+                            } else {
+                                String.format("%.1f", value)
+                            }
+                            editing = true
+                        }
+                        .padding(vertical = 4.dp),
+                )
+            }
+        }
+
         StepButton(
             icon = Icons.Filled.Add,
             description = "增加",
-            onClick = { onValueChange(value + step) },
+            onClick = {
+                val base = if (editing) commit() else value
+                onValueChange(base + step)
+            },
         )
     }
 }
