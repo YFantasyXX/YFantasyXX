@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -75,6 +76,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.layout.positionInParent
@@ -97,6 +99,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     var draggingId by remember { mutableStateOf<Long?>(null) }
     var dragOffsetY by remember { mutableStateOf(0f) }
+    // 拖动中的目标插入位（-1 表示未拖动）
+    var dropTargetIndex by remember { mutableStateOf(-1) }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
     // 用普通 HashMap 记录布局：布局阶段写快照状态会引起不必要的重组抖动
@@ -302,6 +306,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { _, item ->
                     val isDragging = draggingId == item.sessionExercise.id
                     val isCollapsed = collapsedIds[item.sessionExercise.id] == true
+                    val primaryColor = MiuixTheme.colorScheme.primary
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -310,22 +315,44 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                 translationY = if (isDragging) dragOffsetY else 0f
                                 shadowElevation = if (isDragging) 12f else 0f
                             }
+                            // 拖动高亮：用 drawBehind 画在内容下层，
+                            // 完全不参与测量和布局，不会引发布局反馈环
+                            .drawBehind {
+                                if (isDragging) {
+                                    val stroke = 3.dp.toPx()
+                                    val inset = stroke / 2f
+                                    drawRoundRect(
+                                        color = primaryColor,
+                                        topLeft = androidx.compose.ui.geometry.Offset(
+                                            inset, inset
+                                        ),
+                                        size = androidx.compose.ui.geometry.Size(
+                                            size.width - stroke,
+                                            size.height - stroke
+                                        ),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                                            16.dp.toPx()
+                                        ),
+                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                            stroke
+                                        ),
+                                    )
+                                }
+                            }
                             .onGloballyPositioned { coords ->
                                 itemBounds[item.sessionExercise.id] =
                                     coords.positionInParent().y to coords.size.height.toFloat()
                             },
                         verticalAlignment = Alignment.Top,
                     ) {
-                        // 拖动把手：按住上下拖动即排序，拖过别的动作实时换位。
+                        // 拖动把手：按住上下拖动排序。
                         //
-                        // 三个必须遵守的点（前几版都踩过）：
-                        // 1. 绝不能用 userScrollEnabled 跟随拖动状态联动 —— 那会重建
-                        //    scrollable modifier，把进行中的手势直接取消，所以改成手势
-                        //    自己消费事件，并给列表加一个一次性滚动的嵌套拦截
-                        // 2. 拖动中不能改变卡片高度（不能因 isDragging 强制收纳），
-                        //    否则高度剧变让坐标判断全部失效
-                        // 3. 不做逐帧偏移补偿。拖动期间所有卡片高度与间距恒定，
-                        //    布局位置可以纯解析推算，换位后按新位置一次性修正偏移
+                        // 关键设计（前几版反复踩坑后定下的方案）：
+                        // 拖动过程中【绝不修改列表顺序】。列表顺序一变，LazyColumn
+                        // 重新布局 → onGloballyPositioned 重新回调 → 坐标变化 →
+                        // 又触发换位判断，形成反馈环，表现为持续闪烁。
+                        // 正确做法：拖动中只把卡片平移，同时算出一个「目标插入位」，
+                        // 用高亮线显示；松手时才一次性改顺序并落库。
                         Box(
                             modifier = Modifier
                                 .width(40.dp)
@@ -348,57 +375,51 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                                 it.sessionExercise.id == id
                                             }
                                             if (from < 0) return@detectVerticalDragGestures
+                                            val selfH = itemBounds[id]?.second
+                                                ?: return@detectVerticalDragGestures
                                             dragOffsetY += amount
-                                            val offset = dragOffsetY
-                                            val gap = 12.dp.toPx()
-                                            // 拖动期间高度恒定，用已测量高度解析推算布局。
-                                            // LazyColumn 只组合可见项，屏幕外动作
-                                            // 没有高度记录，一律不参与换位
-                                            val tops = FloatArray(list.size) { Float.NaN }
-                                            val centers = FloatArray(list.size) { Float.NaN }
-                                            var y = 0f
-                                            list.forEachIndexed { i, ex ->
-                                                val h = itemBounds[ex.sessionExercise.id]
-                                                    ?.second
-                                                if (h != null) {
-                                                    tops[i] = y
-                                                    centers[i] = y + h / 2f
-                                                    y += h + gap
-                                                }
-                                            }
-                                            // 被拖卡片当前视觉中心
-                                            if (itemBounds[id] == null) {
-                                                return@detectVerticalDragGestures
-                                            }
-                                            val draggedCenter = centers[from] + offset
-                                            // 找视觉中心最接近的目标格（只看已测量的项）
+                                            // 被拖卡片的视觉中心 = 自身布局中心 + 累积位移
+                                            val visualCenter =
+                                                (itemBounds[id]?.first ?: 0f) +
+                                                    selfH / 2f + dragOffsetY
+                                            // 只与「已测量的相邻项」比较，按各自中心判断
+                                            // 被拖中心落在谁的区间内，目标位就是它后面
                                             var target = from
-                                            var best = Float.MAX_VALUE
-                                            list.indices.forEach { i ->
-                                                if (i == from) return@forEach
-                                                val c = centers[i]
-                                                if (c.isNaN()) return@forEach
-                                                val d = abs(c - draggedCenter)
-                                                if (d < best) {
-                                                    best = d
+                                            var bestDist = Float.MAX_VALUE
+                                            list.forEachIndexed { i, ex ->
+                                                if (i == from) return@forEachIndexed
+                                                val b = itemBounds[ex.sessionExercise.id]
+                                                    ?: return@forEachIndexed
+                                                val center = b.first + b.second / 2f
+                                                val d = abs(center - visualCenter)
+                                                if (d < bestDist) {
+                                                    bestDist = d
                                                     target = i
                                                 }
                                             }
-                                            if (target != from) {
-                                                vm.moveExerciseLocal(from, target)
-                                                // 换位后被拖项的布局位置变为 tops[target]，
-                                                // 把这段位移折算掉，卡片继续贴着手指、不跳不抽搐
-                                                dragOffsetY = offset - (tops[target] - tops[from])
-                                            }
+                                            // target 就是松手后要插入的位置；此时不动列表
+                                            dropTargetIndex = target
                                         },
                                         onDragEnd = {
+                                            val id = draggingId
+                                            val from = latestExercises.indexOfFirst {
+                                                it.sessionExercise.id == id
+                                            }
+                                            val to = dropTargetIndex
+                                            if (id != null && from >= 0 && to >= 0 &&
+                                                to != from
+                                            ) {
+                                                vm.moveExerciseLocal(from, to)
+                                                vm.persistExerciseOrder()
+                                            }
                                             draggingId = null
                                             dragOffsetY = 0f
-                                            vm.persistExerciseOrder()
+                                            dropTargetIndex = -1
                                         },
                                         onDragCancel = {
                                             draggingId = null
                                             dragOffsetY = 0f
+                                            dropTargetIndex = -1
                                         },
                                     )
                                 },

@@ -199,14 +199,15 @@ class WorkoutViewModel(
     fun persistExerciseOrder() {
         val items = _exercises.value
         val sessionId = _sessionId.value ?: return
-        localOrderLock = false
         viewModelScope.launch {
             runCatching {
                 repo.reorderSessionExercises(sessionId, items.map { it.sessionExercise.id })
             }.onFailure { e ->
-                localOrderLock = false
                 _error.value = "调整顺序失败：${e.message.orEmpty()}"
             }
+            // 必须等写入完成后再解锁：提前释放会让 Room Flow 的旧顺序
+            // 在写入落地前覆盖本地新顺序
+            localOrderLock = false
         }
     }
 
