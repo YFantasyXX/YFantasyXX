@@ -90,8 +90,14 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             SmallTopAppBar(
-                title = formatDuration(elapsed),
-                subtitle = if (exercises.isEmpty()) "添加动作开始训练" else "${exercises.size} 个动作",
+                title = if (elapsed == 0) "待开始" else formatDuration(elapsed),
+                subtitle = if (exercises.isEmpty()) {
+                    "添加动作开始训练"
+                } else if (elapsed == 0) {
+                    "完成第一组后开始计时 · ${exercises.size} 个动作"
+                } else {
+                    "${exercises.size} 个动作"
+                },
                 navigationIcon = {
                     IconButton(onClick = { showDiscardDialog = true }) {
                         Icon(

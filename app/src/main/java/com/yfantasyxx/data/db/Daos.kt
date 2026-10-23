@@ -90,7 +90,7 @@ interface SessionDao {
     /** 进行中的草稿（最近一个） */
     @Query(
         """
-        SELECT s.id AS id, s.name AS name, s.startTime AS startTime,
+        SELECT s.id AS id, s.name AS name, COALESCE(s.activeStartedAt, s.startTime) AS startTime,
                (SELECT COUNT(*) FROM session_exercises se WHERE se.sessionId = s.id) AS exerciseCount,
                (SELECT COUNT(*) FROM set_logs sl
                     INNER JOIN session_exercises se2 ON sl.sessionExerciseId = se2.id
@@ -109,7 +109,7 @@ interface SessionDao {
         SELECT s.id AS id,
                CASE WHEN s.name = '' THEN '训练' ELSE s.name END AS name,
                s.templateId AS templateId,
-               s.startTime AS startTime,
+               COALESCE(s.activeStartedAt, s.startTime) AS startTime,
                s.endTime AS endTime,
                (SELECT COUNT(DISTINCT se.exerciseId) FROM session_exercises se WHERE se.sessionId = s.id) AS exerciseCount,
                (SELECT COUNT(*) FROM set_logs sl
@@ -152,6 +152,9 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET endTime = :endTime, name = :name, note = :note WHERE id = :id")
     suspend fun finish(id: Long, endTime: Long, name: String, note: String)
+
+    @Query("UPDATE sessions SET activeStartedAt = :time WHERE id = :id AND activeStartedAt IS NULL")
+    suspend fun markStarted(id: Long, time: Long)
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun delete(id: Long)
@@ -318,7 +321,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -331,6 +334,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v3 -> v4：训练记录增加实际开始计时时刻 */
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN activeStartedAt INTEGER")
+            }
+        }
 
         /** v2 -> v3：模板动作支持目标重量与热身标记 */
         val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {

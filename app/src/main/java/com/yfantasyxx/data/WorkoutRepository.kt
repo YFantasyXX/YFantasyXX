@@ -228,6 +228,10 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun getSet(id: Long): SetLog? = setLogDao.getById(id)
 
     /** 完成训练 */
+    /** 第一组完成时记录实际开始计时时刻 */
+    suspend fun markSessionStarted(id: Long, time: Long = System.currentTimeMillis()) =
+        sessionDao.markStarted(id, time)
+
     suspend fun finishSession(id: Long, name: String, note: String) =
         sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
 

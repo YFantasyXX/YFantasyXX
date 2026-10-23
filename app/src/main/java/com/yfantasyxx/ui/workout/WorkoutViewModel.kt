@@ -113,10 +113,15 @@ class WorkoutViewModel(
 
     private fun startTicker() {
         tickerJob?.cancel()
-        val start = _session.value?.startTime ?: System.currentTimeMillis()
+        val startedAt = _session.value?.activeStartedAt
+        if (startedAt == null) {
+            // 还没完成第一组，训练时长不计时
+            _elapsedSeconds.value = 0
+            return
+        }
         tickerJob = viewModelScope.launch {
             while (true) {
-                _elapsedSeconds.value = ((System.currentTimeMillis() - start) / 1000).toInt()
+                _elapsedSeconds.value = ((System.currentTimeMillis() - startedAt) / 1000).toInt()
                 delay(1000)
             }
         }
@@ -167,6 +172,14 @@ class WorkoutViewModel(
             val willComplete = !set.completed
             repo.updateSet(set.copy(completed = willComplete))
             if (willComplete) {
+                // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
+                val sessionId = _sessionId.value
+                if (sessionId != null && _session.value?.activeStartedAt == null) {
+                    val now = System.currentTimeMillis()
+                    repo.markSessionStarted(sessionId, now)
+                    _session.value = _session.value?.copy(activeStartedAt = now)
+                    startTicker()
+                }
                 val exerciseId = _exercises.value
                     .firstOrNull { it.sessionExercise.id == set.sessionExerciseId }
                     ?.sessionExercise?.exerciseId

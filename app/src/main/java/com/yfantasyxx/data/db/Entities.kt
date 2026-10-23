@@ -112,6 +112,8 @@ data class WorkoutSession(
     val name: String = "",
     val templateId: Long? = null,
     val startTime: Long,
+    /** 真正开始计时的时刻：第一组完成时写入；null 表示还没开始练 */
+    val activeStartedAt: Long? = null,
     val endTime: Long? = null,
     val note: String = "",
 )
