@@ -54,6 +54,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     val vm: ExercisesViewModel = viewModel(factory = ExercisesViewModel.factory(container))
     var exercise by remember { mutableStateOf<Exercise?>(null) }
     var lastSets by remember { mutableStateOf<List<SetLog>>(emptyList()) }
+    var bestSet by remember { mutableStateOf<SetLog?>(null) }
     var showRestPicker by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
@@ -64,6 +65,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     LaunchedEffect(exerciseId) {
         exercise = vm.getExercise(exerciseId)
         lastSets = vm.getLastPerformance(exerciseId)
+        bestSet = vm.getBestSet(exerciseId)
     }
 
     Scaffold(
@@ -122,6 +124,16 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                             InfoRow("器械", ex.equipment)
                             InfoRow("主要部位", ex.primaryMuscle.ifEmpty { "--" })
                             InfoRow("来源", if (ex.isCustom) "自定义" else "内置")
+                            bestSet?.let { best ->
+                                InfoRow(
+                                    "最佳记录",
+                                    if (best.weightKg > 0f) {
+                                        "${best.weightKg.toInt()} kg × ${best.reps}"
+                                    } else {
+                                        "${best.reps} 次（自重）"
+                                    }
+                                )
+                            }
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

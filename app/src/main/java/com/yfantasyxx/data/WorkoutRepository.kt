@@ -322,6 +322,9 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     // ---------- 身体数据 ----------
 
+    /** 该动作历史最佳一组（用于动作库 PR 展示） */
+    suspend fun bestSetFor(exerciseId: Long): SetLog? = sessionDao.bestSetFor(exerciseId)
+
     /** 训练动作（可能来自模板）指定的休息时长 */
     suspend fun sessionRestSeconds(sessionExerciseId: Long): Int? =
         sessionExerciseDao.restSecondsOf(sessionExerciseId)

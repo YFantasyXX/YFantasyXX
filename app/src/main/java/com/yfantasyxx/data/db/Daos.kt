@@ -245,11 +245,24 @@ interface SessionDao {
         SELECT * FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
-        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.isPr = 0
         ORDER BY s.startTime DESC, sl.setNumber LIMIT :limit
         """
     )
     suspend fun recentSetsForExercise(exerciseId: Long, limit: Int): List<SetLog>
+
+    /** 该动作历史最佳一组（重量优先，含 PR 组，排除热身） */
+    @Query(
+        """
+        SELECT * FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND sl.completed = 1
+          AND sl.isWarmup = 0 AND sl.reps > 0 AND s.endTime IS NOT NULL
+        ORDER BY sl.weightKg DESC, sl.reps DESC LIMIT 1
+        """
+    )
+    suspend fun bestSetFor(exerciseId: Long): SetLog?
 
     /** 近 N 天训练次数 */
     @Query("SELECT COUNT(*) FROM sessions WHERE endTime IS NOT NULL AND startTime >= :since")
@@ -346,7 +359,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -359,6 +372,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v6 -> v7：组可标记为 PR 极限组 */
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE set_logs ADD COLUMN isPr INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         /** v5 -> v6：模板动作与训练动作支持独立休息时长 */
         val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {

@@ -39,6 +39,8 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         }
     }
 
+    suspend fun getBestSet(exerciseId: Long): SetLog? = repo.bestSetFor(exerciseId)
+
     fun updateExercise(exercise: Exercise) {
         viewModelScope.launch { repo.updateExercise(exercise) }
     }

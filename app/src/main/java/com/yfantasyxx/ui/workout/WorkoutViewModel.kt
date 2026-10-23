@@ -223,6 +223,14 @@ class WorkoutViewModel(
         }
     }
 
+    /** 标记/取消 PR 组（计入 PR 榜，但不作为下次训练参考重量） */
+    fun toggleSetPr(set: SetLog) {
+        viewModelScope.launch {
+            runCatching { repo.updateSet(set.copy(isPr = !set.isPr)) }
+                .onFailure { e -> _error.value = "标记 PR 失败：${e.message.orEmpty()}" }
+        }
+    }
+
     fun deleteSet(set: SetLog) {
         viewModelScope.launch {
             runCatching { repo.deleteSetAndRenumber(set.id) }

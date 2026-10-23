@@ -232,6 +232,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         onAddSet = { vm.addSet(item.sessionExercise.id) },
                         onRemoveExercise = { vm.removeExercise(item.sessionExercise.id) },
                         onDeleteSet = vm::deleteSet,
+                        onTogglePr = vm::toggleSetPr,
                     )
                 }
 
@@ -328,6 +329,7 @@ private fun ExerciseBlock(
     onAddSet: () -> Unit,
     onRemoveExercise: () -> Unit,
     onDeleteSet: (SetLog) -> Unit,
+    onTogglePr: (SetLog) -> Unit,
 ) {
     val completed = item.sets.count { it.completed }
     val lastSummary = if (lastSets.isNotEmpty()) {
@@ -462,6 +464,7 @@ private fun ExerciseBlock(
                     onUpdateSet = onUpdateSet,
                     onToggleSet = onToggleSet,
                     onDeleteSet = onDeleteSet,
+                    onTogglePr = onTogglePr,
                 )
             }
             Spacer(Modifier.height(4.dp))
@@ -476,6 +479,7 @@ private fun SetRow(
     onUpdateSet: (SetLog, Float, Int) -> Unit,
     onToggleSet: (SetLog) -> Unit,
     onDeleteSet: (SetLog) -> Unit,
+    onTogglePr: (SetLog) -> Unit,
 ) {
     var weight by remember(set.id) { mutableStateOf(set.weightKg) }
     var reps by remember(set.id) { mutableStateOf(set.reps) }
@@ -486,20 +490,21 @@ private fun SetRow(
     }
 
     val completed = set.completed
+    val prGold = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
     val background by androidx.compose.animation.animateColorAsState(
-        targetValue = if (completed) {
-            MiuixTheme.colorScheme.primaryContainer
-        } else {
-            MiuixTheme.colorScheme.surfaceContainer
+        targetValue = when {
+            set.isPr -> prGold.copy(alpha = 0.18f)
+            completed -> MiuixTheme.colorScheme.primaryContainer
+            else -> MiuixTheme.colorScheme.surfaceContainer
         },
         animationSpec = androidx.compose.animation.core.tween(220),
         label = "setRowBackground",
     )
     val badgeColor by androidx.compose.animation.animateColorAsState(
-        targetValue = if (completed) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            MiuixTheme.colorScheme.surface
+        targetValue = when {
+            set.isPr -> prGold
+            completed -> MiuixTheme.colorScheme.primary
+            else -> MiuixTheme.colorScheme.surface
         },
         animationSpec = androidx.compose.animation.core.tween(220),
         label = "setBadge",
@@ -507,7 +512,7 @@ private fun SetRow(
 
     // 左滑露出删除
     val density = LocalDensity.current
-    val maxSwipe = with(density) { 84.dp.toPx() }
+    val maxSwipe = with(density) { 112.dp.toPx() }
     val haptics = LocalHapticFeedback.current
     var rawOffset by remember { mutableStateOf(0f) }
     val animatedOffset by androidx.compose.animation.core.animateFloatAsState(
@@ -523,28 +528,54 @@ private fun SetRow(
             .clip(RoundedCornerShape(16.dp))
             .background(MiuixTheme.colorScheme.surface),
     ) {
-        // 底层：右侧删除按钮（被上层组行完全遮住，滑开才露出）
-        Box(
+        // 底层：PR + 删除（被上层组行完全遮住，滑开才露出）
+        Row(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 6.dp)
-                .width(76.dp)
-                .height(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MiuixTheme.colorScheme.error)
-                .clickable {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    rawOffset = 0f
-                    onDeleteSet(set)
-                },
-            contentAlignment = Alignment.Center,
+                .padding(end = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "删除",
-                fontSize = 13.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = MiuixTheme.colorScheme.onError,
-            )
+            Box(
+                modifier = Modifier
+                    .width(50.dp)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(prGold)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        rawOffset = 0f
+                        onTogglePr(set)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = if (set.isPr) "取消PR" else "PR",
+                    fontSize = 11.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = androidx.compose.ui.graphics.Color.White,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .width(52.dp)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MiuixTheme.colorScheme.error)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        rawOffset = 0f
+                        onDeleteSet(set)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "删除",
+                    fontSize = 12.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onError,
+                )
+            }
         }
 
         // 上层：组行内容
@@ -586,10 +617,10 @@ private fun SetRow(
                     text = set.setNumber.toString(),
                     fontSize = 12.sp,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = if (completed) {
-                        MiuixTheme.colorScheme.onPrimary
-                    } else {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    color = when {
+                        set.isPr -> androidx.compose.ui.graphics.Color.White
+                        completed -> MiuixTheme.colorScheme.onPrimary
+                        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
                     },
                 )
             }

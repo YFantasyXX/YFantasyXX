@@ -193,6 +193,8 @@ data class SetLog(
     val rpe: Float? = null,
     /** 热身组 */
     val isWarmup: Boolean = false,
+    /** 冲 PR 的极限组：计入 PR 榜，但不作为下次训练的参考重量 */
+    val isPr: Boolean = false,
     /** 是否已完成 */
     val completed: Boolean = false,
     val loggedAt: Long = System.currentTimeMillis(),
