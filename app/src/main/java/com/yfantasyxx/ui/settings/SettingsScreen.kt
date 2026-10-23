@@ -53,12 +53,17 @@ import java.util.Date
 import java.util.Locale
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.SegmentedSelector
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
+import android.os.Build
 
 @Composable
 fun SettingsScreen(onOpenTemplates: () -> Unit) {
     val container = rememberAppContainer()
     val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(container))
     val settings by vm.settings.collectAsState()
+    val refreshRate = rememberDisplayRefreshRate()
+    val refreshRateLabel = if (refreshRate > 0f) "${refreshRate.toInt()} Hz" else "读取中…"
     val backupState by vm.backupState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -268,6 +273,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                     InfoRow("应用", "YFantasyXX")
                     InfoRow("版本", "1.0.0")
                     InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
+                    InfoRow("屏幕刷新率", refreshRateLabel)
                     InfoRow("数据存储", "本地 Room + WebDAV 备份")
                     InfoRow("开源地址", "github.com/YFantasyXX/YFantasyXX")
                 }
@@ -352,4 +358,27 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
             }
         }
     }
+}
+
+/** 实时读取屏幕当前刷新率（滚动/静止时可能不同） */
+@Composable
+private fun rememberDisplayRefreshRate(): Float {
+    val context = LocalContext.current
+    var rate by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            runCatching {
+                val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    context.display
+                } else {
+                    @Suppress("DEPRECATION")
+                    (context.getSystemService(android.content.Context.WINDOW_SERVICE)
+                        as android.view.WindowManager).defaultDisplay
+                }
+                rate = display?.refreshRate ?: 0f
+            }
+            kotlinx.coroutines.delay(800)
+        }
+    }
+    return rate
 }

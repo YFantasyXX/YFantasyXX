@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestHighestRefreshRate()
         requestNotificationPermissionIfNeeded()
 
         val app = application as YFantasyXXApplication
@@ -31,6 +32,28 @@ class MainActivity : ComponentActivity() {
                 .collectAsState(initial = AppSettings())
             YFantasyXXTheme(themeMode = settings.themeMode) {
                 YFantasyXXApp()
+            }
+        }
+    }
+
+    /**
+     * 请求使用屏幕支持的最高刷新率。
+     * 不请求的话系统通常只分配 60Hz / 120Hz，即使屏幕是 144Hz 或 185Hz。
+     * 注意：厂商 ROM 可能仍把超高刷限制在游戏或白名单场景。
+     */
+    private fun requestHighestRefreshRate() {
+        runCatching {
+            val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+            val modes = currentDisplay.supportedModes
+            val maxMode = modes.maxByOrNull { it.refreshRate } ?: return
+            window.attributes = window.attributes.apply {
+                preferredDisplayModeId = maxMode.modeId
+                preferredRefreshRate = maxMode.refreshRate
             }
         }
     }
