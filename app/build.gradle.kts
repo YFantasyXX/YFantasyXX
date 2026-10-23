@@ -5,6 +5,9 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+
 android {
     namespace = "com.yfantasyxx"
     compileSdk = 37
@@ -13,8 +16,9 @@ android {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 52
-        versionName = "1.0.51"
+        versionCode = 53
+        // 测试版本用日期命名，每次构建自动取当天日期；versionCode 手动 +1 保证可覆盖安装
+        versionName = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy.MM.dd"))
         resourceConfigurations += listOf("zh", "en")
     }
 
