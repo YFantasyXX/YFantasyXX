@@ -16,7 +16,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yfantasyxx.data.db.ExerciseCategory
-import com.yfantasyxx.data.db.Equipment
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -32,7 +31,7 @@ fun AddExerciseDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(ExerciseCategory.all.first()) }
-    var equipment by remember { mutableStateOf(Equipment.all.first()) }
+    var equipment by remember { mutableStateOf("") }
     var muscle by remember { mutableStateOf("") }
 
     AppDialog(
@@ -63,21 +62,13 @@ fun AddExerciseDialog(
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "器械",
-                style = MiuixTheme.textStyles.footnote1,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            Spacer(Modifier.height(10.dp))
+            TextField(
+                value = equipment,
+                onValueChange = { equipment = it },
+                label = "器械（自己填，如：杠铃 / 哑铃 / 龙门架）",
+                singleLine = true,
             )
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(Equipment.all) { item ->
-                    FilterChip(
-                        label = item,
-                        selected = equipment == item,
-                        onClick = { equipment = item },
-                    )
-                }
-            }
 
             Spacer(Modifier.height(10.dp))
             TextField(
@@ -96,7 +87,14 @@ fun AddExerciseDialog(
                 Spacer(Modifier.height(0.dp))
                 ActionText(
                     text = "添加",
-                    onClick = { onConfirm(name.trim(), category, equipment, muscle.trim()) },
+                    onClick = {
+                        onConfirm(
+                            name.trim(),
+                            category,
+                            equipment.trim().ifBlank { "其他" },
+                            muscle.trim(),
+                        )
+                    },
                     enabled = name.isNotBlank(),
                 )
             }
