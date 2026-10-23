@@ -33,7 +33,7 @@ class YFantasyXXApplication : Application() {
  * 手动依赖容器（不引 Hilt，保持轻量）
  */
 class AppContainer(context: Context) {
-    private val appContext = context.applicationContext
+    val appContext: Context = context.applicationContext
 
     @Volatile
     private var database: AppDatabase? = null

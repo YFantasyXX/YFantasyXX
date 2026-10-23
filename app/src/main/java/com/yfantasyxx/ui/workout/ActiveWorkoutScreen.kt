@@ -63,7 +63,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { vm.ensureSession() }
+    LaunchedEffect(Unit) {
+        vm.ensureSession()
+        // 退出过 App 的话，恢复仍在跑的休息倒计时
+        vm.restoreRestTimer()
+    }
 
     Scaffold(
         topBar = {
@@ -136,6 +140,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                     text = "${restTimer.remainingSeconds}s",
                                     style = MiuixTheme.textStyles.headline1,
                                     color = MiuixTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    text = "已同步到通知栏，退出 App 也会继续计时",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )
                                 Spacer(Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

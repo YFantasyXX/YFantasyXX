@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import com.yfantasyxx.service.RestTimerService
+import com.yfantasyxx.util.RestTimerStore
 
 data class RestTimerState(
     val running: Boolean = false,
@@ -28,6 +30,7 @@ data class RestTimerState(
 class WorkoutViewModel(
     private val repo: WorkoutRepository,
     private val settingsRepo: SettingsRepository,
+    private val context: android.content.Context,
 ) : ViewModel() {
 
     private val _sessionId = MutableStateFlow<Long?>(null)
@@ -59,7 +62,7 @@ class WorkoutViewModel(
     val elapsedSeconds: StateFlow<Int> = _elapsedSeconds.asStateFlow()
 
     private var tickerJob: Job? = null
-    private var timerJob: Job? = null
+    private var restTickerJob: Job? = null
     private var observeJob: Job? = null
 
     /** 确保有一个进行中的训练（没有就创建）。空草稿（无动作）也必须能正常进入。 */
@@ -167,48 +170,59 @@ class WorkoutViewModel(
         viewModelScope.launch { repo.deleteSet(set.id) }
     }
 
-    /** 开始/重置休息计时 */
+    /**
+     * 开始休息计时：交给前台服务在通知栏倒计时，退出 App 也不会重置。
+     */
     fun startRestTimer() {
         viewModelScope.launch {
             val seconds = settingsRepo.settings.first().restSeconds
-            startRestTimerWith(seconds)
+            RestTimerService.start(context, seconds)
+            _restTimer.value = RestTimerState(
+                running = true,
+                remainingSeconds = seconds,
+                totalSeconds = seconds,
+            )
+            startRestTicker()
         }
     }
 
-    private fun startRestTimerWith(seconds: Int) {
-        timerJob?.cancel()
-        _restTimer.value = RestTimerState(running = true, remainingSeconds = seconds, totalSeconds = seconds)
-        timerJob = viewModelScope.launch {
-            var left = seconds
-            while (left > 0) {
-                delay(1000)
-                left--
-                _restTimer.value = _restTimer.value.copy(remainingSeconds = left)
+    /** 重新进入训练页时，恢复仍在运行的休息计时 */
+    fun restoreRestTimer() {
+        val snapshot = RestTimerStore.snapshot(context)
+        if (snapshot.running) {
+            _restTimer.value = RestTimerState(
+                running = true,
+                remainingSeconds = snapshot.remainingSeconds,
+                totalSeconds = snapshot.totalSeconds,
+            )
+            startRestTicker()
+        }
+    }
+
+    private fun startRestTicker() {
+        restTickerJob?.cancel()
+        restTickerJob = viewModelScope.launch {
+            while (true) {
+                val snapshot = RestTimerStore.snapshot(context)
+                _restTimer.value = RestTimerState(
+                    running = snapshot.running,
+                    remainingSeconds = snapshot.remainingSeconds,
+                    totalSeconds = snapshot.totalSeconds,
+                )
+                if (!snapshot.running) break
+                delay(400)
             }
-            _restTimer.value = _restTimer.value.copy(running = false)
         }
     }
 
     fun skipRestTimer() {
-        timerJob?.cancel()
-        _restTimer.value = _restTimer.value.copy(running = false)
+        RestTimerService.skip(context)
+        restTickerJob?.cancel()
+        _restTimer.value = RestTimerState()
     }
 
     fun extendRestTimer(extraSeconds: Int) {
-        val state = _restTimer.value
-        if (!state.running) return
-        val left = state.remainingSeconds + extraSeconds
-        _restTimer.value = state.copy(remainingSeconds = left)
-        timerJob?.cancel()
-        timerJob = viewModelScope.launch {
-            var l = left
-            while (l > 0) {
-                delay(1000)
-                l--
-                _restTimer.value = _restTimer.value.copy(remainingSeconds = l)
-            }
-            _restTimer.value = _restTimer.value.copy(running = false)
-        }
+        RestTimerService.extend(context, extraSeconds)
     }
 
     /** 完成训练 */
@@ -217,7 +231,9 @@ class WorkoutViewModel(
         viewModelScope.launch {
             repo.finishSession(id, name, note)
             tickerJob?.cancel()
-            timerJob?.cancel()
+            restTickerJob?.cancel()
+            RestTimerService.skip(context)
+            tickerJob?.cancel()
             onDone()
         }
     }
@@ -228,7 +244,8 @@ class WorkoutViewModel(
         viewModelScope.launch {
             repo.discardSession(id)
             tickerJob?.cancel()
-            timerJob?.cancel()
+            restTickerJob?.cancel()
+            RestTimerService.skip(context)
             _sessionId.value = null
             onDone()
         }
@@ -244,7 +261,13 @@ class WorkoutViewModel(
 
     companion object {
         fun factory(container: AppContainer) = viewModelFactory {
-            initializer { WorkoutViewModel(container.workoutRepository, container.settingsRepository) }
+            initializer {
+                WorkoutViewModel(
+                    container.workoutRepository,
+                    container.settingsRepository,
+                    container.appContext,
+                )
+            }
         }
     }
 }
