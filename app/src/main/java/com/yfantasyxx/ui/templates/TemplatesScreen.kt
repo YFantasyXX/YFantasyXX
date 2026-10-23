@@ -212,7 +212,8 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
             SectionHeader("动作安排（${state.items.size}）")
             // 拖动排序状态
             val density = LocalDensity.current
-            val rowHeightPx = with(density) { 158.dp.toPx() }
+            // 卡片 158dp + 上下各 4dp 间距
+            val rowHeightPx = with(density) { 166.dp.toPx() }
             val haptics = LocalHapticFeedback.current
             var draggingKey by remember { mutableStateOf<Long?>(null) }
             var dragOffsetY by remember { mutableStateOf(0f) }
@@ -224,7 +225,7 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .height(150.dp)
+                            .height(158.dp)
                             .zIndex(if (isDragging) 1f else 0f)
                             .graphicsLayer {
                                 translationY = if (isDragging) dragOffsetY else 0f
@@ -249,13 +250,21 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                                             onDrag = { change, amount ->
                                                 change.consume()
                                                 dragOffsetY += amount.y
-                                                val shift = (dragOffsetY / rowHeightPx).roundToInt()
-                                                if (shift != 0) {
-                                                    val target = (index + shift)
-                                                        .coerceIn(0, state.items.lastIndex)
-                                                    if (target != index) {
-                                                        vm.moveItem(index, target)
-                                                        dragOffsetY -= (target - index) * rowHeightPx
+                                                // 用 VM 里的最新列表定位，避免闭包中的 index 过期导致乱跳
+                                                val items = vm.state.value.items
+                                                val currentIndex =
+                                                    items.indexOfFirst { it.key == item.key }
+                                                if (currentIndex >= 0) {
+                                                    val shift =
+                                                        (dragOffsetY / rowHeightPx).roundToInt()
+                                                    if (shift != 0) {
+                                                        val target = (currentIndex + shift)
+                                                            .coerceIn(0, items.lastIndex)
+                                                        if (target != currentIndex) {
+                                                            vm.moveItem(currentIndex, target)
+                                                            dragOffsetY -=
+                                                                (target - currentIndex) * rowHeightPx
+                                                        }
                                                     }
                                                 }
                                             },
@@ -365,14 +374,41 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                                     }
                                 }
 
-                                // 目标次数
-                                top.yukonga.miuix.kmp.basic.TextField(
-                                    value = item.targetReps,
-                                    onValueChange = { vm.updateItem(item.key, reps = it) },
-                                    label = "目标次数（如 8-12）",
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                                // 目标次数（紧凑输入框，避免浮动标签撑高卡片）
+                                Spacer(Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "目标次数",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(34.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                            .padding(horizontal = 10.dp),
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        androidx.compose.foundation.text.BasicTextField(
+                                            value = item.targetReps,
+                                            onValueChange = {
+                                                vm.updateItem(item.key, reps = it)
+                                            },
+                                            singleLine = true,
+                                            textStyle = androidx.compose.ui.text.TextStyle(
+                                                fontSize = 14.sp,
+                                                color = MiuixTheme.colorScheme.onSurface,
+                                            ),
+                                            cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                                                MiuixTheme.colorScheme.primary
+                                            ),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

@@ -135,6 +135,18 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         _state.value = _state.value.copy(items = items)
     }
 
+    /** 拖动排序：按 key 定位，避免闭包里的 index 过期 */
+    fun moveItemByKey(key: Long, offset: Int) {
+        val items = _state.value.items.toMutableList()
+        val from = items.indexOfFirst { it.key == key }
+        if (from < 0) return
+        val to = (from + offset).coerceIn(0, items.lastIndex)
+        if (to == from) return
+        val moved = items.removeAt(from)
+        items.add(to, moved)
+        _state.value = _state.value.copy(items = items)
+    }
+
     /** 拖动排序 */
     fun moveItem(from: Int, to: Int) {
         val items = _state.value.items.toMutableList()
