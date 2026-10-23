@@ -154,6 +154,21 @@ class WorkoutViewModel(
         }
     }
 
+    /** 训练内拖动动作排序（本地即时生效，再落库） */
+    fun moveExercise(from: Int, to: Int) {
+        val items = _exercises.value.toMutableList()
+        if (from !in items.indices || to !in items.indices || from == to) return
+        val moved = items.removeAt(from)
+        items.add(to, moved)
+        _exercises.value = items
+        val sessionId = _sessionId.value ?: return
+        viewModelScope.launch {
+            runCatching {
+                repo.reorderSessionExercises(sessionId, items.map { it.sessionExercise.id })
+            }.onFailure { e -> _error.value = "调整顺序失败：${e.message.orEmpty()}" }
+        }
+    }
+
     /** 新建自定义动作，保存到动作库并直接加入当前训练 */
     fun addCustomExerciseToSession(
         name: String,

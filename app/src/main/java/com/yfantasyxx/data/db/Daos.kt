@@ -376,6 +376,9 @@ interface SessionExerciseDao {
     @Query("SELECT restSeconds FROM session_exercises WHERE id = :id")
     suspend fun restSecondsOf(id: Long): Int?
 
+    @Query("UPDATE session_exercises SET sortOrder = :order WHERE id = :id")
+    suspend fun updateSortOrder(id: Long, order: Int)
+
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM session_exercises WHERE sessionId = :sessionId")
     suspend fun nextSortOrder(sessionId: Long): Int
 }

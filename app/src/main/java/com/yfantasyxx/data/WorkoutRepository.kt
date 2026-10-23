@@ -351,6 +351,13 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     // ---------- 身体数据 ----------
 
+    /** 训练内拖动排序：按给定顺序重写 sortOrder */
+    suspend fun reorderSessionExercises(sessionId: Long, orderedIds: List<Long>) {
+        orderedIds.forEachIndexed { index, id ->
+            sessionExerciseDao.updateSortOrder(id, index)
+        }
+    }
+
     /** 该动作历史最佳一组（用于动作库 PR 展示） */
     suspend fun bestSetFor(exerciseId: Long): SetLog? = sessionDao.bestSetFor(exerciseId)
 

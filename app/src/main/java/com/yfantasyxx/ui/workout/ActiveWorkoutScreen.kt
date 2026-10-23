@@ -67,6 +67,13 @@ import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.zIndex
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.material.icons.filled.Menu
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -79,6 +86,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val error by vm.error.collectAsState()
     val currentExerciseId by vm.currentExerciseId.collectAsState()
     val restFinished by vm.restFinished.collectAsState()
+
+    // 训练内动作拖动排序
+    val haptics = LocalHapticFeedback.current
+    var draggingId by remember { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    val itemBounds = remember { mutableStateMapOf<Long, Pair<Float, Float>>() }
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -256,18 +269,104 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 }
 
-                items(exercises, key = { it.sessionExercise.id }) { item ->
-                    ExerciseBlock(
-                        item = item,
-                        lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
-                        unitLabel = WeightUnit.KG.label,
-                        onUpdateSet = { set, weight, reps -> vm.updateSet(set, weight, reps) },
-                        onToggleSet = vm::toggleSetComplete,
-                        onAddSet = { vm.addSet(item.sessionExercise.id) },
-                        onRemoveExercise = { vm.removeExercise(item.sessionExercise.id) },
-                        onDeleteSet = vm::deleteSet,
-                        onTogglePr = vm::toggleSetPr,
-                    )
+                itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { _, item ->
+                    val isDragging = draggingId == item.sessionExercise.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = if (isDragging) dragOffsetY else 0f
+                                shadowElevation = if (isDragging) 12f else 0f
+                            }
+                            .onGloballyPositioned { coords ->
+                                itemBounds[item.sessionExercise.id] =
+                                    coords.positionInParent().y to coords.size.height.toFloat()
+                            },
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        // 拖动把手：长按上下拖动，拖动时该动作的组数收纳
+                        Box(
+                            modifier = Modifier
+                                .width(26.dp)
+                                .padding(top = 20.dp)
+                                .pointerInput(item.sessionExercise.id) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = {
+                                            draggingId = item.sessionExercise.id
+                                            dragOffsetY = 0f
+                                            haptics.performHapticFeedback(
+                                                HapticFeedbackType.LongPress
+                                            )
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            dragOffsetY += amount.y
+                                        },
+                                        onDragEnd = {
+                                            val id = draggingId
+                                            if (id != null) {
+                                                val bounds = itemBounds[id]
+                                                if (bounds != null) {
+                                                    // 被拖项中心落在谁身上，就换到谁的位置
+                                                    val center = bounds.first + dragOffsetY +
+                                                        bounds.second / 2
+                                                    val targetId = itemBounds.entries
+                                                        .firstOrNull { (tid, b) ->
+                                                            tid != id &&
+                                                                center >= b.first &&
+                                                                center < b.first + b.second
+                                                        }
+                                                        ?.key
+                                                    if (targetId != null) {
+                                                        val from = exercises.indexOfFirst {
+                                                            it.sessionExercise.id == id
+                                                        }
+                                                        val to = exercises.indexOfFirst {
+                                                            it.sessionExercise.id == targetId
+                                                        }
+                                                        if (from >= 0 && to >= 0) {
+                                                            vm.moveExercise(from, to)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            draggingId = null
+                                            dragOffsetY = 0f
+                                        },
+                                        onDragCancel = {
+                                            draggingId = null
+                                            dragOffsetY = 0f
+                                        },
+                                    )
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = "长按拖动排序",
+                                modifier = Modifier.size(16.dp),
+                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                    .copy(alpha = 0.6f),
+                            )
+                        }
+
+                        ExerciseBlock(
+                            item = item,
+                            lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
+                            unitLabel = WeightUnit.KG.label,
+                            collapsed = isDragging,
+                            modifier = Modifier.weight(1f),
+                            onUpdateSet = { set, weight, reps ->
+                                vm.updateSet(set, weight, reps)
+                            },
+                            onToggleSet = vm::toggleSetComplete,
+                            onAddSet = { vm.addSet(item.sessionExercise.id) },
+                            onRemoveExercise = { vm.removeExercise(item.sessionExercise.id) },
+                            onDeleteSet = vm::deleteSet,
+                            onTogglePr = vm::toggleSetPr,
+                        )
+                    }
                 }
 
                 item {
@@ -368,6 +467,8 @@ private fun ExerciseBlock(
     item: SessionExerciseWithSets,
     lastSets: List<SetLog>,
     unitLabel: String,
+    collapsed: Boolean = false,
+    modifier: Modifier = Modifier,
     onUpdateSet: (SetLog, Float, Int) -> Unit,
     onToggleSet: (SetLog) -> Unit,
     onAddSet: () -> Unit,
@@ -381,9 +482,9 @@ private fun ExerciseBlock(
     } else ""
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             // ---- 动作标题行 ----
@@ -418,7 +519,9 @@ private fun ExerciseBlock(
                     }
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        text = buildString {
+                        text = if (collapsed) {
+                            "拖动中 · ${item.sets.size} 组（已完成 $completed 组）"
+                        } else buildString {
                             append(item.exercise.category)
                             if (item.exercise.equipment.isNotEmpty()) {
                                 append(" · ")
@@ -465,6 +568,7 @@ private fun ExerciseBlock(
                     )
                 }
             }
+            if (collapsed) return@Column
             Spacer(Modifier.height(10.dp))
             top.yukonga.miuix.kmp.basic.HorizontalDivider(
                 color = MiuixTheme.colorScheme.dividerLine.copy(alpha = 0.6f),
