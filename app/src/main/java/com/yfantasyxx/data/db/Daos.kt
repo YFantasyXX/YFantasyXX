@@ -141,7 +141,15 @@ interface SessionDao {
                (SELECT COUNT(*) FROM set_logs sl2
                     INNER JOIN session_exercises se3 ON sl2.sessionExerciseId = se3.id
                     WHERE se3.sessionId = s.id) AS plannedSetCount
-        FROM sessions s WHERE s.endTime IS NULL ORDER BY s.startTime DESC LIMIT 1
+        FROM sessions s
+        WHERE s.endTime IS NULL
+          -- 必须至少完成过一组才算「训练进行中」，只打开没练不显示
+          AND EXISTS (
+              SELECT 1 FROM set_logs slx
+              INNER JOIN session_exercises sex ON slx.sessionExerciseId = sex.id
+              WHERE sex.sessionId = s.id AND slx.completed = 1
+          )
+        ORDER BY s.startTime DESC LIMIT 1
         """
     )
     fun observeActiveSummary(): Flow<ActiveSessionSummary?>
@@ -195,6 +203,9 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET endTime = :endTime, name = :name, note = :note WHERE id = :id")
     suspend fun finish(id: Long, endTime: Long, name: String, note: String)
+
+    @Query("UPDATE sessions SET templateId = :templateId WHERE id = :id")
+    suspend fun setTemplateId(id: Long, templateId: Long?)
 
     @Query("UPDATE sessions SET activeStartedAt = :time WHERE id = :id AND activeStartedAt IS NULL")
     suspend fun markStarted(id: Long, time: Long)

@@ -189,10 +189,19 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun startSession(templateId: Long? = null, name: String = ""): Long {
         val existing = sessionDao.getActiveDraft()
         if (existing != null) {
-            // 复用草稿；若是空草稿且指定了模板，则把模板动作补进去
-            if (templateId != null && existing.exercises.isEmpty()) {
-                applyTemplate(existing.session.id, templateId)
+            val hasCompleted = existing.exercises.any { item -> item.sets.any { it.completed } }
+            val sameTemplate = existing.session.templateId == templateId
+            if (hasCompleted || sameTemplate || templateId == null) {
+                // 继续上次未完成的训练
+                if (templateId != null && existing.exercises.isEmpty()) {
+                    applyTemplate(existing.session.id, templateId)
+                }
+                return existing.session.id
             }
+            // 上次只是打开没练，且这次换了个模板：清空旧内容按新模板重建
+            existing.exercises.forEach { removeSessionExercise(it.sessionExercise.id) }
+            sessionDao.setTemplateId(existing.session.id, templateId)
+            applyTemplate(existing.session.id, templateId)
             return existing.session.id
         }
         val sessionId = sessionDao.insert(
