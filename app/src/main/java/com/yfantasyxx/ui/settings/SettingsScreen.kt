@@ -340,7 +340,12 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
             Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     InfoRow("应用", "YFantasyXX")
-                    InfoRow("版本", "1.0.0")
+                    InfoRow(
+                        "版本",
+                        "${com.yfantasyxx.BuildConfig.VERSION_NAME} " +
+                            "(${com.yfantasyxx.BuildConfig.VERSION_CODE}) · " +
+                            com.yfantasyxx.BuildConfig.BUILD_TYPE
+                    )
                     InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
                     InfoRow("屏幕刷新率", refreshRateLabel)
                     InfoRow("数据存储", "本地 Room + WebDAV 备份")
