@@ -140,6 +140,11 @@ object RestNotifier {
         runCatching { manager(context)?.cancel(NOTIF_COUNTDOWN) }
     }
 
+    /** 取消「休息结束」通知，保证同一时刻只有一条休息相关通知 */
+    fun cancelDone(context: Context) {
+        runCatching { manager(context)?.cancel(NOTIF_DONE) }
+    }
+
     /** 四段强震动，确保能感知 */
     fun vibrate(context: Context) {
         runCatching {

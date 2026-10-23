@@ -60,6 +60,8 @@ class RestTimerService : Service() {
                 endTime = System.currentTimeMillis() + totalSeconds * 1000L
                 RestTimerStore.save(this, endTime, totalSeconds, label)
                 RestNotifier.ensureChannels(this)
+                // 清掉上一条「休息结束」通知：同一时刻只保留一条
+                RestNotifier.cancelDone(this)
                 startForeground(
                     RestNotifier.NOTIF_COUNTDOWN,
                     RestNotifier.buildCountdown(
@@ -84,6 +86,7 @@ class RestTimerService : Service() {
                     totalSeconds += extra
                     RestTimerStore.save(this, endTime, totalSeconds, label)
                     RestNotifier.ensureChannels(this)
+                    RestNotifier.cancelDone(this)
                     val remaining = ((endTime - System.currentTimeMillis()) / 1000).toInt()
                     runCatching {
                         notificationManager()?.notify(
@@ -128,6 +131,7 @@ class RestTimerService : Service() {
         RestAlarmScheduler.cancel(this)
         RestTimerStore.clear(this)
         RestNotifier.cancelCountdown(this)
+        RestNotifier.cancelDone(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
