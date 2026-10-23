@@ -19,6 +19,9 @@ class RestAlarmReceiver : BroadcastReceiver() {
         val snapshot = RestTimerStore.snapshot(context)
         // 还在计时中说明是提前唤醒，忽略
         if (snapshot.running) return
+        // 没有计时记录 / 已经过去太久，说明是残留闹钟，忽略
+        if (snapshot.endTime == 0L) return
+        if (System.currentTimeMillis() - snapshot.endTime > 120_000L) return
 
         RestNotifier.notifyRestFinished(context, snapshot.label)
         RestTimerStore.clear(context)

@@ -333,22 +333,40 @@ class WorkoutViewModel(
     private fun startRestTicker() {
         restTickerJob?.cancel()
         restTickerJob = viewModelScope.launch {
-            var wasRunning = true
+            // 服务是异步启动的，先等它把结束时间写进 Store，
+            // 否则会读到上一次（或空）的状态，误判成「休息已结束」
+            delay(200)
+            var sawRunning = false
+            var waitTries = 0
             while (true) {
                 val snapshot = RestTimerStore.snapshot(context)
-                _restTimer.value = RestTimerState(
-                    running = snapshot.running,
-                    remainingSeconds = snapshot.remainingSeconds,
-                    totalSeconds = snapshot.totalSeconds,
-                    label = snapshot.label,
-                )
-                if (wasRunning && !snapshot.running) {
-                    // 计时归零：App 在前台时也给出明显提醒
+                if (snapshot.running) {
+                    sawRunning = true
+                    waitTries = 0
+                    _restTimer.value = RestTimerState(
+                        running = true,
+                        remainingSeconds = snapshot.remainingSeconds,
+                        totalSeconds = snapshot.totalSeconds,
+                        label = snapshot.label,
+                    )
+                } else if (sawRunning) {
+                    // 真正跑过再归零，才算休息结束
+                    _restTimer.value = RestTimerState(
+                        running = false,
+                        remainingSeconds = 0,
+                        totalSeconds = snapshot.totalSeconds,
+                        label = snapshot.label,
+                    )
                     _restFinished.value = true
                     com.yfantasyxx.service.RestNotifier.vibrate(context)
+                    break
+                } else {
+                    // 服务还没写好状态，短暂等待；超时则放弃（避免死循环）
+                    waitTries++
+                    if (waitTries > 15) break
+                    delay(200)
+                    continue
                 }
-                wasRunning = snapshot.running
-                if (!snapshot.running) break
                 delay(400)
             }
         }
