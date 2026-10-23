@@ -54,6 +54,14 @@ class WorkoutViewModel(
     /** 当前休息对应的「动作 · 第 N 组」，用于通知与界面展示 */
     private var restLabel: String? = null
 
+    /** 休息刚结束时置 true，界面显示提示；用户点掉后置回 false */
+    private val _restFinished = MutableStateFlow(false)
+    val restFinished: StateFlow<Boolean> = _restFinished
+
+    fun dismissRestFinished() {
+        _restFinished.value = false
+    }
+
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
     val lastPerformance: StateFlow<Map<Long, List<SetLog>>> = _lastPerformance.asStateFlow()
@@ -265,6 +273,7 @@ class WorkoutViewModel(
             val seconds = resolveRestSeconds(exerciseId, sessionExerciseId)
             _currentExerciseId.value = exerciseId
             restLabel = label
+            _restFinished.value = false
             RestTimerService.start(context, seconds, label)
             _restTimer.value = RestTimerState(
                 running = true,
@@ -283,6 +292,7 @@ class WorkoutViewModel(
     /** 用波轮选的时长重设本次休息（不影响动作默认值） */
     fun restartRestTimer(seconds: Int) {
         viewModelScope.launch {
+            _restFinished.value = false
             RestTimerService.start(context, seconds, restLabel)
             _restTimer.value = RestTimerState(
                 running = true,
@@ -323,6 +333,7 @@ class WorkoutViewModel(
     private fun startRestTicker() {
         restTickerJob?.cancel()
         restTickerJob = viewModelScope.launch {
+            var wasRunning = true
             while (true) {
                 val snapshot = RestTimerStore.snapshot(context)
                 _restTimer.value = RestTimerState(
@@ -331,6 +342,12 @@ class WorkoutViewModel(
                     totalSeconds = snapshot.totalSeconds,
                     label = snapshot.label,
                 )
+                if (wasRunning && !snapshot.running) {
+                    // 计时归零：App 在前台时也给出明显提醒
+                    _restFinished.value = true
+                    com.yfantasyxx.service.RestNotifier.vibrate(context)
+                }
+                wasRunning = snapshot.running
                 if (!snapshot.running) break
                 delay(400)
             }

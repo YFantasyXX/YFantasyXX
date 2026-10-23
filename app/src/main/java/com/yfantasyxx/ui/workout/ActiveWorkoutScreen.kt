@@ -66,6 +66,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.zIndex
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -77,6 +78,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val lastPerformance by vm.lastPerformance.collectAsState()
     val error by vm.error.collectAsState()
     val currentExerciseId by vm.currentExerciseId.collectAsState()
+    val restFinished by vm.restFinished.collectAsState()
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -122,6 +124,37 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 .padding(padding)
                 .imePadding()
         ) {
+            if (restFinished) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .zIndex(2f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MiuixTheme.colorScheme.primary)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "休息结束，可以开始下一组",
+                            style = MiuixTheme.textStyles.main,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        ActionText(
+                            text = "知道了",
+                            onClick = { vm.dismissRestFinished() },
+                            color = MiuixTheme.colorScheme.onPrimary,
+                        )
+                    }
+                }
+            }
+
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),

@@ -23,7 +23,7 @@ import com.yfantasyxx.R
 object RestNotifier {
 
     const val CHANNEL_COUNTDOWN = "rest_countdown"
-    const val CHANNEL_DONE = "rest_done"
+    const val CHANNEL_DONE = "rest_done_v2"
     const val NOTIF_COUNTDOWN = 1001
     const val NOTIF_DONE = 1002
 
@@ -45,6 +45,8 @@ object RestNotifier {
                 }
             )
         }
+        // 旧渠道可能被降级为静音，删掉换成新渠道
+        runCatching { nm.deleteNotificationChannel("rest_done") }
         if (nm.getNotificationChannel(CHANNEL_DONE) == null) {
             val sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             nm.createNotificationChannel(
@@ -138,18 +140,20 @@ object RestNotifier {
         runCatching { manager(context).cancel(NOTIF_COUNTDOWN) }
     }
 
-    /** 三段渐强震动 */
+    /** 四段强震动，确保能感知 */
     fun vibrate(context: Context) {
         runCatching {
-            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ContextCompat.getSystemService(context, VibratorManager::class.java)?.defaultVibrator
+            val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val manager = ContextCompat.getSystemService(context, VibratorManager::class.java)
+                manager?.defaultVibrator
+                    ?: ContextCompat.getSystemService(context, Vibrator::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 ContextCompat.getSystemService(context, Vibrator::class.java)
-            } ?: return
-            if (!vibrator.hasVibrator()) return
-            val timings = longArrayOf(0, 320, 180, 320, 180, 520)
-            val amplitudes = intArrayOf(0, 255, 0, 200, 0, 255)
+            }
+            if (vibrator == null || !vibrator.hasVibrator()) return
+            val timings = longArrayOf(0, 400, 150, 400, 150, 400, 150, 600)
+            val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255, 0, 255)
             vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
         }
     }
