@@ -33,6 +33,8 @@ import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.textureBlurEffect
 import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 
 /** 悬浮底栏的 tab 定义 */
 data class FloatingTab(
@@ -61,13 +63,21 @@ fun FloatingBottomBar(
     val surface = MiuixTheme.colorScheme.surface
     val isDark = MiuixTheme.colorScheme.onSurface.luminance() > 0.5f
 
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            // 吃掉落在底栏区域（含四周空隙）的点击，避免穿透到下层的列表项
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { })
+            },
+    ) {
     Surface(
         shape = shape,
         color = if (glass) Color.Transparent else surface,
         shadowElevation = 12.dp,
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 14.dp)
             .height(64.dp),
     ) {
@@ -164,5 +174,6 @@ fun FloatingBottomBar(
                 }
             }
         }
+    }
     }
 }

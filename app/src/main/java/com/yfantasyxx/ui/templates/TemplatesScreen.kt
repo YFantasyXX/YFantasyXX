@@ -172,6 +172,11 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
     val vm: TemplateEditViewModel = viewModel(factory = TemplateEditViewModel.factory(container))
     val state by vm.state.collectAsState()
     var showPicker by remember { mutableStateOf(false) }
+    var showAddExercise by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var newCategory by remember { mutableStateOf("") }
+    var newEquipment by remember { mutableStateOf("") }
+    var newMuscle by remember { mutableStateOf("") }
     var loaded by remember(templateId) { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(templateId) {
@@ -442,8 +447,18 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                     label = "搜索动作",
                     singleLine = true,
                 )
-                Spacer(Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.height(360.dp)) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    ActionText(
+                        text = "+ 新建自定义动作",
+                        onClick = { showAddExercise = true },
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                LazyColumn(modifier = Modifier.height(320.dp)) {
                     items(list, key = { it.id }) { exercise ->
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
@@ -468,6 +483,73 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 新建自定义动作
+    if (showAddExercise) {
+        AppDialog(
+            title = "新建自定义动作",
+            onDismissRequest = { showAddExercise = false },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = "动作名称",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = newCategory,
+                    onValueChange = { newCategory = it },
+                    label = "分类（如 胸 / 背 / 腿）",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = newEquipment,
+                    onValueChange = { newEquipment = it },
+                    label = "器械（如 杠铃 / 哑铃）",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = newMuscle,
+                    onValueChange = { newMuscle = it },
+                    label = "主要部位（可选）",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionText(text = "取消", onClick = { showAddExercise = false })
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            vm.addCustomExercise(
+                                name = newName,
+                                category = newCategory.ifBlank { "其他" },
+                                equipment = newEquipment.ifBlank { "其他" },
+                                muscle = newMuscle,
+                            )
+                            newName = ""
+                            newCategory = ""
+                            newEquipment = ""
+                            newMuscle = ""
+                            showAddExercise = false
+                            // 直接回到模板编辑，新建的动作已加入
+                            showPicker = false
+                        },
+                        enabled = newName.isNotBlank(),
+                    ) {
+                        Text("添加", style = MiuixTheme.textStyles.button)
                     }
                 }
             }

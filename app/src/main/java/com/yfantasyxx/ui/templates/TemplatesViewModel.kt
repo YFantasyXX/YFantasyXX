@@ -127,6 +127,16 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         _state.value = _state.value.copy(items = items)
     }
 
+    /** 新建自定义动作并直接加入模板 */
+    fun addCustomExercise(name: String, category: String, equipment: String, muscle: String) {
+        viewModelScope.launch {
+            runCatching {
+                val id = repo.addCustomExercise(name, category, equipment, muscle)
+                repo.getExercise(id)
+            }.getOrNull()?.let { addExercise(it) }
+        }
+    }
+
     /** 切换热身标记 */
     fun toggleWarmup(key: Long) {
         val items = _state.value.items.map {
