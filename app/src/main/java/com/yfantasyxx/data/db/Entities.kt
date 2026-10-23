@@ -96,6 +96,10 @@ data class TemplateExercise(
     val sortOrder: Int = 0,
     val targetSets: Int = 3,
     val targetReps: String = "8-12",
+    /** 目标重量（kg）；null 表示不指定，训练时用上次重量或手动填 */
+    val targetWeightKg: Float? = null,
+    /** 该动作是否作为热身动作 */
+    val isWarmup: Boolean = false,
 )
 
 /**

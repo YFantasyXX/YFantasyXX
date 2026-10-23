@@ -318,7 +318,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -331,6 +331,16 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v2 -> v3：模板动作支持目标重量与热身标记 */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetWeightKg REAL")
+                db.execSQL(
+                    "ALTER TABLE template_exercises ADD COLUMN isWarmup INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
 
         /** v1 -> v2：动作支持自定义休息时长 */
         val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {

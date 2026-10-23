@@ -326,14 +326,30 @@ private fun ExerciseBlock(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.exercise.name,
-                        fontSize = 17.sp,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.exercise.name,
+                            fontSize = 17.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (item.sets.isNotEmpty() && item.sets.all { it.isWarmup }) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "热身",
+                                fontSize = 10.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                color = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(androidx.compose.ui.graphics.Color(0xFFFF9F0A))
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(3.dp))
                     Text(
                         text = buildString {

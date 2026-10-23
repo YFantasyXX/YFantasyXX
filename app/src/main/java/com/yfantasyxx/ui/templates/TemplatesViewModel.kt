@@ -29,6 +29,8 @@ data class EditableTemplateItem(
     val exerciseName: String,
     val targetSets: Int,
     val targetReps: String,
+    val targetWeightKg: Float,
+    val isWarmup: Boolean,
 )
 
 class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
@@ -78,6 +80,8 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         exerciseName = exercise.name,
         targetSets = templateExercise.targetSets,
         targetReps = templateExercise.targetReps,
+        targetWeightKg = templateExercise.targetWeightKg ?: 0f,
+        isWarmup = templateExercise.isWarmup,
     )
 
     fun setName(value: String) {
@@ -88,29 +92,55 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         _state.value = _state.value.copy(note = value)
     }
 
+    /** 添加动作：若该动作练过，自动带入上次的重量 */
     fun addExercise(exercise: Exercise) {
-        val items = _state.value.items.toMutableList()
-        items.add(
-            EditableTemplateItem(
-                key = nextKey--,
-                exerciseId = exercise.id,
-                exerciseName = exercise.name,
-                targetSets = 3,
-                targetReps = "8-12",
+        viewModelScope.launch {
+            val lastWeight = runCatching {
+                repo.lastPerformance(exercise.id).firstOrNull()?.weightKg
+            }.getOrNull() ?: 0f
+            val items = _state.value.items.toMutableList()
+            items.add(
+                EditableTemplateItem(
+                    key = nextKey--,
+                    exerciseId = exercise.id,
+                    exerciseName = exercise.name,
+                    targetSets = 3,
+                    targetReps = "8-12",
+                    targetWeightKg = lastWeight,
+                    isWarmup = false,
+                )
             )
-        )
-        _state.value = _state.value.copy(items = items)
+            _state.value = _state.value.copy(items = items)
+        }
     }
 
-    fun updateItem(key: Long, sets: Int? = null, reps: String? = null) {
+    fun updateItem(key: Long, sets: Int? = null, reps: String? = null, weight: Float? = null) {
         val items = _state.value.items.map {
             if (it.key == key) {
                 it.copy(
                     targetSets = sets ?: it.targetSets,
                     targetReps = reps ?: it.targetReps,
+                    targetWeightKg = weight ?: it.targetWeightKg,
                 )
             } else it
         }
+        _state.value = _state.value.copy(items = items)
+    }
+
+    /** 切换热身标记 */
+    fun toggleWarmup(key: Long) {
+        val items = _state.value.items.map {
+            if (it.key == key) it.copy(isWarmup = !it.isWarmup) else it
+        }
+        _state.value = _state.value.copy(items = items)
+    }
+
+    /** 拖动排序 */
+    fun moveItem(from: Int, to: Int) {
+        val items = _state.value.items.toMutableList()
+        if (from !in items.indices || to !in items.indices || from == to) return
+        val moved = items.removeAt(from)
+        items.add(to, moved)
         _state.value = _state.value.copy(items = items)
     }
 
@@ -131,6 +161,8 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                         exerciseId = it.exerciseId,
                         targetSets = it.targetSets,
                         targetReps = it.targetReps,
+                        targetWeightKg = it.targetWeightKg.takeIf { w -> w > 0f },
+                        isWarmup = it.isWarmup,
                     )
                 },
             )

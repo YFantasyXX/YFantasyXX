@@ -41,6 +41,28 @@ import java.util.Date
 import java.util.Locale
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.clickable
+
+private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
 @Composable
 fun TemplatesScreen(
@@ -188,39 +210,170 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
             SectionHeader("动作安排（${state.items.size}）")
+            // 拖动排序状态
+            val density = LocalDensity.current
+            val rowHeightPx = with(density) { 158.dp.toPx() }
+            val haptics = LocalHapticFeedback.current
+            var draggingKey by remember { mutableStateOf<Long?>(null) }
+            var dragOffsetY by remember { mutableStateOf(0f) }
+
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(state.items, key = { it.key }) { item ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = item.exerciseName,
-                                    style = MiuixTheme.textStyles.main,
-                                    modifier = Modifier.weight(1f),
+                itemsIndexed(state.items, key = { _, item -> item.key }) { index, item ->
+                    val isDragging = draggingKey == item.key
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .height(150.dp)
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = if (isDragging) dragOffsetY else 0f
+                                shadowElevation = if (isDragging) 12f else 0f
+                            },
+                    ) {
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            // 拖动把手（长按上下拖）
+                            Box(
+                                modifier = Modifier
+                                    .width(34.dp)
+                                    .fillMaxHeight()
+                                    .pointerInput(state.items.size) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                draggingKey = item.key
+                                                dragOffsetY = 0f
+                                                haptics.performHapticFeedback(
+                                                    HapticFeedbackType.LongPress
+                                                )
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                dragOffsetY += amount.y
+                                                val shift = (dragOffsetY / rowHeightPx).roundToInt()
+                                                if (shift != 0) {
+                                                    val target = (index + shift)
+                                                        .coerceIn(0, state.items.lastIndex)
+                                                    if (target != index) {
+                                                        vm.moveItem(index, target)
+                                                        dragOffsetY -= (target - index) * rowHeightPx
+                                                    }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                draggingKey = null
+                                                dragOffsetY = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggingKey = null
+                                                dragOffsetY = 0f
+                                            },
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Menu,
+                                    contentDescription = "长按拖动排序",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(
+                                        alpha = 0.7f
+                                    ),
                                 )
-                                IconButton(onClick = { vm.removeItem(item.key) }) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Delete,
-                                        contentDescription = "移除",
-                                        tint = MiuixTheme.colorScheme.error,
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .padding(end = 12.dp, top = 10.dp, bottom = 10.dp),
+                            ) {
+                                // 标题 + 热身 + 删除
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = item.exerciseName,
+                                        style = MiuixTheme.textStyles.main,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
                                     )
+                                    // 热身开关
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                if (item.isWarmup) WarmupOrange
+                                                else MiuixTheme.colorScheme.surfaceContainer
+                                            )
+                                            .clickable { vm.toggleWarmup(item.key) }
+                                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                                    ) {
+                                        Text(
+                                            text = if (item.isWarmup) "热身" else "设为热身",
+                                            fontSize = 11.sp,
+                                            fontWeight = if (item.isWarmup) {
+                                                androidx.compose.ui.text.font.FontWeight.SemiBold
+                                            } else {
+                                                androidx.compose.ui.text.font.FontWeight.Normal
+                                            },
+                                            color = if (item.isWarmup) {
+                                                androidx.compose.ui.graphics.Color.White
+                                            } else {
+                                                MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                            },
+                                        )
+                                    }
+                                    IconButton(onClick = { vm.removeItem(item.key) }) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Delete,
+                                            contentDescription = "移除",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MiuixTheme.colorScheme.error,
+                                        )
+                                    }
                                 }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("组数", style = MiuixTheme.textStyles.paragraph)
-                                Spacer(Modifier.height(0.dp))
-                                NumberStepper(
-                                    value = item.targetSets.toFloat(),
-                                    onValueChange = { vm.updateItem(item.key, sets = it.toInt()) },
-                                    step = 1f,
+
+                                // 组数 + 重量
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "组数",
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                        NumberStepper(
+                                            value = item.targetSets.toFloat(),
+                                            onValueChange = {
+                                                vm.updateItem(item.key, sets = it.toInt())
+                                            },
+                                            step = 1f,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "重量(kg)",
+                                            fontSize = 11.sp,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                        NumberStepper(
+                                            value = item.targetWeightKg,
+                                            onValueChange = {
+                                                vm.updateItem(item.key, weight = it)
+                                            },
+                                            step = 2.5f,
+                                        )
+                                    }
+                                }
+
+                                // 目标次数
+                                top.yukonga.miuix.kmp.basic.TextField(
+                                    value = item.targetReps,
+                                    onValueChange = { vm.updateItem(item.key, reps = it) },
+                                    label = "目标次数（如 8-12）",
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
-                            top.yukonga.miuix.kmp.basic.TextField(
-                                value = item.targetReps,
-                                onValueChange = { vm.updateItem(item.key, reps = it) },
-                                label = "目标次数（如 8-12）",
-                                singleLine = true,
-                            )
                         }
                     }
                 }

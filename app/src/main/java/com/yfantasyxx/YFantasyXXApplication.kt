@@ -41,7 +41,7 @@ class AppContainer(context: Context) {
     fun db(): AppDatabase = database ?: synchronized(this) {
         database ?: androidx.room.Room
             .databaseBuilder(appContext, AppDatabase::class.java, AppDatabase.NAME)
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .fallbackToDestructiveMigration()
             .build()
             .also { database = it }
@@ -52,7 +52,7 @@ class AppContainer(context: Context) {
         database?.close()
         database = androidx.room.Room
             .databaseBuilder(appContext, AppDatabase::class.java, AppDatabase.NAME)
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
             .fallbackToDestructiveMigration()
             .build()
         database!!

@@ -101,6 +101,8 @@ class WorkoutRepository(private val db: AppDatabase) {
                     sortOrder = index,
                     targetSets = draft.targetSets,
                     targetReps = draft.targetReps,
+                    targetWeightKg = draft.targetWeightKg,
+                    isWarmup = draft.isWarmup,
                 )
             )
         }
@@ -113,6 +115,8 @@ class WorkoutRepository(private val db: AppDatabase) {
         val exerciseId: Long,
         val targetSets: Int,
         val targetReps: String,
+        val targetWeightKg: Float? = null,
+        val isWarmup: Boolean = false,
     )
 
     // ---------- 训练进行 ----------
@@ -159,12 +163,18 @@ class WorkoutRepository(private val db: AppDatabase) {
                     sortOrder = item.templateExercise.sortOrder,
                 )
             )
+            // 重量优先用模板设定，其次沿用该动作上次的表现
+            val weight = item.templateExercise.targetWeightKg
+                ?: lastPerformance(item.exercise.id).firstOrNull()?.weightKg
+                ?: 0f
             setLogDao.insertAll(
                 (1..item.templateExercise.targetSets).map { n ->
                     SetLog(
                         sessionExerciseId = seId,
                         setNumber = n,
                         completed = false,
+                        weightKg = weight,
+                        isWarmup = item.templateExercise.isWarmup,
                     )
                 }
             )
@@ -176,9 +186,16 @@ class WorkoutRepository(private val db: AppDatabase) {
         val seId = sessionExerciseDao.insert(
             SessionExercise(sessionId = sessionId, exerciseId = exerciseId, sortOrder = order)
         )
+        // 沿用该动作上次的重量，省得每次从 0 开始调
+        val lastWeight = lastPerformance(exerciseId).firstOrNull()?.weightKg ?: 0f
         setLogDao.insertAll(
             (1..targetSets).map { n ->
-                SetLog(sessionExerciseId = seId, setNumber = n, completed = false)
+                SetLog(
+                    sessionExerciseId = seId,
+                    setNumber = n,
+                    completed = false,
+                    weightKg = lastWeight,
+                )
             }
         )
         return seId
