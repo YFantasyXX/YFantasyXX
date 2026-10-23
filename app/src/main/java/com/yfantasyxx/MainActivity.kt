@@ -4,15 +4,21 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.ui.YFantasyXXApp
 import com.yfantasyxx.ui.theme.YFantasyXXTheme
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
 
@@ -21,12 +27,26 @@ class MainActivity : ComponentActivity() {
             // 拒绝也不影响训练记录，只是看不到通知栏倒计时
         }
 
+    /** 点击震动开关（由设置驱动，触摸回调里高频读取，用 @Volatile 缓存） */
+    @Volatile
+    private var tapHapticsEnabled = true
+
+    private var downX = 0f
+    private var downY = 0f
+    private var downTime = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestHighestRefreshRate()
         requestNotificationPermissionIfNeeded()
 
         val app = application as YFantasyXXApplication
+        lifecycleScope.launch {
+            app.container.settingsRepository.settings.collect {
+                tapHapticsEnabled = it.tapHaptics
+            }
+        }
+
         setContent {
             val settings by app.container.settingsRepository.settings
                 .collectAsState(initial = AppSettings())
@@ -34,6 +54,35 @@ class MainActivity : ComponentActivity() {
                 YFantasyXXApp()
             }
         }
+    }
+
+    /**
+     * 全局点击触觉反馈：在事件分发阶段识别「轻点」（位移小、时间短），
+     * 这样按钮、卡片、列表项等所有可点区域都有震动，滑动/长按不触发。
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (tapHapticsEnabled) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    downTime = SystemClock.uptimeMillis()
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    val moved = abs(ev.rawX - downX) > 24f || abs(ev.rawY - downY) > 24f
+                    val elapsed = SystemClock.uptimeMillis() - downTime
+                    if (!moved && elapsed < 400) {
+                        runCatching {
+                            window.decorView.performHapticFeedback(
+                                HapticFeedbackConstants.VIRTUAL_KEY
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     /**

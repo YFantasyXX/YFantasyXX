@@ -130,9 +130,11 @@ class RestTimerService : Service() {
                 @Suppress("DEPRECATION")
                 getSystemService(Vibrator::class.java)
             }
-            vibrator?.vibrate(
-                VibrationEffect.createWaveform(longArrayOf(0, 200, 120, 200), -1)
-            )
+            if (vibrator == null || !vibrator.hasVibrator()) return
+            // 三段渐强震动，确保"休息结束"能被感知
+            val timings = longArrayOf(0, 320, 180, 320, 180, 520)
+            val amplitudes = intArrayOf(0, 255, 0, 200, 0, 255)
+            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
         }
     }
 

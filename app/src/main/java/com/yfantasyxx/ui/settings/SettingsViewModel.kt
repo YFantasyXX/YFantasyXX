@@ -42,6 +42,10 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepo.setRestSeconds(seconds) }
     }
 
+    fun setTapHaptics(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setTapHaptics(enabled) }
+    }
+
     fun setBlurBottomBar(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.setBlurBottomBar(enabled) }
     }

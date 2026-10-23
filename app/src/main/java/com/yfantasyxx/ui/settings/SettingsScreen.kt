@@ -142,6 +142,22 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
+                            Text("点击震动", style = MiuixTheme.textStyles.main)
+                            Text(
+                                text = "点击按钮、卡片时的触觉反馈",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = settings.tapHaptics,
+                            onCheckedChange = { vm.setTapHaptics(it) },
+                        )
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("底栏毛玻璃", style = MiuixTheme.textStyles.main)
                             Text(
                                 text = "模糊底栏下方内容，会增加 GPU 开销",

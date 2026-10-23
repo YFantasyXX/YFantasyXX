@@ -57,6 +57,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Close
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -410,7 +418,6 @@ private fun ExerciseBlock(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(24.dp))
                 Spacer(Modifier.width(44.dp))
             }
             item.sets.sortedBy { it.setNumber }.forEach { set ->
@@ -436,7 +443,6 @@ private fun SetRow(
 ) {
     var weight by remember(set.id) { mutableStateOf(set.weightKg) }
     var reps by remember(set.id) { mutableStateOf(set.reps) }
-    // 本地编辑同步到 DB
     LaunchedEffect(weight, reps) {
         if (weight != set.weightKg || reps != set.reps) {
             onUpdateSet(set, weight, reps)
@@ -462,71 +468,112 @@ private fun SetRow(
         animationSpec = androidx.compose.animation.core.tween(220),
         label = "setBadge",
     )
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(background)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 组号圆形徽章
+
+    // 左滑露出删除
+    val density = LocalDensity.current
+    val maxSwipe = with(density) { 84.dp.toPx() }
+    val haptics = LocalHapticFeedback.current
+    var rawOffset by remember { mutableStateOf(0f) }
+    val animatedOffset by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = rawOffset,
+        animationSpec = androidx.compose.animation.core.tween(180),
+        label = "setSwipeOffset",
+    )
+
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        // 底层：右侧删除按钮
         Box(
             modifier = Modifier
-                .size(26.dp)
-                .clip(CircleShape)
-                .background(badgeColor),
+                .align(Alignment.CenterEnd)
+                .padding(end = 6.dp)
+                .width(72.dp)
+                .height(34.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MiuixTheme.colorScheme.error)
+                .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    rawOffset = 0f
+                    onDeleteSet(set)
+                },
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = set.setNumber.toString(),
-                fontSize = 12.sp,
+                text = "删除",
+                fontSize = 13.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                color = if (completed) {
-                    MiuixTheme.colorScheme.onPrimary
-                } else {
-                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                },
+                color = MiuixTheme.colorScheme.onError,
             )
         }
-        Spacer(Modifier.width(8.dp))
-        NumberStepper(
-            value = weight,
-            onValueChange = { weight = it },
-            step = 2.5f,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(6.dp))
-        NumberStepper(
-            value = reps.toFloat(),
-            onValueChange = { reps = it.toInt() },
-            step = 1f,
-            modifier = Modifier.weight(1f),
-        )
-        // 删除该组
-        Box(
+
+        // 上层：组行内容
+        Row(
             modifier = Modifier
-                .size(24.dp)
-                .clip(CircleShape)
-                .clickable { onDeleteSet(set) },
-            contentAlignment = Alignment.Center,
+                .fillMaxWidth()
+                .offset { IntOffset(animatedOffset.roundToInt(), 0) }
+                .clip(RoundedCornerShape(16.dp))
+                .background(background)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            val next = rawOffset + dragAmount
+                            val old = rawOffset
+                            rawOffset = next.coerceIn(-maxSwipe, 0f)
+                            // 刚滑过阈值时给一次轻震
+                            if (old > -maxSwipe / 3f && rawOffset <= -maxSwipe / 3f) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                        },
+                        onDragEnd = {
+                            rawOffset = if (rawOffset < -maxSwipe / 3f) -maxSwipe else 0f
+                        },
+                        onDragCancel = { rawOffset = 0f },
+                    )
+                }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = "删除第 ${set.setNumber} 组",
-                modifier = Modifier.size(14.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(badgeColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = set.setNumber.toString(),
+                    fontSize = 12.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = if (completed) {
+                        MiuixTheme.colorScheme.onPrimary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    },
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            NumberStepper(
+                value = weight,
+                onValueChange = { weight = it },
+                step = 2.5f,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
+            NumberStepper(
+                value = reps.toFloat(),
+                onValueChange = { reps = it.toInt() },
+                step = 1f,
+                modifier = Modifier.weight(1f),
+            )
+            Checkbox(
+                state = if (completed) {
+                    androidx.compose.ui.state.ToggleableState.On
+                } else {
+                    androidx.compose.ui.state.ToggleableState.Off
+                },
+                onClick = { onToggleSet(set) },
             )
         }
-        Checkbox(
-            state = if (completed) {
-                androidx.compose.ui.state.ToggleableState.On
-            } else {
-                androidx.compose.ui.state.ToggleableState.Off
-            },
-            onClick = { onToggleSet(set) },
-        )
     }
 }
 

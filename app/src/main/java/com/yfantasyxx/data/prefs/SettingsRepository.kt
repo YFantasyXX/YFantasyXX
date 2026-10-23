@@ -43,6 +43,8 @@ data class AppSettings(
     val lastBackupTime: Long? = null,
     /** 悬浮底栏毛玻璃效果（默认关闭，开启会增加 GPU 开销） */
     val blurBottomBar: Boolean = false,
+    /** 点击时的触觉反馈 */
+    val tapHaptics: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -58,6 +60,7 @@ class SettingsRepository(private val context: Context) {
         val WEBDAV_PASS_ENC = stringPreferencesKey("webdav_pass_enc")
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
         val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
+        val TAP_HAPTICS = booleanPreferencesKey("tap_haptics")
         val LAST_BACKUP = longPreferencesKey("last_backup")
     }
 
@@ -72,6 +75,7 @@ class SettingsRepository(private val context: Context) {
             autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
             lastBackupTime = prefs[Keys.LAST_BACKUP],
             blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
+            tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
         )
     }
 
@@ -97,6 +101,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAutoBackup(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTO_BACKUP] = enabled }
+    }
+
+    suspend fun setTapHaptics(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAP_HAPTICS] = enabled }
     }
 
     suspend fun setBlurBottomBar(enabled: Boolean) {
