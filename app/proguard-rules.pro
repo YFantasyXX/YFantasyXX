@@ -9,3 +9,15 @@
 
 # Keep Room entities (used with KSP)
 -keep class com.yfantasyxx.data.db.** { *; }
+
+# 保留 Room 生成的实现
+-keep class * extends androidx.room.RoomDatabase { *; }
+-keep @androidx.room.Entity class * { *; }
+
+# DataStore
+-keep class androidx.datastore.** { *; }
+-dontwarn androidx.datastore.**
+
+# 保留崩溃日志里的堆栈行号
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

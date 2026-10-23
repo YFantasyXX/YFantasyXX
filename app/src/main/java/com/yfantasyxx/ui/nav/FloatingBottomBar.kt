@@ -21,14 +21,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.blur.Backdrop
-import top.yukonga.miuix.kmp.blur.blur
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.highlight.Highlight
+import top.yukonga.miuix.kmp.blur.textureBlurEffect
 import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -57,7 +59,7 @@ fun FloatingBottomBar(
 ) {
     val shape = RoundedCornerShape(28.dp)
     val surface = MiuixTheme.colorScheme.surface
-    val blurRadiusPx = with(LocalDensity.current) { 16.dp.toPx() }
+    val isDark = MiuixTheme.colorScheme.onSurface.luminance() > 0.5f
 
     Surface(
         shape = shape,
@@ -78,10 +80,29 @@ fun FloatingBottomBar(
                             backdrop = backdrop,
                             shape = { shape },
                             effects = {
-                                blur(blurRadiusPx)
+                                // 轻微模糊 + 噪点抖动 + 提一点饱和度，液态玻璃的“通透感”
+                                textureBlurEffect(
+                                    blurRadiusX = 12f,
+                                    blurRadiusY = 12f,
+                                    noiseCoefficient = 0.012f,
+                                    colors = BlurColors(
+                                        brightness = 0.03f,
+                                        contrast = 1.02f,
+                                        saturation = 1.45f,
+                                    ),
+                                )
+                            },
+                            // 玻璃边缘的高光描边（iOS 液态玻璃的关键特征）
+                            highlight = {
+                                val base = if (isDark) {
+                                    Highlight.GlassStrokeMiddleDark
+                                } else {
+                                    Highlight.GlassStrokeMiddleLight
+                                }
+                                base.copy(width = 1.dp, alpha = 0.9f)
                             },
                             onDrawSurface = {
-                                drawRect(color = surface.copy(alpha = 0.42f))
+                                drawRect(color = surface.copy(alpha = 0.12f))
                             },
                         )
                     } else {

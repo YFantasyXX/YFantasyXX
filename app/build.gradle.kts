@@ -13,14 +13,17 @@ android {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.0.10"
+        versionCode = 12
+        versionName = "1.0.11"
         resourceConfigurations += listOf("zh", "en")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            // 用 debug 签名，方便直接安装测试；正式发布请替换为自己的 keystore
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -28,6 +31,18 @@ android {
         }
         debug {
             applicationIdSuffix = ".debug"
+        }
+
+        /**
+         * 测试用优化包：release 的优化（R8 + dex 合并）但保留 .debug 包名，
+         * 可直接覆盖已安装的 debug 版本，数据不丢，体积也接近正式版。
+         */
+        create("lite") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".debug"
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -72,7 +87,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
-    debugImplementation(libs.androidx.ui.tooling)
+    // 未使用 @Preview，不引入 ui-tooling（可显著减小 debug 包体积）
 
     // MIUIX - HyperOS style Compose UI library
     implementation(libs.miuix.ui)
