@@ -57,6 +57,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import android.os.Build
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 
 @Composable
 fun SettingsScreen(onOpenTemplates: () -> Unit) {
@@ -68,6 +71,17 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
     val backupState by vm.backupState.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var exactAlarmAllowed by remember { androidx.compose.runtime.mutableStateOf(true) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        exactAlarmAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                context.getSystemService(android.app.AlarmManager::class.java)
+                    ?.canScheduleExactAlarms() ?: true
+            }.getOrDefault(true)
+        } else {
+            true
+        }
+    }
 
     var url by remember(settings.webdavUrl) { mutableStateOf(settings.webdavUrl) }
     var user by remember(settings.webdavUsername) { mutableStateOf(settings.webdavUsername) }
@@ -186,6 +200,39 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         step = 15f,
                         unit = "s",
                     )
+                    if (!exactAlarmAllowed) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                                .background(MiuixTheme.colorScheme.primaryContainer)
+                                .clickable {
+                                    runCatching {
+                                        context.startActivity(
+                                            android.content.Intent(
+                                                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                                android.net.Uri.parse("package:${'$'}{context.packageName}")
+                                            )
+                                        )
+                                    }
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "允许「闹钟和提醒」以保证后台准时提醒你",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "去开启 ›",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
