@@ -166,6 +166,8 @@ data class SessionExercise(
     val sortOrder: Int = 0,
     /** 本次训练该动作的休息秒数（来自模板设定）；null 表示沿用动作/全局 */
     val restSeconds: Int? = null,
+    /** 模板计划的组数（快照，模板后续修改不影响历史记录）；null 表示手动添加 */
+    val plannedSets: Int? = null,
 )
 
 /**
