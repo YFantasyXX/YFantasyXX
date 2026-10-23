@@ -38,6 +38,10 @@ import com.yfantasyxx.ui.rememberAppContainer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import com.yfantasyxx.ui.components.RestSecondsPickerDialog
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 
 @Composable
 fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
@@ -45,6 +49,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     val vm: ExercisesViewModel = viewModel(factory = ExercisesViewModel.factory(container))
     var exercise by remember { mutableStateOf<Exercise?>(null) }
     var lastSets by remember { mutableStateOf<List<SetLog>>(emptyList()) }
+    var showRestPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(exerciseId) {
         exercise = vm.getExercise(exerciseId)
@@ -93,6 +98,33 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                             InfoRow("器械", ex.equipment)
                             InfoRow("主要部位", ex.primaryMuscle.ifEmpty { "--" })
                             InfoRow("来源", if (ex.isCustom) "自定义" else "内置")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showRestPicker = true }
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "默认休息时长",
+                                    style = MiuixTheme.textStyles.paragraph,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = ex.restSeconds?.let { "$it 秒" } ?: "跟随全局",
+                                        style = MiuixTheme.textStyles.paragraph,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                        contentDescription = null,
+                                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
                             if (ex.note.isNotEmpty()) InfoRow("备注", ex.note)
                         }
                     }
@@ -142,6 +174,22 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+
+    if (showRestPicker) {
+        exercise?.let { ex ->
+            RestSecondsPickerDialog(
+                initialSeconds = ex.restSeconds ?: 90,
+                showSaveAsDefault = false,
+                onDismiss = { showRestPicker = false },
+                onConfirm = { seconds, _ ->
+                    val updated = ex.copy(restSeconds = seconds)
+                    vm.updateExercise(updated)
+                    exercise = updated
+                    showRestPicker = false
+                },
+            )
         }
     }
 }

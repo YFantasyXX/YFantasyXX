@@ -47,6 +47,8 @@ data class Exercise(
     val equipment: String = Equipment.OTHER,
     val primaryMuscle: String = "",
     val note: String = "",
+    /** 该动作的默认组间休息秒数；null 表示使用全局默认 */
+    val restSeconds: Int? = null,
     /** 用户自定义动作 */
     val isCustom: Boolean = false,
     /** 归档（隐藏但保留历史关联） */

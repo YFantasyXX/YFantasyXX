@@ -318,7 +318,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -331,5 +331,12 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v1 -> v2：动作支持自定义休息时长 */
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN restSeconds INTEGER")
+            }
+        }
     }
 }

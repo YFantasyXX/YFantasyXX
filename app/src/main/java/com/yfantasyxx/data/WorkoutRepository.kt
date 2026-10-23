@@ -254,6 +254,9 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     // ---------- 身体数据 ----------
 
+    /** 动作自定义的休息时长（null 表示用全局默认） */
+    suspend fun restSecondsFor(exerciseId: Long): Int? = exerciseDao.getById(exerciseId)?.restSeconds
+
     fun observeBodyMetrics(): Flow<List<BodyMetric>> = bodyMetricDao.observeAll()
 
     fun observeLatestWeight(): Flow<Float?> =

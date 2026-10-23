@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Close
+import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -66,9 +67,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val restTimer by vm.restTimer.collectAsState()
     val lastPerformance by vm.lastPerformance.collectAsState()
     val error by vm.error.collectAsState()
+    val currentExerciseId by vm.currentExerciseId.collectAsState()
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
+    var showRestPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         vm.ensureSession()
@@ -143,11 +146,25 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Text("休息中", style = MiuixTheme.textStyles.subtitle)
-                                Text(
-                                    text = "${restTimer.remainingSeconds}s",
-                                    style = MiuixTheme.textStyles.headline1,
-                                    color = MiuixTheme.colorScheme.primary,
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { showRestPicker = true }
+                                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                                ) {
+                                    Text(
+                                        text = "${restTimer.remainingSeconds}s",
+                                        style = MiuixTheme.textStyles.headline1,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "调整",
+                                        style = MiuixTheme.textStyles.footnote1,
+                                        color = MiuixTheme.colorScheme.primary,
+                                    )
+                                }
                                 Text(
                                     text = "已同步到通知栏，退出 App 也会继续计时",
                                     style = MiuixTheme.textStyles.footnote1,
@@ -207,6 +224,25 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        }
+
+        if (showRestPicker) {
+            RestSecondsPickerDialog(
+                initialSeconds = if (restTimer.totalSeconds > 0) {
+                    restTimer.totalSeconds
+                } else {
+                    restTimer.remainingSeconds
+                },
+                showSaveAsDefault = currentExerciseId != null,
+                onDismiss = { showRestPicker = false },
+                onConfirm = { seconds, saveAsDefault ->
+                    vm.restartRestTimer(seconds)
+                    if (saveAsDefault) {
+                        currentExerciseId?.let { vm.saveExerciseRestSeconds(it, seconds) }
+                    }
+                    showRestPicker = false
+                },
+            )
         }
 
         if (showExercisePicker) {

@@ -45,6 +45,10 @@ class WorkoutViewModel(
     private val _restTimer = MutableStateFlow(RestTimerState())
     val restTimer: StateFlow<RestTimerState> = _restTimer.asStateFlow()
 
+    /** 当前这次休息对应的动作（用于"设为该动作默认"） */
+    private val _currentExerciseId = MutableStateFlow<Long?>(null)
+    val currentExerciseId: StateFlow<Long?> = _currentExerciseId.asStateFlow()
+
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
     val lastPerformance: StateFlow<Map<Long, List<SetLog>>> = _lastPerformance.asStateFlow()
@@ -162,7 +166,12 @@ class WorkoutViewModel(
         viewModelScope.launch {
             val willComplete = !set.completed
             repo.updateSet(set.copy(completed = willComplete))
-            if (willComplete) startRestTimer()
+            if (willComplete) {
+                val exerciseId = _exercises.value
+                    .firstOrNull { it.sessionExercise.id == set.sessionExerciseId }
+                    ?.sessionExercise?.exerciseId
+                startRestTimerFor(exerciseId)
+            }
         }
     }
 
@@ -173,12 +182,20 @@ class WorkoutViewModel(
         }
     }
 
+    /** 优先取动作自定义休息时长，否则用全局默认 */
+    private suspend fun resolveRestSeconds(exerciseId: Long?): Int {
+        val actionDefault = exerciseId?.let { repo.restSecondsFor(it) }
+        return actionDefault ?: settingsRepo.settings.first().restSeconds
+    }
+
     /**
      * 开始休息计时：交给前台服务在通知栏倒计时，退出 App 也不会重置。
+     * [exerciseId] 用于读取该动作自己的休息时长。
      */
-    fun startRestTimer() {
+    fun startRestTimerFor(exerciseId: Long?) {
         viewModelScope.launch {
-            val seconds = settingsRepo.settings.first().restSeconds
+            val seconds = resolveRestSeconds(exerciseId)
+            _currentExerciseId.value = exerciseId
             RestTimerService.start(context, seconds)
             _restTimer.value = RestTimerState(
                 running = true,
@@ -186,6 +203,34 @@ class WorkoutViewModel(
                 totalSeconds = seconds,
             )
             startRestTicker()
+        }
+    }
+
+    fun startRestTimer() {
+        startRestTimerFor(_currentExerciseId.value)
+    }
+
+    /** 用波轮选的时长重设本次休息（不影响动作默认值） */
+    fun restartRestTimer(seconds: Int) {
+        viewModelScope.launch {
+            RestTimerService.start(context, seconds)
+            _restTimer.value = RestTimerState(
+                running = true,
+                remainingSeconds = seconds,
+                totalSeconds = seconds,
+            )
+            startRestTicker()
+        }
+    }
+
+    /** 把某个时长保存为该动作的默认休息时长 */
+    fun saveExerciseRestSeconds(exerciseId: Long, seconds: Int) {
+        viewModelScope.launch {
+            runCatching {
+                repo.getExercise(exerciseId)?.let { exercise ->
+                    repo.updateExercise(exercise.copy(restSeconds = seconds))
+                }
+            }
         }
     }
 
