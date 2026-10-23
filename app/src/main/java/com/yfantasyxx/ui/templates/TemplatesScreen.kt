@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.CreateNewFolder
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
+import com.yfantasyxx.ui.components.AddExerciseDialog
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
@@ -834,70 +835,19 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
         }
     }
 
-    // 新建自定义动作
+    // 新建自定义动作（分类/器械用选择）
     if (showAddExercise) {
-        AppDialog(
-            title = "新建自定义动作",
-            onDismissRequest = { showAddExercise = false },
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = "动作名称",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newCategory,
-                    onValueChange = { newCategory = it },
-                    label = "分类（如 胸 / 背 / 腿）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newEquipment,
-                    onValueChange = { newEquipment = it },
-                    label = "器械（如 杠铃 / 哑铃）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newMuscle,
-                    onValueChange = { newMuscle = it },
-                    label = "主要部位（可选）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ActionText(text = "取消", onClick = { showAddExercise = false })
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            vm.addCustomExercise(
-                                name = newName,
-                                category = newCategory.ifBlank { "其他" },
-                                equipment = newEquipment.ifBlank { "其他" },
-                                muscle = newMuscle,
-                            )
-                            newName = ""
-                            newCategory = ""
-                            newEquipment = ""
-                            newMuscle = ""
-                            showAddExercise = false
-                            // 直接回到模板编辑，新建的动作已加入
-                            showPicker = false
-                        },
-                        enabled = newName.isNotBlank(),
-                    ) {
-                        Text("添加", style = MiuixTheme.textStyles.button)
-                    }
-                }
-            }
-        }
+        AddExerciseDialog(
+            onDismiss = { showAddExercise = false },
+            onConfirm = { name, category, equipment, muscle ->
+                vm.addCustomExercise(name, category, equipment, muscle)
+                newName = ""
+                newCategory = ""
+                newEquipment = ""
+                newMuscle = ""
+                showAddExercise = false
+                showPicker = false
+            },
+        )
     }
 }

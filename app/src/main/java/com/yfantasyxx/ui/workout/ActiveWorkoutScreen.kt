@@ -81,6 +81,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showRestPicker by remember { mutableStateOf(false) }
+    var showAddExercise by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         vm.ensureSession()
@@ -270,6 +271,16 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             )
         }
 
+        if (showAddExercise) {
+            com.yfantasyxx.ui.components.AddExerciseDialog(
+                onDismiss = { showAddExercise = false },
+                onConfirm = { name, category, equipment, muscle ->
+                    vm.addCustomExerciseToSession(name, category, equipment, muscle)
+                    showAddExercise = false
+                },
+            )
+        }
+
         if (showExercisePicker) {
             ExercisePickerDialog(
                 container = container,
@@ -278,9 +289,9 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     vm.addExercise(exerciseId)
                     showExercisePicker = false
                 },
-                onCreateCustom = { name, category, equipment, muscle ->
-                    vm.addCustomExerciseToSession(name, category, equipment, muscle)
+                onRequestCreate = {
                     showExercisePicker = false
+                    showAddExercise = true
                 },
             )
         }
@@ -696,15 +707,10 @@ private fun ExercisePickerDialog(
     container: com.yfantasyxx.AppContainer,
     onDismiss: () -> Unit,
     onPick: (Long) -> Unit,
-    onCreateCustom: (name: String, category: String, equipment: String, muscle: String) -> Unit,
+    onRequestCreate: () -> Unit,
 ) {
     var keyword by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
-    var showForm by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-    var newCategory by remember { mutableStateOf("") }
-    var newEquipment by remember { mutableStateOf("") }
-    var newMuscle by remember { mutableStateOf("") }
     val exercises = remember(keyword, category) {
         container.workoutRepository.observeExercises(keyword, category)
     }.collectAsState(initial = emptyList())
@@ -715,65 +721,6 @@ private fun ExercisePickerDialog(
         onDismissRequest = onDismiss,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            if (showForm) {
-                // ---- 新建自定义动作表单 ----
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = "动作名称",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newCategory,
-                    onValueChange = { newCategory = it },
-                    label = "分类（如 胸 / 背 / 腿）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newEquipment,
-                    onValueChange = { newEquipment = it },
-                    label = "器械（如 杠铃 / 哑铃）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                top.yukonga.miuix.kmp.basic.TextField(
-                    value = newMuscle,
-                    onValueChange = { newMuscle = it },
-                    label = "主要部位（可选）",
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ActionText(text = "返回列表", onClick = { showForm = false })
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            onCreateCustom(
-                                newName,
-                                newCategory.ifBlank { "其他" },
-                                newEquipment.ifBlank { "其他" },
-                                newMuscle,
-                            )
-                            newName = ""
-                            newCategory = ""
-                            newEquipment = ""
-                            newMuscle = ""
-                            showForm = false
-                        },
-                        enabled = newName.isNotBlank(),
-                    ) {
-                        Text("添加并加入训练", style = MiuixTheme.textStyles.button)
-                    }
-                }
-                return@Column
-            }
-
             top.yukonga.miuix.kmp.basic.TextField(
                 value = keyword,
                 onValueChange = { keyword = it },
@@ -785,7 +732,10 @@ private fun ExercisePickerDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
-                ActionText(text = "+ 新建自定义动作", onClick = { showForm = true })
+                ActionText(
+                    text = "+ 新建自定义动作",
+                    onClick = onRequestCreate,
+                )
             }
             Spacer(Modifier.height(2.dp))
             LazyColumn(modifier = Modifier.height(320.dp)) {

@@ -39,6 +39,8 @@ import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.rememberAppContainer
 import com.yfantasyxx.ui.components.ActionText
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.yfantasyxx.ui.components.FilterChip
+import com.yfantasyxx.ui.components.AddExerciseDialog
 
 @Composable
 fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
@@ -169,100 +171,4 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     }
 }
 
-@Composable
-private fun FilterChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        color = if (selected) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            MiuixTheme.colorScheme.surfaceContainer
-        },
-        modifier = Modifier.padding(vertical = 4.dp),
-    ) {
-        Text(
-            text = label,
-            style = MiuixTheme.textStyles.footnote1,
-            fontWeight = if (selected) {
-                androidx.compose.ui.text.font.FontWeight.SemiBold
-            } else {
-                androidx.compose.ui.text.font.FontWeight.Normal
-            },
-            color = if (selected) {
-                MiuixTheme.colorScheme.onPrimary
-            } else {
-                MiuixTheme.colorScheme.onSurfaceVariantSummary
-            },
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-        )
-    }
-}
 
-@Composable
-private fun AddExerciseDialog(
-    onDismiss: () -> Unit,
-    onConfirm: (String, String, String, String) -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf(ExercisesViewModel.categories.first()) }
-    var equipment by remember { mutableStateOf(ExercisesViewModel.equipments.first()) }
-    var muscle by remember { mutableStateOf("") }
-
-    AppDialog(
-        title = "添加自定义动作",
-        onDismissRequest = onDismiss,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            TextField(
-                value = name,
-                onValueChange = { name = it },
-                label = "动作名称",
-                singleLine = true,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text("分类", style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(ExercisesViewModel.categories) { cat ->
-                    FilterChip(
-                        label = cat,
-                        selected = category == cat,
-                        onClick = { category = cat },
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("器械", style = MiuixTheme.textStyles.footnote1, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(ExercisesViewModel.equipments) { eq ->
-                    FilterChip(
-                        label = eq,
-                        selected = equipment == eq,
-                        onClick = { equipment = eq },
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            TextField(
-                value = muscle,
-                onValueChange = { muscle = it },
-                label = "主要部位（可选）",
-                singleLine = true,
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                ActionText(text = "取消", onClick = onDismiss)
-                Spacer(Modifier.height(0.dp))
-                ActionText(text = "添加", onClick = { onConfirm(name, category, equipment, muscle) },
-                    enabled = name.isNotBlank(),)
-            }
-        }
-    }
-}

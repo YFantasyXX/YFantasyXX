@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.WindowInsets
+import top.yukonga.miuix.kmp.basic.Surface
 
 /** 页面分组标题 */
 @Composable
@@ -277,6 +278,43 @@ private fun StepButton(
             contentDescription = description,
             modifier = Modifier.size(15.dp),
             tint = MiuixTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/**
+ * 胶囊选择标签
+ */
+@Composable
+fun FilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = if (selected) {
+            MiuixTheme.colorScheme.primary
+        } else {
+            MiuixTheme.colorScheme.surfaceContainer
+        },
+        modifier = Modifier.padding(vertical = 4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.footnote1,
+            fontWeight = if (selected) {
+                androidx.compose.ui.text.font.FontWeight.SemiBold
+            } else {
+                androidx.compose.ui.text.font.FontWeight.Normal
+            },
+            color = if (selected) {
+                MiuixTheme.colorScheme.onPrimary
+            } else {
+                MiuixTheme.colorScheme.onSurfaceVariantSummary
+            },
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
 }
