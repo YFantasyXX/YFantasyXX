@@ -115,6 +115,8 @@ data class TemplateExercise(
     val targetWeightKg: Float? = null,
     /** 该动作是否作为热身动作 */
     val isWarmup: Boolean = false,
+    /** 模板内为该动作指定的休息秒数；null 表示沿用动作默认/全局 */
+    val restSeconds: Int? = null,
 )
 
 /**
@@ -160,6 +162,8 @@ data class SessionExercise(
     val sessionId: Long,
     val exerciseId: Long,
     val sortOrder: Int = 0,
+    /** 本次训练该动作的休息秒数（来自模板设定）；null 表示沿用动作/全局 */
+    val restSeconds: Int? = null,
 )
 
 /**

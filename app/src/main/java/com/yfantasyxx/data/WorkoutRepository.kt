@@ -121,6 +121,7 @@ class WorkoutRepository(private val db: AppDatabase) {
                     targetReps = draft.targetReps,
                     targetWeightKg = draft.targetWeightKg,
                     isWarmup = draft.isWarmup,
+                    restSeconds = draft.restSeconds,
                 )
             )
         }
@@ -161,6 +162,7 @@ class WorkoutRepository(private val db: AppDatabase) {
         val targetReps: String,
         val targetWeightKg: Float? = null,
         val isWarmup: Boolean = false,
+        val restSeconds: Int? = null,
     )
 
     // ---------- 训练进行 ----------
@@ -205,6 +207,7 @@ class WorkoutRepository(private val db: AppDatabase) {
                     sessionId = sessionId,
                     exerciseId = item.exercise.id,
                     sortOrder = item.templateExercise.sortOrder,
+                    restSeconds = item.templateExercise.restSeconds,
                 )
             )
             // 重量优先用模板设定，其次沿用该动作上次的表现
@@ -318,6 +321,10 @@ class WorkoutRepository(private val db: AppDatabase) {
         sessionDao.recentSetsForExercise(exerciseId, limit = 5)
 
     // ---------- 身体数据 ----------
+
+    /** 训练动作（可能来自模板）指定的休息时长 */
+    suspend fun sessionRestSeconds(sessionExerciseId: Long): Int? =
+        sessionExerciseDao.restSecondsOf(sessionExerciseId)
 
     /** 动作自定义的休息时长（null 表示用全局默认） */
     suspend fun restSecondsFor(exerciseId: Long): Int? = exerciseDao.getById(exerciseId)?.restSeconds

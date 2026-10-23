@@ -286,6 +286,9 @@ interface SessionExerciseDao {
     @Query("SELECT * FROM session_exercises WHERE sessionId = :sessionId ORDER BY sortOrder, id")
     suspend fun getForSession(sessionId: Long): List<SessionExercise>
 
+    @Query("SELECT restSeconds FROM session_exercises WHERE id = :id")
+    suspend fun restSecondsOf(id: Long): Int?
+
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM session_exercises WHERE sessionId = :sessionId")
     suspend fun nextSortOrder(sessionId: Long): Int
 }
@@ -343,7 +346,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -356,6 +359,14 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v5 -> v6：模板动作与训练动作支持独立休息时长 */
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN restSeconds INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN restSeconds INTEGER")
+            }
+        }
 
         /** v4 -> v5：模板支持文件夹分类与自定义排序 */
         val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {

@@ -217,19 +217,27 @@ class WorkoutViewModel(
         }
     }
 
-    /** 优先取动作自定义休息时长，否则用全局默认 */
-    private suspend fun resolveRestSeconds(exerciseId: Long?): Int {
+    /**
+     * 休息时长优先级：模板为该动作指定的 > 动作自身设定 > 全局默认
+     */
+    private suspend fun resolveRestSeconds(
+        exerciseId: Long?,
+        sessionExerciseId: Long? = null,
+    ): Int {
+        val fromTemplate = sessionExerciseId?.let { repo.sessionRestSeconds(it) }
         val actionDefault = exerciseId?.let { repo.restSecondsFor(it) }
-        return actionDefault ?: settingsRepo.settings.first().restSeconds
+        return fromTemplate
+            ?: actionDefault
+            ?: settingsRepo.settings.first().restSeconds
     }
 
     /**
      * 开始休息计时：交给前台服务在通知栏倒计时，退出 App 也不会重置。
      * [exerciseId] 用于读取该动作自己的休息时长。
      */
-    fun startRestTimerFor(exerciseId: Long?) {
+    fun startRestTimerFor(exerciseId: Long?, sessionExerciseId: Long? = null) {
         viewModelScope.launch {
-            val seconds = resolveRestSeconds(exerciseId)
+            val seconds = resolveRestSeconds(exerciseId, sessionExerciseId)
             _currentExerciseId.value = exerciseId
             RestTimerService.start(context, seconds)
             _restTimer.value = RestTimerState(

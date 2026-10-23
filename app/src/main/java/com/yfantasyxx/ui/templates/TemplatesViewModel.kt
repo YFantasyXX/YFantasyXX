@@ -32,6 +32,7 @@ data class EditableTemplateItem(
     val targetReps: String,
     val targetWeightKg: Float,
     val isWarmup: Boolean,
+    val restSeconds: Int?,
 )
 
 /** 模板分组（folderId 为 null 表示未分组） */
@@ -156,6 +157,7 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         targetReps = templateExercise.targetReps,
         targetWeightKg = templateExercise.targetWeightKg ?: 0f,
         isWarmup = templateExercise.isWarmup,
+        restSeconds = templateExercise.restSeconds,
     )
 
     fun setName(value: String) {
@@ -182,19 +184,28 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                     targetReps = "8-12",
                     targetWeightKg = lastWeight,
                     isWarmup = false,
+                    restSeconds = null,
                 )
             )
             _state.value = _state.value.copy(items = items)
         }
     }
 
-    fun updateItem(key: Long, sets: Int? = null, reps: String? = null, weight: Float? = null) {
+    fun updateItem(
+        key: Long,
+        sets: Int? = null,
+        reps: String? = null,
+        weight: Float? = null,
+        restSeconds: Int? = null,
+        clearRest: Boolean = false,
+    ) {
         val items = _state.value.items.map {
             if (it.key == key) {
                 it.copy(
                     targetSets = sets ?: it.targetSets,
                     targetReps = reps ?: it.targetReps,
                     targetWeightKg = weight ?: it.targetWeightKg,
+                    restSeconds = if (clearRest) null else (restSeconds ?: it.restSeconds),
                 )
             } else it
         }
@@ -260,6 +271,7 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                         targetReps = it.targetReps,
                         targetWeightKg = it.targetWeightKg.takeIf { w -> w > 0f },
                         isWarmup = it.isWarmup,
+                        restSeconds = it.restSeconds,
                     )
                 },
             )

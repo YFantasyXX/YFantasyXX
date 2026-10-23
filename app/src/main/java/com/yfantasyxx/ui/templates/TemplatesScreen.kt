@@ -66,6 +66,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.CreateNewFolder
+import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
@@ -466,6 +467,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
     var newCategory by remember { mutableStateOf("") }
     var newEquipment by remember { mutableStateOf("") }
     var newMuscle by remember { mutableStateOf("") }
+    var restPickerKey by remember { mutableStateOf<Long?>(null) }
     var loaded by remember(templateId) { mutableStateOf(false) }
 
     // 键盘弹出时隐藏底部「添加动作」栏，把空间让给输入框
@@ -608,6 +610,25 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
+                                    // 休息时长
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                            .clickable { restPickerKey = item.key }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    ) {
+                                        Text(
+                                            text = item.restSeconds?.let { "${it}s" } ?: "休息",
+                                            fontSize = 10.sp,
+                                            color = if (item.restSeconds != null) {
+                                                MiuixTheme.colorScheme.primary
+                                            } else {
+                                                MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                            },
+                                        )
+                                    }
+                                    Spacer(Modifier.width(4.dp))
                                     // 热身开关
                                     Box(
                                         modifier = Modifier
@@ -786,6 +807,30 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                     }
                 }
             }
+        }
+    }
+
+    // 模板内设置该动作的休息时长
+    restPickerKey?.let { key ->
+        val item = state.items.firstOrNull { it.key == key }
+        if (item != null) {
+            RestSecondsPickerDialog(
+                initialSeconds = item.restSeconds ?: 90,
+                showSaveAsDefault = false,
+                onDismiss = { restPickerKey = null },
+                onConfirm = { seconds, _ ->
+                    vm.updateItem(key, restSeconds = seconds)
+                    restPickerKey = null
+                },
+                onClear = if (item.restSeconds != null) {
+                    {
+                        vm.updateItem(key, clearRest = true)
+                        restPickerKey = null
+                    }
+                } else {
+                    null
+                },
+            )
         }
     }
 
