@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio / IntelliJ
+*.iml
+.idea/
+local.properties
+
+# 构建产物
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# 签名文件（切勿提交）
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
