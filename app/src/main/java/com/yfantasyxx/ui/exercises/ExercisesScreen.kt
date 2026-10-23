@@ -12,7 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -38,6 +38,7 @@ import com.yfantasyxx.ui.components.EmptyState
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.rememberAppContainer
 import com.yfantasyxx.ui.components.ActionText
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 @Composable
 fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
@@ -141,7 +142,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                                     )
                                 }
                                 Icon(
-                                    imageVector = Icons.Filled.ArrowForward,
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                     contentDescription = null,
                                     tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )
@@ -172,8 +173,9 @@ private fun FilterChip(
 ) {
     Surface(
         onClick = onClick,
+        shape = RoundedCornerShape(50),
         color = if (selected) {
-            MiuixTheme.colorScheme.primaryContainer
+            MiuixTheme.colorScheme.primary
         } else {
             MiuixTheme.colorScheme.surfaceContainer
         },
@@ -182,12 +184,17 @@ private fun FilterChip(
         Text(
             text = label,
             style = MiuixTheme.textStyles.footnote1,
+            fontWeight = if (selected) {
+                androidx.compose.ui.text.font.FontWeight.SemiBold
+            } else {
+                androidx.compose.ui.text.font.FontWeight.Normal
+            },
             color = if (selected) {
-                MiuixTheme.colorScheme.primary
+                MiuixTheme.colorScheme.onPrimary
             } else {
                 MiuixTheme.colorScheme.onSurfaceVariantSummary
             },
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
         )
     }
 }

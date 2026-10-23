@@ -54,6 +54,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -265,7 +266,7 @@ private fun ExerciseBlock(
 ) {
     val completed = item.sets.count { it.completed }
     val lastSummary = if (lastSets.isNotEmpty()) {
-        "上次: " + lastSets.joinToString(" / ") { "${it.weightKg.toInt()}kg×${it.reps}" }
+        "上次 " + lastSets.take(3).joinToString(" / ") { "${it.weightKg.toInt()}×${it.reps}" }
     } else ""
 
     Card(
@@ -274,22 +275,42 @@ private fun ExerciseBlock(
             .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // ---- 动作标题行 ----
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.exercise.name,
-                        style = MiuixTheme.textStyles.main,
+                        fontSize = 17.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
+                    Spacer(Modifier.height(3.dp))
                     Text(
-                        text = if (lastSummary.isNotEmpty()) lastSummary else "首次训练",
+                        text = buildString {
+                            append(item.exercise.category)
+                            if (item.exercise.equipment.isNotEmpty()) {
+                                append(" · ")
+                                append(item.exercise.equipment)
+                            }
+                            if (lastSummary.isNotEmpty()) {
+                                append(" · ")
+                                append(lastSummary)
+                            } else {
+                                append(" · 首次训练")
+                            }
+                        },
                         style = MiuixTheme.textStyles.footnote1,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                 }
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = "$completed/${item.sets.size}",
                     style = MiuixTheme.textStyles.footnote1,
@@ -300,15 +321,28 @@ private fun ExerciseBlock(
                         .background(MiuixTheme.colorScheme.primaryContainer)
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
-                IconButton(onClick = onRemoveExercise) {
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MiuixTheme.colorScheme.surfaceContainer)
+                        .clickable(onClick = onRemoveExercise),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Icon(
                         imageVector = Icons.Filled.Delete,
                         contentDescription = "移除动作",
+                        modifier = Modifier.size(16.dp),
                         tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
+            top.yukonga.miuix.kmp.basic.HorizontalDivider(
+                color = MiuixTheme.colorScheme.dividerLine.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.height(4.dp))
             // 表头（与下方组行的布局对齐）
             Row(
                 modifier = Modifier
