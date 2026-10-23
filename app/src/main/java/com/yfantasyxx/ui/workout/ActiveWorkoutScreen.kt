@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +68,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.zIndex
@@ -97,7 +99,13 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var dragOffsetY by remember { mutableStateOf(0f) }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
-    val itemBounds = remember { mutableStateMapOf<Long, Pair<Float, Float>>() }
+    // 用普通 HashMap 记录布局：布局阶段写快照状态会引起不必要的重组抖动
+    val itemBounds = remember { HashMap<Long, Pair<Float, Float>>() }
+    // 拖动期间要拿到最新的动作顺序（而不是手势启动那一刻的快照）
+    val latestExercises by rememberUpdatedState(exercises)
+    // 拖动标记的稳定快照引用：手势协程内读它始终拿到最新值，
+    // 且它作为普通对象不会引起重组或 modifier 链变化
+    val draggingIdSnapshot = rememberUpdatedState(draggingId)
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -175,8 +183,23 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             }
 
             LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                userScrollEnabled = draggingId == null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 拖动中禁止列表滚动。
+                    // 这个 modifier 必须「无条件存在」：如果按 draggingId 条件添加，
+                    // 拖动开始瞬间会改变 LazyColumn 的 modifier 链，等于在手势进行中
+                    // 重建 scrollable，手势会被直接取消（这就是之前拖不动的根因）。
+                    // 这里改为恒定挂载，只在内部读最新状态决定是否吞掉事件。
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, _ ->
+                                // 正在拖动动作时吞掉纵向事件，列表不跟着滚。
+                                // key 恒为 Unit：手势协程永不重启，
+                                // draggingFlag 读的是最新快照值
+                                if (draggingIdSnapshot.value != null) change.consume()
+                            },
+                        )
+                    },
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
             ) {
                 // 操作异常提示（不闪退，显示原因）
@@ -293,13 +316,20 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             },
                         verticalAlignment = Alignment.Top,
                     ) {
-                        // 拖动把手：直接上下拖动即开始排序（无需长按）；
-                        // 拖动过程中实时交换位置
+                        // 拖动把手：按住上下拖动即排序，拖过别的动作实时换位。
+                        //
+                        // 三个必须遵守的点（前几版都踩过）：
+                        // 1. 绝不能用 userScrollEnabled 跟随拖动状态联动 —— 那会重建
+                        //    scrollable modifier，把进行中的手势直接取消，所以改成手势
+                        //    自己消费事件，并给列表加一个一次性滚动的嵌套拦截
+                        // 2. 拖动中不能改变卡片高度（不能因 isDragging 强制收纳），
+                        //    否则高度剧变让坐标判断全部失效
+                        // 3. 不做逐帧偏移补偿。拖动期间所有卡片高度与间距恒定，
+                        //    布局位置可以纯解析推算，换位后按新位置一次性修正偏移
                         Box(
                             modifier = Modifier
                                 .width(40.dp)
-                                .heightIn(min = 56.dp)
-                                .padding(top = 12.dp)
+                                .heightIn(min = 72.dp)
                                 .pointerInput(item.sessionExercise.id) {
                                     detectVerticalDragGestures(
                                         onDragStart = {
@@ -313,61 +343,58 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             change.consume()
                                             val id = draggingId
                                                 ?: return@detectVerticalDragGestures
-                                            dragOffsetY += amount
-                                            val bounds = itemBounds[id] ?: return@detectVerticalDragGestures
-                                            // 被拖卡片中心（视觉位置 = 布局位置 + 平移）
-                                            val draggedCenter =
-                                                bounds.first + dragOffsetY + bounds.second / 2
-                                            // 交换条件：中心越过了移动方向上最近那个动作的中心。
-                                            // 不能用「中心落在谁范围内」——补偿后卡片本就浮在邻居
-                                            // 身上，会立刻换回来，导致原地抽搐
-                                            val downTarget = itemBounds.entries
-                                                .filter { (tid, b) ->
-                                                    tid != id && b.first > bounds.first
-                                                }
-                                                .minByOrNull { (_, b) -> b.first + b.second / 2 }
-                                            val upTarget = itemBounds.entries
-                                                .filter { (tid, b) ->
-                                                    tid != id && b.first < bounds.first
-                                                }
-                                                .maxByOrNull { (_, b) -> b.first + b.second / 2 }
-                                            val targetEntry = when {
-                                                downTarget != null &&
-                                                    draggedCenter > downTarget.value.let {
-                                                        it.first + it.second / 2
-                                                    } -> downTarget
-                                                upTarget != null &&
-                                                    draggedCenter < upTarget.value.let {
-                                                        it.first + it.second / 2
-                                                    } -> upTarget
-                                                else -> null
+                                            val list = latestExercises
+                                            val from = list.indexOfFirst {
+                                                it.sessionExercise.id == id
                                             }
-                                            if (targetEntry != null) {
-                                                val targetId = targetEntry.key
-                                                val targetTop = targetEntry.value.first
-                                                val targetH = targetEntry.value.second
-                                                val movingDown = targetTop > bounds.first
-                                                vm.moveExerciseById(id, targetId)
-                                                // 交换后布局位移量 = 目标高度 + 卡片间距；
-                                                // 补偿平移量，让卡片继续贴在手指下方
-                                                val gap = 12.dp.toPx()
-                                                val shift = targetH + gap
-                                                dragOffsetY += if (movingDown) -shift else shift
-                                                // 立即刷新两行坐标记录，防止下一帧用过期坐标重复交换
-                                                if (movingDown) {
-                                                    itemBounds[id] =
-                                                        (bounds.first + shift) to bounds.second
-                                                    itemBounds[targetId] = bounds.first to targetH
-                                                } else {
-                                                    itemBounds[id] = targetTop to bounds.second
-                                                    itemBounds[targetId] =
-                                                        (bounds.first + bounds.second + gap) to targetH
+                                            if (from < 0) return@detectVerticalDragGestures
+                                            dragOffsetY += amount
+                                            val offset = dragOffsetY
+                                            val gap = 12.dp.toPx()
+                                            // 拖动期间高度恒定，用已测量高度解析推算布局。
+                                            // LazyColumn 只组合可见项，屏幕外动作
+                                            // 没有高度记录，一律不参与换位
+                                            val tops = FloatArray(list.size) { Float.NaN }
+                                            val centers = FloatArray(list.size) { Float.NaN }
+                                            var y = 0f
+                                            list.forEachIndexed { i, ex ->
+                                                val h = itemBounds[ex.sessionExercise.id]
+                                                    ?.second
+                                                if (h != null) {
+                                                    tops[i] = y
+                                                    centers[i] = y + h / 2f
+                                                    y += h + gap
                                                 }
+                                            }
+                                            // 被拖卡片当前视觉中心
+                                            if (itemBounds[id] == null) {
+                                                return@detectVerticalDragGestures
+                                            }
+                                            val draggedCenter = centers[from] + offset
+                                            // 找视觉中心最接近的目标格（只看已测量的项）
+                                            var target = from
+                                            var best = Float.MAX_VALUE
+                                            list.indices.forEach { i ->
+                                                if (i == from) return@forEach
+                                                val c = centers[i]
+                                                if (c.isNaN()) return@forEach
+                                                val d = abs(c - draggedCenter)
+                                                if (d < best) {
+                                                    best = d
+                                                    target = i
+                                                }
+                                            }
+                                            if (target != from) {
+                                                vm.moveExerciseLocal(from, target)
+                                                // 换位后被拖项的布局位置变为 tops[target]，
+                                                // 把这段位移折算掉，卡片继续贴着手指、不跳不抽搐
+                                                dragOffsetY = offset - (tops[target] - tops[from])
                                             }
                                         },
                                         onDragEnd = {
                                             draggingId = null
                                             dragOffsetY = 0f
+                                            vm.persistExerciseOrder()
                                         },
                                         onDragCancel = {
                                             draggingId = null
@@ -390,7 +417,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             item = item,
                             lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
                             unitLabel = WeightUnit.KG.label,
-                            collapsed = isDragging || isCollapsed,
+                            collapsed = isCollapsed,
                             onToggleCollapse = {
                                 collapsedIds[item.sessionExercise.id] = !isCollapsed
                             },

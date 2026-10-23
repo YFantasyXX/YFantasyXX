@@ -16,9 +16,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -124,12 +121,12 @@ class WorkoutViewModel(
         _sessionId.value = id
         _session.value = repo.getSession(id)
         refreshDefaultName()
-        startReorderWorker()
+        localOrderLock = false
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
                 // 拖动排序中：Flow 里可能是旧顺序，忽略它以本地顺序为准
-                if (reorderInProgress) return@collectLatest
+                if (localOrderLock) return@collectLatest
                 _exercises.value = list
                 // 仅在动作增减时刷新"上次表现"参考（组数据变化不需要重查）
                 val ids = list.map { it.sessionExercise.exerciseId }
@@ -185,55 +182,36 @@ class WorkoutViewModel(
         }
     }
 
-    /** 训练内拖动动作排序（本地即时生效，再落库） */
-    /** 按 id 交换两个动作的位置（始终基于最新列表，供拖动实时调用） */
-    fun moveExerciseById(draggedId: Long, targetId: Long) {
-        val items = _exercises.value
-        val from = items.indexOfFirst { it.sessionExercise.id == draggedId }
-        val to = items.indexOfFirst { it.sessionExercise.id == targetId }
-        if (from < 0 || to < 0 || from == to) return
-        moveExercise(from, to)
-    }
-
-    fun moveExercise(from: Int, to: Int) {
+    /**
+     * 拖动中：仅调整本地列表顺序，不落库。
+     * 拖动过程中每次换位都写库会产生并发事务，旧顺序可能最后落地，
+     * Room Flow 再发射就把界面拉回，因此改为「松手一次性持久化」。
+     */
+    fun moveExerciseLocal(from: Int, to: Int) {
         val items = _exercises.value.toMutableList()
         if (from !in items.indices || to !in items.indices || from == to) return
-        val moved = items.removeAt(from)
-        items.add(to, moved)
+        items.add(to, items.removeAt(from))
         _exercises.value = items
-        // 排序落库走串行队列：拖动中连续交换，并发事务交叉提交会让旧顺序
-        // 最后落地，Room Flow 再一发射就把界面拉回旧顺序
-        reorderInProgress = true
-        reorderChannel.trySend(items.map { it.sessionExercise.id })
+        localOrderLock = true
     }
 
-    /** 排序请求队列（CONFLATED：积压时只保留最新顺序，最终状态一定正确） */
-    private val reorderChannel = Channel<List<Long>>(Channel.CONFLATED)
-    private val reorderMutex = Mutex()
-    /** 排序进行中：此期间忽略 Room Flow 的顺序发射，以本地顺序为准 */
-    private var reorderInProgress = false
-
-    private var reorderWorkerStarted = false
-
-    private fun startReorderWorker() {
-        if (reorderWorkerStarted) return
-        reorderWorkerStarted = true
+    /** 拖动结束：把当前顺序一次性写入数据库 */
+    fun persistExerciseOrder() {
+        val items = _exercises.value
+        val sessionId = _sessionId.value ?: return
+        localOrderLock = false
         viewModelScope.launch {
-            for (order in reorderChannel) {
-                val sessionId = _sessionId.value ?: continue
-                reorderMutex.withLock {
-                    runCatching {
-                        repo.reorderSessionExercises(sessionId, order)
-                    }.onFailure { e ->
-                        _error.value = "调整顺序失败：${e.message.orEmpty()}"
-                    }
-                }
-                // 还有待写入的新顺序时继续保持「排序中」，
-                // 防止上一笔的 Flow 发射（旧顺序）覆盖本地更新
-                if (reorderChannel.isEmpty) reorderInProgress = false
+            runCatching {
+                repo.reorderSessionExercises(sessionId, items.map { it.sessionExercise.id })
+            }.onFailure { e ->
+                localOrderLock = false
+                _error.value = "调整顺序失败：${e.message.orEmpty()}"
             }
         }
     }
+
+    /** 拖动排序期间：忽略 Room Flow 的顺序发射，以本地顺序为准 */
+    private var localOrderLock = false
 
     /** 新建自定义动作，保存到动作库并直接加入当前训练 */
     fun addCustomExerciseToSession(
