@@ -230,7 +230,31 @@ interface SessionDao {
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun delete(id: Long)
 
-    /** 清理多余的进行中草稿，只保留最近一个 */
+    /** 清理多余的进行中草稿，只保留最近一个（级联删除其动作与组，避免孤儿数据） */
+    @Query(
+        """
+        DELETE FROM set_logs WHERE sessionExerciseId IN (
+            SELECT se.id FROM session_exercises se WHERE se.sessionId IN (
+                SELECT id FROM sessions WHERE endTime IS NULL AND id NOT IN (
+                    SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+                )
+            )
+        )
+        """
+    )
+    suspend fun deleteStaleDraftSets()
+
+    @Query(
+        """
+        DELETE FROM session_exercises WHERE sessionId IN (
+            SELECT id FROM sessions WHERE endTime IS NULL AND id NOT IN (
+                SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+            )
+        )
+        """
+    )
+    suspend fun deleteStaleDraftExercises()
+
     @Query(
         """
         DELETE FROM sessions WHERE endTime IS NULL AND id NOT IN (
@@ -238,7 +262,7 @@ interface SessionDao {
         )
         """
     )
-    suspend fun deleteStaleDrafts()
+    suspend fun deleteStaleDraftSessions()
 
     // ---- 统计 ----
 

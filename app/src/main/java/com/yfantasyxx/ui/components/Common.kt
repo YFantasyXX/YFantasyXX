@@ -138,7 +138,7 @@ fun NumberStepper(
     fun commit(): Float {
         val parsed = text.toFloatOrNull()
         val valid = parsed != null && (allowNegative || parsed >= 0f)
-        val result = if (valid) parsed!! else value
+        val result = parsed ?: value
         if (valid) onValueChange(result)
         exitEditing()
         return result

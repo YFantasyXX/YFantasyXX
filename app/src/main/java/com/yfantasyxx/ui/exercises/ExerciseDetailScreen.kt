@@ -47,6 +47,7 @@ import com.yfantasyxx.ui.components.AppDialog
 import androidx.compose.foundation.layout.width
 import com.yfantasyxx.ui.components.ActionText
 import top.yukonga.miuix.kmp.basic.Button
+import androidx.compose.foundation.layout.imePadding
 
 @Composable
 fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
@@ -219,7 +220,11 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                 title = "编辑动作",
                 onDismissRequest = { showEdit = false },
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .imePadding()
+                ) {
                     top.yukonga.miuix.kmp.basic.TextField(
                         value = editName,
                         onValueChange = { editName = it },

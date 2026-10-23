@@ -418,8 +418,9 @@ private fun formatElapsed(startTime: Long): String {
 private fun summarizeCrash(raw: String): String {
     val lines = raw.lines().filter { it.isNotBlank() }
     if (lines.isEmpty()) return raw.take(500)
-    val head = lines.first().take(300)
+    // 前 6 行是日志头部（时间/版本/机型/系统/分隔线），保留下来便于定位
+    val head = lines.take(6)
     val appFrames = lines.filter { it.trimStart().startsWith("at com.yfantasyxx") }.take(6)
     val frames = appFrames.ifEmpty { lines.filter { it.trimStart().startsWith("at ") }.take(6) }
-    return (listOf(head) + frames).joinToString("\n")
+    return (head + frames).joinToString("\n")
 }

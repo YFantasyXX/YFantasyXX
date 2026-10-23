@@ -92,7 +92,7 @@ fun TemplatesScreen(
 
     // 拖动排序状态
     val density = LocalDensity.current
-    val rowHeightPx = with(density) { 84.dp.toPx() }
+    val rowHeightPx = with(density) { 70.dp.toPx() }
     val haptics = LocalHapticFeedback.current
     var draggingId by remember { mutableStateOf<Long?>(null) }
     var dragOffsetY by remember { mutableStateOf(0f) }
@@ -499,10 +499,6 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
     val state by vm.state.collectAsState()
     var showPicker by remember { mutableStateOf(false) }
     var showAddExercise by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-    var newCategory by remember { mutableStateOf("") }
-    var newEquipment by remember { mutableStateOf("") }
-    var newMuscle by remember { mutableStateOf("") }
     var restPickerKey by remember { mutableStateOf<Long?>(null) }
     var loaded by remember(templateId) { mutableStateOf(false) }
 
@@ -876,10 +872,6 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
             onDismiss = { showAddExercise = false },
             onConfirm = { name, category, equipment, muscle ->
                 vm.addCustomExercise(name, category, equipment, muscle)
-                newName = ""
-                newCategory = ""
-                newEquipment = ""
-                newMuscle = ""
                 showAddExercise = false
                 showPicker = false
             },

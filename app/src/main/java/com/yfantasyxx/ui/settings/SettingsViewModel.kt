@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class SettingsViewModel(
     private val container: AppContainer,
@@ -102,9 +103,13 @@ class SettingsViewModel(
         viewModelScope.launch {
             val c = client(settings.value) ?: return@launch
             backupManager.restore(c, fileName)
-            // 恢复成功后重建数据库实例，让 UI 立即读到新数据
+            // 恢复成功后重建数据库实例
             container.rebuildDatabase()
             onRestored()
+            // 各 Repository 仍持有旧数据库实例，无法通过 Flow 刷新，
+            // 直接重启进程让所有数据源重新加载（消息已提示"恢复成功"）
+            delay(700)
+            android.os.Process.killProcess(android.os.Process.myPid())
         }
     }
 

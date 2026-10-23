@@ -78,7 +78,12 @@ class WorkoutRepository(private val db: AppDatabase) {
     }
 
     /** 启动清理：历史版本异常退出可能留下多个未完成草稿 */
-    suspend fun cleanupStaleDrafts() = sessionDao.deleteStaleDrafts()
+    /** 清理多余草稿（含其动作与组），只保留最近一个 */
+    suspend fun cleanupStaleDrafts() {
+        sessionDao.deleteStaleDraftSets()
+        sessionDao.deleteStaleDraftExercises()
+        sessionDao.deleteStaleDraftSessions()
+    }
 
     // ---------- 模板 ----------
 

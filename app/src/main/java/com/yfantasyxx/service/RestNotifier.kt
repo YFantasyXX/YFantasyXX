@@ -27,12 +27,12 @@ object RestNotifier {
     const val NOTIF_COUNTDOWN = 1001
     const val NOTIF_DONE = 1002
 
-    private fun manager(context: Context): NotificationManager =
-        ContextCompat.getSystemService(context, NotificationManager::class.java)!!
+    private fun manager(context: Context): NotificationManager? =
+        ContextCompat.getSystemService(context, NotificationManager::class.java)
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = manager(context)
+        val nm = manager(context) ?: return
         if (nm.getNotificationChannel(CHANNEL_COUNTDOWN) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(
@@ -132,12 +132,12 @@ object RestNotifier {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .build()
-        runCatching { manager(context).notify(NOTIF_DONE, notification) }
+        runCatching { manager(context)?.notify(NOTIF_DONE, notification) }
         vibrate(context)
     }
 
     fun cancelCountdown(context: Context) {
-        runCatching { manager(context).cancel(NOTIF_COUNTDOWN) }
+        runCatching { manager(context)?.cancel(NOTIF_COUNTDOWN) }
     }
 
     /** 四段强震动，确保能感知 */
