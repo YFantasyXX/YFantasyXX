@@ -180,6 +180,15 @@ class WorkoutViewModel(
     }
 
     /** 训练内拖动动作排序（本地即时生效，再落库） */
+    /** 按 id 交换两个动作的位置（始终基于最新列表，供拖动实时调用） */
+    fun moveExerciseById(draggedId: Long, targetId: Long) {
+        val items = _exercises.value
+        val from = items.indexOfFirst { it.sessionExercise.id == draggedId }
+        val to = items.indexOfFirst { it.sessionExercise.id == targetId }
+        if (from < 0 || to < 0 || from == to) return
+        moveExercise(from, to)
+    }
+
     fun moveExercise(from: Int, to: Int) {
         val items = _exercises.value.toMutableList()
         if (from !in items.indices || to !in items.indices || from == to) return

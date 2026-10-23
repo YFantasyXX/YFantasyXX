@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -92,6 +94,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     var draggingId by remember { mutableStateOf<Long?>(null) }
     var dragOffsetY by remember { mutableStateOf(0f) }
+    // 每个动作的收纳状态（收起组数，方便拖动排序）
+    val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
     val itemBounds = remember { mutableStateMapOf<Long, Pair<Float, Float>>() }
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
@@ -171,6 +175,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
+                userScrollEnabled = draggingId == null,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
             ) {
                 // 操作异常提示（不闪退，显示原因）
@@ -272,6 +277,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
                 itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { _, item ->
                     val isDragging = draggingId == item.sessionExercise.id
+                    val isCollapsed = collapsedIds[item.sessionExercise.id] == true
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -286,10 +292,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             },
                         verticalAlignment = Alignment.Top,
                     ) {
-                        // 拖动把手：长按上下拖动，拖动时该动作的组数收纳
+                        // 拖动把手：长按上下拖动；拖动过程中实时交换位置
                         Box(
                             modifier = Modifier
-                                .width(26.dp)
+                                .width(40.dp)
                                 .padding(top = 20.dp)
                                 .pointerInput(item.sessionExercise.id) {
                                     detectDragGesturesAfterLongPress(
@@ -302,36 +308,42 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                         },
                                         onDrag = { change, amount ->
                                             change.consume()
-                                            dragOffsetY += amount.y
-                                        },
-                                        onDragEnd = {
                                             val id = draggingId
-                                            if (id != null) {
-                                                val bounds = itemBounds[id]
-                                                if (bounds != null) {
-                                                    // 被拖项中心落在谁身上，就换到谁的位置
-                                                    val center = bounds.first + dragOffsetY +
-                                                        bounds.second / 2
-                                                    val targetId = itemBounds.entries
-                                                        .firstOrNull { (tid, b) ->
-                                                            tid != id &&
-                                                                center >= b.first &&
-                                                                center < b.first + b.second
-                                                        }
-                                                        ?.key
-                                                    if (targetId != null) {
-                                                        val from = exercises.indexOfFirst {
-                                                            it.sessionExercise.id == id
-                                                        }
-                                                        val to = exercises.indexOfFirst {
-                                                            it.sessionExercise.id == targetId
-                                                        }
-                                                        if (from >= 0 && to >= 0) {
-                                                            vm.moveExercise(from, to)
-                                                        }
+                                                ?: return@detectDragGesturesAfterLongPress
+                                            dragOffsetY += amount.y
+                                            // 拖动中实时交换：被拖项中心落在谁身上，就换到谁的位置
+                                            val bounds = itemBounds[id] ?: return@detectDragGesturesAfterLongPress
+                                            val center =
+                                                bounds.first + dragOffsetY + bounds.second / 2
+                                            val targetEntry = itemBounds.entries
+                                                .firstOrNull { (tid, b) ->
+                                                    tid != id && center >= b.first &&
+                                                        center < b.first + b.second
+                                                }
+                                            val targetId = targetEntry?.key
+                                            if (targetId != null) {
+                                                vm.moveExerciseById(id, targetId)
+                                                // 交换后该项布局位置改变，补偿偏移让卡片继续跟着手指
+                                                val gap = 12.dp.toPx()
+                                                val targetH =
+                                                    targetEntry.value.second
+                                                dragOffsetY += if (
+                                                    exercises.indexOfFirst {
+                                                        it.sessionExercise.id == id
+                                                    } >
+                                                    exercises.indexOfFirst {
+                                                        it.sessionExercise.id == targetId
                                                     }
+                                                ) {
+                                                    // 被拖项换到了目标下方：布局下移，抵消平移
+                                                    -(bounds.second + gap)
+                                                } else {
+                                                    // 换到目标上方：布局上移，补偿平移
+                                                    targetH + gap
                                                 }
                                             }
+                                        },
+                                        onDragEnd = {
                                             draggingId = null
                                             dragOffsetY = 0f
                                         },
@@ -356,7 +368,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             item = item,
                             lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
                             unitLabel = WeightUnit.KG.label,
-                            collapsed = isDragging,
+                            collapsed = isDragging || isCollapsed,
+                            onToggleCollapse = {
+                                collapsedIds[item.sessionExercise.id] = !isCollapsed
+                            },
                             modifier = Modifier.weight(1f),
                             onUpdateSet = { set, weight, reps ->
                                 vm.updateSet(set, weight, reps)
@@ -469,6 +484,7 @@ private fun ExerciseBlock(
     lastSets: List<SetLog>,
     unitLabel: String,
     collapsed: Boolean = false,
+    onToggleCollapse: () -> Unit = {},
     modifier: Modifier = Modifier,
     onUpdateSet: (SetLog, Float, Int) -> Unit,
     onToggleSet: (SetLog) -> Unit,
@@ -521,7 +537,7 @@ private fun ExerciseBlock(
                     Spacer(Modifier.height(3.dp))
                     Text(
                         text = if (collapsed) {
-                            "拖动中 · ${item.sets.size} 组（已完成 $completed 组）"
+                            "${item.sets.size} 组 · 已完成 $completed 组"
                         } else buildString {
                             append(item.exercise.category)
                             if (item.exercise.equipment.isNotEmpty()) {
@@ -569,6 +585,27 @@ private fun ExerciseBlock(
                         )
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
+                Spacer(Modifier.width(6.dp))
+                // 收纳/展开组数
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MiuixTheme.colorScheme.surfaceContainer)
+                        .clickable(onClick = onToggleCollapse),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (collapsed) {
+                            Icons.Filled.ExpandMore
+                        } else {
+                            Icons.Filled.ExpandLess
+                        },
+                        contentDescription = if (collapsed) "展开组数" else "收纳组数",
+                        modifier = Modifier.size(16.dp),
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
                 Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
