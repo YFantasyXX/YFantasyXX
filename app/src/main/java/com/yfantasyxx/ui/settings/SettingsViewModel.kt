@@ -42,6 +42,10 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepo.setRestSeconds(seconds) }
     }
 
+    fun setBlurBottomBar(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setBlurBottomBar(enabled) }
+    }
+
     fun setAutoBackup(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.setAutoBackup(enabled) }
     }

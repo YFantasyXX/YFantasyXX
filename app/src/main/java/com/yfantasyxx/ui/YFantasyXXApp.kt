@@ -1,5 +1,10 @@
 package com.yfantasyxx.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
@@ -14,7 +19,9 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -25,9 +32,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.yfantasyxx.YFantasyXXApplication
-import top.yukonga.miuix.kmp.basic.NavigationBar
-import top.yukonga.miuix.kmp.basic.NavigationBarItem
-import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.yfantasyxx.ui.nav.FloatingBottomBar
+import com.yfantasyxx.ui.nav.FloatingTab
 import com.yfantasyxx.ui.exercises.ExerciseDetailScreen
 import com.yfantasyxx.ui.exercises.ExercisesScreen
 import com.yfantasyxx.ui.history.HistoryScreen
@@ -38,6 +45,7 @@ import com.yfantasyxx.ui.stats.StatsScreen
 import com.yfantasyxx.ui.templates.TemplateEditScreen
 import com.yfantasyxx.ui.templates.TemplatesScreen
 import com.yfantasyxx.ui.workout.ActiveWorkoutScreen
+import androidx.compose.ui.unit.dp
 
 object Routes {
     const val HOME = "home"
@@ -56,19 +64,12 @@ object Routes {
     fun exerciseDetail(id: Long) = "exercise_detail/$id"
 }
 
-private data class TabItem(
-    val route: String,
-    val label: String,
-    val selectedIcon: ImageVector,
-    val icon: ImageVector,
-)
-
 private val tabs = listOf(
-    TabItem(Routes.HOME, "今天", Icons.Filled.Home, Icons.Outlined.Home),
-    TabItem(Routes.EXERCISES, "动作", Icons.Filled.FitnessCenter, Icons.Outlined.FitnessCenter),
-    TabItem(Routes.HISTORY, "历史", Icons.Filled.History, Icons.Outlined.History),
-    TabItem(Routes.STATS, "统计", Icons.Filled.BarChart, Icons.Outlined.BarChart),
-    TabItem(Routes.SETTINGS, "我的", Icons.Filled.Person, Icons.Outlined.Person),
+    FloatingTab(Routes.HOME, "今天", Icons.Filled.Home, Icons.Outlined.Home),
+    FloatingTab(Routes.EXERCISES, "动作", Icons.Filled.FitnessCenter, Icons.Outlined.FitnessCenter),
+    FloatingTab(Routes.HISTORY, "历史", Icons.Filled.History, Icons.Outlined.History),
+    FloatingTab(Routes.STATS, "统计", Icons.Filled.BarChart, Icons.Outlined.BarChart),
+    FloatingTab(Routes.SETTINGS, "我的", Icons.Filled.Person, Icons.Outlined.Person),
 )
 
 @Composable
@@ -81,43 +82,33 @@ fun YFantasyXXApp() {
 
 @Composable
 private fun YFantasyXXNavHost() {
+    val container = LocalAppContainer.current
+    val settings by container.settingsRepository.settings
+        .collectAsState(initial = com.yfantasyxx.data.prefs.AppSettings())
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
     val showBottomBar = tabs.any { it.route == currentRoute }
+    // 底栏 64dp + 上下 14dp 边距 + 系统手势条高度
+    val navBarInset = androidx.compose.foundation.layout.WindowInsets.navigationBars
+        .asPaddingValues().calculateBottomPadding()
+    val bottomSpace = 92.dp + navBarInset
 
-    Scaffold(
-        bottomBar = {
-            if (showBottomBar) {
-                NavigationBar {
-                    tabs.forEach { tab ->
-                        val selected = currentRoute == tab.route
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                if (!selected) {
-                                    navController.navigate(tab.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                }
-                            },
-                            icon = if (selected) tab.selectedIcon else tab.icon,
-                            label = tab.label,
-                        )
-                    }
-                }
-            }
-        }
-    ) { innerPadding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.surface)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = if (showBottomBar) bottomSpace else 0.dp)
+        ) {
         NavHost(
             navController = navController,
             startDestination = Routes.HOME,
-            modifier = Modifier.padding(innerPadding),
+            modifier = Modifier.fillMaxSize(),
         ) {
             composable(Routes.HOME) {
                 HomeScreen(
@@ -174,6 +165,25 @@ private fun YFantasyXXNavHost() {
                     onBack = { navController.popBackStack() },
                 )
             }
+        }
+        }
+
+        if (showBottomBar) {
+            FloatingBottomBar(
+                tabs = tabs,
+                selectedRoute = currentRoute,
+                glass = settings.blurBottomBar,
+                onSelect = { route ->
+                    navController.navigate(route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
     }
 }

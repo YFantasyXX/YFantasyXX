@@ -41,6 +41,8 @@ data class AppSettings(
     val webdavPassword: String = "",
     val autoBackup: Boolean = false,
     val lastBackupTime: Long? = null,
+    /** 悬浮底栏毛玻璃效果（关闭可省电、提升帧率） */
+    val blurBottomBar: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -55,6 +57,7 @@ class SettingsRepository(private val context: Context) {
         val WEBDAV_USER = stringPreferencesKey("webdav_user")
         val WEBDAV_PASS_ENC = stringPreferencesKey("webdav_pass_enc")
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
+        val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
         val LAST_BACKUP = longPreferencesKey("last_backup")
     }
 
@@ -68,6 +71,7 @@ class SettingsRepository(private val context: Context) {
             webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
             autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
             lastBackupTime = prefs[Keys.LAST_BACKUP],
+            blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: true,
         )
     }
 
@@ -93,6 +97,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setAutoBackup(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTO_BACKUP] = enabled }
+    }
+
+    suspend fun setBlurBottomBar(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.BLUR_BOTTOM_BAR] = enabled }
     }
 
     suspend fun setLastBackupTime(time: Long) {

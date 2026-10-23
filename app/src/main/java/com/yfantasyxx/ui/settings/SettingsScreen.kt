@@ -56,6 +56,7 @@ import com.yfantasyxx.ui.components.SegmentedSelector
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import android.os.Build
+import androidx.compose.foundation.layout.width
 
 @Composable
 fun SettingsScreen(onOpenTemplates: () -> Unit) {
@@ -138,6 +139,22 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                             WeightUnit.entries.getOrNull(index)?.let(vm::setWeightUnit)
                         },
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("底栏玻璃质感", style = MiuixTheme.textStyles.main)
+                            Text(
+                                text = "半透明悬浮底栏；关闭则完全不透明",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = settings.blurBottomBar,
+                            onCheckedChange = { vm.setBlurBottomBar(it) },
+                        )
+                    }
                 }
             }
 
