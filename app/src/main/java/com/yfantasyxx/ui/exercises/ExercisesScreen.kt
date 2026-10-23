@@ -111,6 +111,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
 
             // 器械筛选（按数据库中实际存在的器械动态生成）
             if (equipments.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
                 LazyRow(
                     modifier = Modifier.padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
