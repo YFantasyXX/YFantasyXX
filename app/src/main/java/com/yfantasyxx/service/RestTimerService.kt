@@ -67,13 +67,18 @@ class RestTimerService : Service() {
                     )
                 )
                 // 兜底：系统闹钟到点必定唤醒，不依赖本服务存活
-                RestAlarmScheduler.schedule(this, endTime)
+                if (intent.getBooleanExtra(EXTRA_USE_ALARM, true)) {
+                    RestAlarmScheduler.schedule(this, endTime)
+                } else {
+                    RestAlarmScheduler.cancel(this)
+                }
                 scheduleFinish()
                 startTicking()
             }
 
             ACTION_EXTEND -> {
                 val extra = intent.getIntExtra(EXTRA_SECONDS, 30)
+                val useAlarm = intent.getBooleanExtra(EXTRA_USE_ALARM, true)
                 if (endTime > System.currentTimeMillis()) {
                     endTime += extra * 1000L
                     totalSeconds += extra
@@ -88,7 +93,11 @@ class RestTimerService : Service() {
                             )
                         )
                     }
-                    RestAlarmScheduler.schedule(this, endTime)
+                    if (useAlarm) {
+                        RestAlarmScheduler.schedule(this, endTime)
+                    } else {
+                        RestAlarmScheduler.cancel(this)
+                    }
                     scheduleFinish()
                     startTicking()
                 }
@@ -146,19 +155,27 @@ class RestTimerService : Service() {
         const val ACTION_STOP = "com.yfantasyxx.action.REST_STOP"
         const val EXTRA_SECONDS = "extra_seconds"
         const val EXTRA_LABEL = "extra_label"
+        const val EXTRA_USE_ALARM = "extra_use_alarm"
 
-        fun start(context: Context, seconds: Int, label: String? = null) {
+        fun start(
+            context: Context,
+            seconds: Int,
+            label: String? = null,
+            useAlarm: Boolean = true,
+        ) {
             val intent = Intent(context, RestTimerService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_SECONDS, seconds)
                 .putExtra(EXTRA_LABEL, label)
+                .putExtra(EXTRA_USE_ALARM, useAlarm)
             ContextCompat.startForegroundService(context, intent)
         }
 
-        fun extend(context: Context, extraSeconds: Int = 30) {
+        fun extend(context: Context, extraSeconds: Int = 30, useAlarm: Boolean = true) {
             val intent = Intent(context, RestTimerService::class.java)
                 .setAction(ACTION_EXTEND)
                 .putExtra(EXTRA_SECONDS, extraSeconds)
+                .putExtra(EXTRA_USE_ALARM, useAlarm)
             runCatching { context.startService(intent) }
         }
 

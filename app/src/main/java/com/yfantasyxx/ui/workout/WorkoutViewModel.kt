@@ -274,7 +274,8 @@ class WorkoutViewModel(
             _currentExerciseId.value = exerciseId
             restLabel = label
             _restFinished.value = false
-            RestTimerService.start(context, seconds, label)
+            val useAlarm = settingsRepo.settings.first().backgroundRestAlarm
+            RestTimerService.start(context, seconds, label, useAlarm)
             _restTimer.value = RestTimerState(
                 running = true,
                 remainingSeconds = seconds,
@@ -293,7 +294,8 @@ class WorkoutViewModel(
     fun restartRestTimer(seconds: Int) {
         viewModelScope.launch {
             _restFinished.value = false
-            RestTimerService.start(context, seconds, restLabel)
+            val useAlarm = settingsRepo.settings.first().backgroundRestAlarm
+            RestTimerService.start(context, seconds, restLabel, useAlarm)
             _restTimer.value = RestTimerState(
                 running = true,
                 remainingSeconds = seconds,
@@ -380,7 +382,10 @@ class WorkoutViewModel(
     }
 
     fun extendRestTimer(extraSeconds: Int) {
-        RestTimerService.extend(context, extraSeconds)
+        viewModelScope.launch {
+            val useAlarm = settingsRepo.settings.first().backgroundRestAlarm
+            RestTimerService.extend(context, extraSeconds, useAlarm)
+        }
     }
 
     /** 完成训练 */

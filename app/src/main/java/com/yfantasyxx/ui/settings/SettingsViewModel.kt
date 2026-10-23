@@ -46,6 +46,10 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepo.setTapHaptics(enabled) }
     }
 
+    fun setBackgroundRestAlarm(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setBackgroundRestAlarm(enabled) }
+    }
+
     fun setBlurBottomBar(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.setBlurBottomBar(enabled) }
     }

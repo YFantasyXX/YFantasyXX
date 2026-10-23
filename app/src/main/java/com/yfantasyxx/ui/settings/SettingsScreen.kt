@@ -193,6 +193,22 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         step = 15f,
                         unit = "s",
                     )
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("后台休息提醒", style = MiuixTheme.textStyles.main)
+                            Text(
+                                text = "关闭后不再设置系统闹钟，退出 App 后将无法收到休息提醒",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Switch(
+                            checked = settings.backgroundRestAlarm,
+                            onCheckedChange = { vm.setBackgroundRestAlarm(it) },
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
