@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.imePadding
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
@@ -204,7 +205,12 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
             )
         },
     ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
+        // Android 15+ edge-to-edge 下 adjustResize 不生效，需显式避让键盘
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .imePadding()
+        ) {
             top.yukonga.miuix.kmp.basic.TextField(
                 value = state.name,
                 onValueChange = vm::setName,

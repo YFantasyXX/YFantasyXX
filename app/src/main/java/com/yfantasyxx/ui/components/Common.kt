@@ -49,6 +49,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 
 /** 页面分组标题 */
 @Composable
@@ -141,6 +143,16 @@ fun NumberStepper(
         return result
     }
 
+    // 键盘弹出（IME insets 变大）后再滚动，确保不被挡住
+    val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime
+        .getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    LaunchedEffect(imeBottom, editing) {
+        if (editing && imeBottom > 0) {
+            kotlinx.coroutines.delay(120)
+            runCatching { bringIntoView.bringIntoView() }
+        }
+    }
+
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
@@ -217,11 +229,9 @@ fun NumberStepper(
                         },
                 )
                 LaunchedEffect(Unit) {
-                    // 等输入框挂载后请求焦点，再滚动到可视区（避免被键盘遮挡）
+                    // 输入框挂载后请求焦点
                     kotlinx.coroutines.delay(60)
                     runCatching { focusRequester.requestFocus() }
-                    kotlinx.coroutines.delay(120)
-                    runCatching { bringIntoView.bringIntoView() }
                 }
             } else {
                 Text(

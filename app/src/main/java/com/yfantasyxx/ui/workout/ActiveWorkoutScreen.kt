@@ -65,6 +65,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.imePadding
 
 @Composable
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
@@ -115,7 +116,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             )
         },
     ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
+        Box(
+            modifier = Modifier
+                .padding(padding)
+                .imePadding()
+        ) {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
