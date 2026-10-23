@@ -346,13 +346,13 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                             "(${com.yfantasyxx.BuildConfig.VERSION_CODE}) · " +
                             com.yfantasyxx.BuildConfig.BUILD_TYPE
                     )
-                    InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
-                    InfoRow("屏幕刷新率", refreshRateLabel)
-                    InfoRow("数据存储", "本地 Room + WebDAV 备份")
                     InfoRow(
                         "机型",
                         "${android.os.Build.BRAND} ${android.os.Build.MODEL}"
                     )
+                    InfoRow("屏幕刷新率", refreshRateLabel)
+                    InfoRow("数据存储", "本地 Room + WebDAV 备份")
+                    InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
                 }
             }
         }
