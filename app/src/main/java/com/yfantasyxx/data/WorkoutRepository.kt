@@ -67,6 +67,9 @@ class WorkoutRepository(private val db: AppDatabase) {
         }
     }
 
+    /** 启动清理：历史版本异常退出可能留下多个未完成草稿 */
+    suspend fun cleanupStaleDrafts() = sessionDao.deleteStaleDrafts()
+
     // ---------- 模板 ----------
 
     fun observeTemplates(): Flow<List<WorkoutTemplate>> = templateDao.observeAll()
@@ -118,6 +121,10 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun getActiveDraft(): List<SessionExerciseWithSets>? =
         sessionDao.getActiveDraft()?.exercises
+
+    /** 进行中草稿的 session id（草稿可能还没有任何动作） */
+    suspend fun getActiveSessionId(): Long? =
+        sessionDao.getActiveDraft()?.session?.id
 
     /** 开始一次新训练（可从模板带入动作）；已有进行中的草稿时直接复用 */
     suspend fun startSession(templateId: Long? = null, name: String = ""): Long {

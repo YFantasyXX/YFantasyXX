@@ -54,48 +54,48 @@ class WorkoutViewModel(
     private var timerJob: Job? = null
     private var observeJob: Job? = null
 
-    /** 确保有一个进行中的训练（没有就创建） */
+    /** 确保有一个进行中的训练（没有就创建）。空草稿（无动作）也必须能正常进入。 */
     fun ensureSession(onReady: () -> Unit = {}) {
         if (_sessionId.value != null) {
             onReady()
             return
         }
         viewModelScope.launch {
-            val draft = repo.getActiveDraft()
-            if (draft != null) {
-                startObserving(draft.first().sessionExercise.sessionId)
-            } else {
-                val newId = repo.startSession()
-                startObserving(newId)
-            }
+            // 注意：空训练草稿的动作列表是空 List（非 null），不能用 first()
+            val draftId = repo.getActiveDraft()?.firstOrNull()?.sessionExercise?.sessionId
+            val existingId = draftId ?: repo.getActiveSessionId()
+            val id = existingId ?: repo.startSession()
+            startObserving(id)
             startTicker()
             onReady()
         }
     }
 
-    private fun startObserving(id: Long) {
+    private suspend fun startObserving(id: Long) {
         _sessionId.value = id
+        _session.value = repo.getSession(id)
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
                 _exercises.value = list
-                // 刷新上次表现参考
-                val map = list.associate { item ->
-                    item.sessionExercise.exerciseId to
-                        (repo.lastPerformance(item.sessionExercise.exerciseId))
+                // 仅在动作增减时刷新"上次表现"参考（组数据变化不需要重查）
+                val ids = list.map { it.sessionExercise.exerciseId }
+                if (ids != loadedPerformanceIds) {
+                    loadedPerformanceIds = ids
+                    _lastPerformance.value = ids.associateWith { exerciseId ->
+                        repo.lastPerformance(exerciseId)
+                    }
                 }
-                _lastPerformance.value = map
             }
-        }
-        viewModelScope.launch {
-            _session.value = repo.getSession(id)
         }
     }
 
+    private var loadedPerformanceIds: List<Long> = emptyList()
+
     private fun startTicker() {
         tickerJob?.cancel()
+        val start = _session.value?.startTime ?: System.currentTimeMillis()
         tickerJob = viewModelScope.launch {
-            val start = _session.value?.startTime ?: System.currentTimeMillis()
             while (true) {
                 _elapsedSeconds.value = ((System.currentTimeMillis() - start) / 1000).toInt()
                 delay(1000)
@@ -116,14 +116,13 @@ class WorkoutViewModel(
         viewModelScope.launch { repo.removeSessionExercise(sessionExerciseId) }
     }
 
-    /** 更新一组：重量/次数/RPE/完成 */
+    /** 更新一组的重量/次数/RPE（不改变完成状态） */
     fun updateSet(set: SetLog, weightKg: Float? = null, reps: Int? = null, rpe: Float? = null) {
         viewModelScope.launch {
             val updated = set.copy(
                 weightKg = weightKg ?: set.weightKg,
                 reps = reps ?: set.reps,
                 rpe = rpe ?: set.rpe,
-                completed = true,
             )
             repo.updateSet(updated)
         }

@@ -19,9 +19,10 @@ class YFantasyXXApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
-        // 首次启动写入内置动作库
+        // 首次启动写入内置动作库；清理异常退出留下的重复草稿
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()
+            container.workoutRepository.cleanupStaleDrafts()
         }
     }
 }

@@ -156,6 +156,16 @@ interface SessionDao {
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun delete(id: Long)
 
+    /** 清理多余的进行中草稿，只保留最近一个 */
+    @Query(
+        """
+        DELETE FROM sessions WHERE endTime IS NULL AND id NOT IN (
+            SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+        )
+        """
+    )
+    suspend fun deleteStaleDrafts()
+
     // ---- 统计 ----
 
     /** 近 N 天每周训练容量（毫秒时间戳起） */
