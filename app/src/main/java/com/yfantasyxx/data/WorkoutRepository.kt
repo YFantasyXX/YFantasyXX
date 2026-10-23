@@ -19,6 +19,7 @@ import com.yfantasyxx.data.seed.ExerciseSeed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import com.yfantasyxx.data.db.TemplateFolder
 
 /**
  * 统一数据仓库：动作库 / 模板 / 训练记录 / 身体数据
@@ -85,11 +86,28 @@ class WorkoutRepository(private val db: AppDatabase) {
         name: String,
         note: String,
         items: List<TemplateExerciseDraft>,
+        folderId: Long? = null,
     ): Long {
         val id = if (templateId == null) {
-            templateDao.insert(WorkoutTemplate(name = name.trim(), note = note.trim()))
+            templateDao.insert(
+                WorkoutTemplate(
+                    name = name.trim(),
+                    note = note.trim(),
+                    folderId = folderId,
+                    sortOrder = 0,
+                )
+            )
         } else {
-            templateDao.update(WorkoutTemplate(id = templateId, name = name.trim(), note = note.trim()))
+            val current = templateDao.getWithExercises(templateId)?.template
+            templateDao.update(
+                WorkoutTemplate(
+                    id = templateId,
+                    name = name.trim(),
+                    note = note.trim(),
+                    folderId = current?.folderId ?: folderId,
+                    sortOrder = current?.sortOrder ?: 0,
+                )
+            )
             templateId
         }
         templateDao.deleteExercisesOfTemplate(id)
@@ -110,6 +128,32 @@ class WorkoutRepository(private val db: AppDatabase) {
     }
 
     suspend fun deleteTemplate(template: WorkoutTemplate) = templateDao.delete(template)
+
+    // ---------- 模板文件夹 ----------
+
+    fun observeFolders(): Flow<List<TemplateFolder>> = templateDao.observeFolders()
+
+    suspend fun createFolder(name: String): Long =
+        templateDao.insertFolder(TemplateFolder(name = name.trim()))
+
+    suspend fun renameFolder(id: Long, name: String) =
+        templateDao.renameFolder(id, name.trim())
+
+    suspend fun deleteFolder(id: Long) {
+        templateDao.clearFolder(id)
+        templateDao.deleteFolder(id)
+    }
+
+    /** 把模板移动到指定文件夹的指定位置 */
+    suspend fun moveTemplate(templateId: Long, folderId: Long?, order: Int) =
+        templateDao.updateTemplatePlacement(templateId, folderId, order)
+
+    /** 批量重排某分组内的模板顺序 */
+    suspend fun reorderTemplates(folderId: Long?, orderedIds: List<Long>) {
+        orderedIds.forEachIndexed { index, id ->
+            templateDao.updateTemplatePlacement(id, folderId, index)
+        }
+    }
 
     data class TemplateExerciseDraft(
         val exerciseId: Long,

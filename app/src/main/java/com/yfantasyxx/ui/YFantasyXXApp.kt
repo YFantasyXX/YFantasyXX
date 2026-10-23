@@ -61,7 +61,8 @@ object Routes {
     const val SESSION_DETAIL = "session_detail"
     const val EXERCISE_DETAIL = "exercise_detail"
 
-    fun templateEdit(id: Long? = null) = "template_edit?id=$id"
+    fun templateEdit(id: Long? = null, folderId: Long? = null) =
+        "template_edit?id=$id&folder=$folderId"
     fun sessionDetail(id: Long) = "session_detail/$id"
     fun exerciseDetail(id: Long) = "exercise_detail/$id"
 }
@@ -146,14 +147,16 @@ private fun YFantasyXXNavHost() {
             composable(Routes.TEMPLATES) {
                 TemplatesScreen(
                     onEditTemplate = { id -> navController.navigate(Routes.templateEdit(id)) },
-                    onCreateTemplate = { navController.navigate(Routes.templateEdit(null)) },
+                    onCreateTemplate = { folderId ->
+                        navController.navigate(Routes.templateEdit(null, folderId))
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable("${Routes.TEMPLATE_EDIT}?id={id}") { entry ->
-                val id = entry.arguments?.getString("id")?.toLongOrNull()
+            composable("${Routes.TEMPLATE_EDIT}?id={id}&folder={folder}") { entry ->
                 TemplateEditScreen(
-                    templateId = id,
+                    templateId = entry.arguments?.getString("id")?.toLongOrNull(),
+                    folderId = entry.arguments?.getString("folder")?.toLongOrNull(),
                     onBack = { navController.popBackStack() },
                 )
             }

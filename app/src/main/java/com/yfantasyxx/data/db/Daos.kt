@@ -52,8 +52,29 @@ interface ExerciseDao {
 
 @Dao
 interface TemplateDao {
-    @Query("SELECT * FROM templates ORDER BY createdAt DESC")
+    @Query("SELECT * FROM templates ORDER BY sortOrder, createdAt DESC")
     fun observeAll(): Flow<List<WorkoutTemplate>>
+
+    @Query("SELECT * FROM template_folders ORDER BY sortOrder, id")
+    fun observeFolders(): Flow<List<com.yfantasyxx.data.db.TemplateFolder>>
+
+    @Insert
+    suspend fun insertFolder(folder: com.yfantasyxx.data.db.TemplateFolder): Long
+
+    @Update
+    suspend fun updateFolder(folder: com.yfantasyxx.data.db.TemplateFolder)
+
+    @Query("UPDATE template_folders SET name = :name WHERE id = :id")
+    suspend fun renameFolder(id: Long, name: String)
+
+    @Query("DELETE FROM template_folders WHERE id = :id")
+    suspend fun deleteFolder(id: Long)
+
+    @Query("UPDATE templates SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: Long)
+
+    @Query("UPDATE templates SET folderId = :folderId, sortOrder = :order WHERE id = :id")
+    suspend fun updateTemplatePlacement(id: Long, folderId: Long?, order: Int)
 
     @Transaction
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
@@ -315,13 +336,14 @@ interface BodyMetricDao {
     entities = [
         Exercise::class,
         WorkoutTemplate::class,
+        TemplateFolder::class,
         TemplateExercise::class,
         WorkoutSession::class,
         SessionExercise::class,
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -334,6 +356,21 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /** v4 -> v5：模板支持文件夹分类与自定义排序 */
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS template_folders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        sortOrder INTEGER NOT NULL DEFAULT 0
+                    )"""
+                )
+                db.execSQL("ALTER TABLE templates ADD COLUMN folderId INTEGER")
+                db.execSQL("ALTER TABLE templates ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         /** v3 -> v4：训练记录增加实际开始计时时刻 */
         val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {

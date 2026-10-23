@@ -63,18 +63,34 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.CreateNewFolder
 
 private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
 
 @Composable
 fun TemplatesScreen(
     onEditTemplate: (Long) -> Unit,
-    onCreateTemplate: () -> Unit,
+    onCreateTemplate: (Long?) -> Unit,
     onBack: () -> Unit,
 ) {
     val container = rememberAppContainer()
     val vm: TemplatesViewModel = viewModel(factory = TemplatesViewModel.factory(container))
-    val templates by vm.templates.collectAsState()
+    val groups by vm.groups.collectAsState()
+    val folders by vm.folders.collectAsState()
+
+    var showNewFolder by remember { mutableStateOf(false) }
+    var folderNameInput by remember { mutableStateOf("") }
+    var renamingFolder by remember { mutableStateOf<com.yfantasyxx.data.db.TemplateFolder?>(null) }
+    var moveTarget by remember { mutableStateOf<WorkoutTemplate?>(null) }
+
+    // 拖动排序状态
+    val density = LocalDensity.current
+    val rowHeightPx = with(density) { 84.dp.toPx() }
+    val haptics = LocalHapticFeedback.current
+    var draggingId by remember { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
 
     Scaffold(
         topBar = {
@@ -90,7 +106,17 @@ fun TemplatesScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onCreateTemplate) {
+                    IconButton(onClick = {
+                        folderNameInput = ""
+                        showNewFolder = true
+                    }) {
+                        Icon(
+                            imageVector = Icons.Filled.CreateNewFolder,
+                            contentDescription = "新建文件夹",
+                            tint = MiuixTheme.colorScheme.primary,
+                        )
+                    }
+                    IconButton(onClick = { onCreateTemplate(null) }) {
                         Icon(
                             imageVector = Icons.Filled.Add,
                             contentDescription = "新建模板",
@@ -101,11 +127,11 @@ fun TemplatesScreen(
             )
         },
     ) { padding ->
-        if (templates.isEmpty()) {
+        if (groups.isEmpty()) {
             EmptyState(
                 text = "还没有训练模板\n创建模板可以快速开始常规训练",
                 action = {
-                    Button(onClick = onCreateTemplate) {
+                    Button(onClick = { onCreateTemplate(null) }) {
                         Text("新建模板", style = MiuixTheme.textStyles.button)
                     }
                 },
@@ -115,61 +141,322 @@ fun TemplatesScreen(
                 modifier = Modifier.padding(padding),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     start = 16.dp,
-                    top = 16.dp,
+                    top = 12.dp,
                     end = 16.dp,
                     bottom = 16.dp + com.yfantasyxx.ui.LocalBottomBarSpace.current
                 ),
             ) {
-                items(templates, key = { it.id }) { tpl ->
-                    TemplateRow(
-                        template = tpl,
-                        onClick = { onEditTemplate(tpl.id) },
-                        onDelete = { vm.delete(tpl) },
-                    )
+                groups.forEach { group ->
+                    item(key = "folder_${group.folderId}") {
+                        FolderHeader(
+                            name = group.folderName ?: "未分组",
+                            count = group.templates.size,
+                            isRealFolder = group.folderId != null,
+                            onAddTemplate = { onCreateTemplate(group.folderId) },
+                            onRename = {
+                                renamingFolder = folders.firstOrNull { it.id == group.folderId }
+                                folderNameInput = group.folderName.orEmpty()
+                            },
+                            onDelete = { group.folderId?.let(vm::deleteFolder) },
+                        )
+                    }
+
+                    itemsIndexed(group.templates, key = { _, t -> t.id }) { index, tpl ->
+                        val isDragging = draggingId == tpl.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp)
+                                .zIndex(if (isDragging) 1f else 0f)
+                                .graphicsLayer {
+                                    translationY = if (isDragging) dragOffsetY else 0f
+                                    shadowElevation = if (isDragging) 10f else 0f
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // 拖动把手
+                            Box(
+                                modifier = Modifier
+                                    .width(30.dp)
+                                    .height(64.dp)
+                                    .pointerInput(group.folderId, group.templates.size) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                draggingId = tpl.id
+                                                dragOffsetY = 0f
+                                                haptics.performHapticFeedback(
+                                                    HapticFeedbackType.LongPress
+                                                )
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                dragOffsetY += amount.y
+                                                val g = vm.groups.value
+                                                    .firstOrNull { it.folderId == group.folderId }
+                                                    ?: return@detectDragGesturesAfterLongPress
+                                                val current =
+                                                    g.templates.indexOfFirst { it.id == tpl.id }
+                                                if (current >= 0) {
+                                                    val shift =
+                                                        (dragOffsetY / rowHeightPx).roundToInt()
+                                                    val target = (current + shift)
+                                                        .coerceIn(0, g.templates.lastIndex)
+                                                    if (target != current) {
+                                                        vm.moveInGroup(
+                                                            group.folderId,
+                                                            current,
+                                                            target
+                                                        )
+                                                        dragOffsetY -=
+                                                            (target - current) * rowHeightPx
+                                                    }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                draggingId = null
+                                                dragOffsetY = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggingId = null
+                                                dragOffsetY = 0f
+                                            },
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Menu,
+                                    contentDescription = "长按拖动排序",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                        .copy(alpha = 0.6f),
+                                )
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f),
+                                onClick = { onEditTemplate(tpl.id) },
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(
+                                        start = 14.dp,
+                                        end = 6.dp,
+                                        top = 12.dp,
+                                        bottom = 12.dp
+                                    ),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = tpl.name,
+                                            style = MiuixTheme.textStyles.main,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = SimpleDateFormat(
+                                                "yyyy-MM-dd 创建",
+                                                Locale.CHINA
+                                            ).format(Date(tpl.createdAt)),
+                                            style = MiuixTheme.textStyles.footnote1,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                    }
+                                    ActionText(
+                                        text = "移动",
+                                        onClick = { moveTarget = tpl },
+                                    )
+                                    IconButton(onClick = { vm.delete(tpl) }) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Delete,
+                                            contentDescription = "删除模板",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MiuixTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (group.templates.isEmpty()) {
+                        item(key = "empty_${group.folderId}") {
+                            Text(
+                                text = "这个文件夹还没有模板",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                modifier = Modifier.padding(start = 34.dp, top = 4.dp, bottom = 8.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 新建文件夹 ----
+    if (showNewFolder) {
+        AppDialog(
+            title = "新建文件夹",
+            onDismissRequest = { showNewFolder = false },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = folderNameInput,
+                    onValueChange = { folderNameInput = it },
+                    label = "文件夹名称（如：推类 / 拉类）",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionText(text = "取消", onClick = { showNewFolder = false })
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            vm.createFolder(folderNameInput)
+                            folderNameInput = ""
+                            showNewFolder = false
+                        },
+                        enabled = folderNameInput.isNotBlank(),
+                    ) {
+                        Text("创建", style = MiuixTheme.textStyles.button)
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 重命名文件夹 ----
+    renamingFolder?.let { folder ->
+        AppDialog(
+            title = "重命名文件夹",
+            onDismissRequest = { renamingFolder = null },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                top.yukonga.miuix.kmp.basic.TextField(
+                    value = folderNameInput,
+                    onValueChange = { folderNameInput = it },
+                    label = "文件夹名称",
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionText(text = "取消", onClick = { renamingFolder = null })
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            vm.renameFolder(folder.id, folderNameInput)
+                            renamingFolder = null
+                        },
+                        enabled = folderNameInput.isNotBlank(),
+                    ) {
+                        Text("保存", style = MiuixTheme.textStyles.button)
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 移动到文件夹 ----
+    moveTarget?.let { tpl ->
+        AppDialog(
+            title = "移动到文件夹",
+            summary = tpl.name,
+            onDismissRequest = { moveTarget = null },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                val options = buildList {
+                    add(null to "未分组")
+                    folders.forEach { add(it.id to it.name) }
+                }
+                options.forEach { (id, name) ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        onClick = {
+                            vm.moveToFolder(tpl, id)
+                            moveTarget = null
+                        },
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = name,
+                                style = MiuixTheme.textStyles.main,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (tpl.folderId == id) {
+                                Text(
+                                    text = "当前",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+/** 分组标题 */
 @Composable
-private fun TemplateRow(
-    template: WorkoutTemplate,
-    onClick: () -> Unit,
+private fun FolderHeader(
+    name: String,
+    count: Int,
+    isRealFolder: Boolean,
+    onAddTemplate: () -> Unit,
+    onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        onClick = onClick,
+            .padding(top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(template.name, style = MiuixTheme.textStyles.main)
-                Text(
-                    text = SimpleDateFormat("yyyy-MM-dd 创建", Locale.CHINA)
-                        .format(Date(template.createdAt)),
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "删除模板",
-                    tint = MiuixTheme.colorScheme.error,
-                )
-            }
+        Icon(
+            imageVector = if (isRealFolder) Icons.Filled.Folder else Icons.Filled.Inbox,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MiuixTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = name,
+            style = MiuixTheme.textStyles.subtitle,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "$count",
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        if (isRealFolder) {
+            ActionText(text = "改名", onClick = onRename)
+            ActionText(text = "删除", onClick = onDelete, color = MiuixTheme.colorScheme.error)
         }
+        ActionText(text = "+ 模板", onClick = onAddTemplate)
     }
 }
 
 @Composable
-fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
+fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: TemplateEditViewModel = viewModel(factory = TemplateEditViewModel.factory(container))
     val state by vm.state.collectAsState()
@@ -204,7 +491,7 @@ fun TemplateEditScreen(templateId: Long?, onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    ActionText(text = "保存", onClick = { vm.save { onBack() } },
+                    ActionText(text = "保存", onClick = { vm.save(folderId) { onBack() } },
                         enabled = state.name.isNotBlank() && state.items.isNotEmpty(),)
                 },
             )

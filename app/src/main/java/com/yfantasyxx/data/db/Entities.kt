@@ -65,6 +65,21 @@ data class WorkoutTemplate(
     val name: String,
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
+    /** 所属文件夹；null 表示未分组 */
+    val folderId: Long? = null,
+    /** 同组内排序 */
+    val sortOrder: Int = 0,
+)
+
+/**
+ * 模板文件夹（用于给模板分类）
+ */
+@Entity(tableName = "template_folders")
+data class TemplateFolder(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val sortOrder: Int = 0,
 )
 
 /**

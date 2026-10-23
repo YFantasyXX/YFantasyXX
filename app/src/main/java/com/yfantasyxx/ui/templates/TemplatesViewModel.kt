@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 
 data class TemplateEditUiState(
     val name: String = "",
@@ -33,13 +34,86 @@ data class EditableTemplateItem(
     val isWarmup: Boolean,
 )
 
+/** 模板分组（folderId 为 null 表示未分组） */
+data class TemplateGroup(
+    val folderId: Long?,
+    val folderName: String?,
+    val templates: List<WorkoutTemplate>,
+)
+
 class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
 
     val templates: StateFlow<List<WorkoutTemplate>> = repo.observeTemplates()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _groups = MutableStateFlow<List<TemplateGroup>>(emptyList())
+    val groups: StateFlow<List<TemplateGroup>> = _groups
+
+    private val _folders = MutableStateFlow<List<com.yfantasyxx.data.db.TemplateFolder>>(emptyList())
+    val folders: StateFlow<List<com.yfantasyxx.data.db.TemplateFolder>> = _folders
+
+    init {
+        viewModelScope.launch {
+            combine(repo.observeTemplates(), repo.observeFolders()) { list, folderList ->
+                _folders.value = folderList
+                val byFolder = list.groupBy { it.folderId }
+                buildList {
+                    folderList.forEach { folder ->
+                        add(
+                            TemplateGroup(
+                                folderId = folder.id,
+                                folderName = folder.name,
+                                templates = byFolder[folder.id].orEmpty(),
+                            )
+                        )
+                    }
+                    byFolder[null]?.takeIf { it.isNotEmpty() }?.let { loose ->
+                        add(TemplateGroup(folderId = null, folderName = null, templates = loose))
+                    }
+                }
+            }.collect { _groups.value = it }
+        }
+    }
+
     fun delete(template: WorkoutTemplate) {
         viewModelScope.launch { repo.deleteTemplate(template) }
+    }
+
+    fun createFolder(name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch { repo.createFolder(name) }
+    }
+
+    fun renameFolder(id: Long, name: String) {
+        if (name.isBlank()) return
+        viewModelScope.launch { repo.renameFolder(id, name) }
+    }
+
+    fun deleteFolder(id: Long) {
+        viewModelScope.launch { repo.deleteFolder(id) }
+    }
+
+    /** 把模板移动到某个文件夹（追加到末尾） */
+    fun moveToFolder(template: WorkoutTemplate, folderId: Long?) {
+        if (template.folderId == folderId) return
+        viewModelScope.launch {
+            val count = _groups.value.firstOrNull { it.folderId == folderId }?.templates?.size ?: 0
+            repo.moveTemplate(template.id, folderId, count)
+        }
+    }
+
+    /** 分组内拖动排序 */
+    fun moveInGroup(folderId: Long?, from: Int, to: Int) {
+        val list = _groups.value.toMutableList()
+        val gi = list.indexOfFirst { it.folderId == folderId }
+        if (gi < 0) return
+        val items = list[gi].templates.toMutableList()
+        if (from !in items.indices || to !in items.indices || from == to) return
+        val moved = items.removeAt(from)
+        items.add(to, moved)
+        list[gi] = list[gi].copy(templates = items)
+        _groups.value = list
+        viewModelScope.launch { repo.reorderTemplates(folderId, items.map { it.id }) }
     }
 
     companion object {
@@ -170,7 +244,7 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         _state.value = _state.value.copy(items = _state.value.items.filterNot { it.key == key })
     }
 
-    fun save(onDone: () -> Unit) {
+    fun save(folderId: Long? = null, onDone: () -> Unit) {
         val s = _state.value
         if (s.name.isBlank() || s.items.isEmpty()) return
         viewModelScope.launch {
@@ -178,6 +252,7 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                 templateId = templateId,
                 name = s.name,
                 note = s.note,
+                folderId = folderId,
                 items = s.items.map {
                     WorkoutRepository.TemplateExerciseDraft(
                         exerciseId = it.exerciseId,
