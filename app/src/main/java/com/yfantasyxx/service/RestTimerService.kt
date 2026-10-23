@@ -38,6 +38,22 @@ class RestTimerService : Service() {
 
     private val finishRunnable = Runnable { onFinished() }
 
+    /** 每秒刷新通知，让用户直接看到「剩余 88s」这样的实时秒数 */
+    private val tickRunnable = object : Runnable {
+        override fun run() {
+            val remaining = ((endTime - System.currentTimeMillis()) / 1000).toInt()
+            if (remaining > 0) {
+                runCatching {
+                    notificationManager().notify(
+                        NOTIF_COUNTDOWN,
+                        buildCountdownNotification(endTime, remaining)
+                    )
+                }
+                handler.postDelayed(this, 1000)
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,6 +65,7 @@ class RestTimerService : Service() {
                 ensureChannels()
                 startForeground(NOTIF_COUNTDOWN, buildCountdownNotification(endTime, totalSeconds))
                 scheduleFinish()
+                startTicking()
             }
 
             ACTION_EXTEND -> {
@@ -60,9 +77,10 @@ class RestTimerService : Service() {
                     ensureChannels()
                     notificationManager().notify(
                         NOTIF_COUNTDOWN,
-                        buildCountdownNotification(endTime, totalSeconds)
+                        buildCountdownNotification(endTime, ((endTime - System.currentTimeMillis()) / 1000).toInt())
                     )
                     scheduleFinish()
+                    startTicking()
                 }
             }
 
@@ -80,14 +98,21 @@ class RestTimerService : Service() {
         handler.postDelayed(finishRunnable, delay)
     }
 
+    private fun startTicking() {
+        handler.removeCallbacks(tickRunnable)
+        handler.postDelayed(tickRunnable, 1000)
+    }
+
     private fun cancelTimer() {
         handler.removeCallbacks(finishRunnable)
+        handler.removeCallbacks(tickRunnable)
         RestTimerStore.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun onFinished() {
         handler.removeCallbacks(finishRunnable)
+        handler.removeCallbacks(tickRunnable)
         RestTimerStore.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         // 结束提醒（声音 + 震动）
@@ -147,7 +172,7 @@ class RestTimerService : Service() {
         }
     }
 
-    private fun buildCountdownNotification(endTime: Long, seconds: Int): Notification {
+    private fun buildCountdownNotification(endTime: Long, remainingSeconds: Int): Notification {
         val openApp = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).apply {
@@ -170,12 +195,19 @@ class RestTimerService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_COUNTDOWN)
             .setSmallIcon(R.drawable.ic_timer_notification)
-            .setContentTitle("组间休息中")
-            .setContentText("休息 $seconds 秒，结束后提醒你")
+            .setContentTitle("组间休息 · 剩余 ${remainingSeconds}s")
+            .setContentText("结束后会提醒你")
             .setContentIntent(openApp)
+            // 系统级倒计时：两次刷新之间也保持准确
             .setWhen(endTime)
             .setUsesChronometer(true)
             .setChronometerCountDown(true)
+            // 进度条随剩余时间递减，展开通知可见
+            .setProgress(
+                totalSeconds.coerceAtLeast(1),
+                (totalSeconds - remainingSeconds).coerceIn(0, totalSeconds),
+                false
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
