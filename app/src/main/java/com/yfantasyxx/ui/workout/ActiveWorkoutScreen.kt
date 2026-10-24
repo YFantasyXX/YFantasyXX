@@ -142,6 +142,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     // 若以后在动作列表前面再加 item，这里必须同步 +1。
     val headerItemCount = (if (error != null) 1 else 0) +
         (if (restTimer.running) 1 else 0)
+    // 休息倒计时卡 / 错误卡会随状态出现、消失，动作下标整体位移一位。
+    // 手势块捕获的是组合时的快照，拖动过程中头部 item 一变，算出的下标就全错位
+    // （落点错、让位范围错）——所以用 State 读最新值。
+    val liveHeaderCount by rememberUpdatedState(headerItemCount)
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -365,14 +369,30 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 }
 
-                itemsIndexed(
-                    displayExercises,
-                    key = { _, it -> it.sessionExercise.id },
-                ) { index, item ->
+                // 注意：这里【故意不写 key = 动作 id】。
+                //
+                // LazyList 换序后会按「换序前第一个可见 item 的 key」重新锚定滚动位置
+                // （LazyListScrollPosition.updateScrollPositionIfTheFirstItemWasMoved
+                //  → findIndexByKey(lastKnownFirstItemKey) → setIndex）。
+                // 用动作 id 当 key 时，把第 2 个拖到第 1 个，旧的第 1 个仍被钉在顶部，
+                // 整个列表往下平移一张卡高 —— 新的第 1 个被挤到可视区之外，
+                // 必须手动上滑才看得到。这就是「看不到新的第一个」的原因。
+                //
+                // 用默认的下标 key 时，换序只换内容不换 key，锚点下标不变，
+                // 列表完全不滚动，位置保持原样，正好与拖动时的让位动画一致。
+                // 卡片里依赖身份的本地状态都已经提到 collapsedIds / ViewModel，
+                // 每行输入框是 remember(set.id)，换序不会串味。
+                itemsIndexed(displayExercises) { index, item ->
                     val id = item.sessionExercise.id
                     val isDragging = draggingId == id
                     val isCollapsed = collapsedIds[id] == true
                     val primaryColor = MiuixTheme.colorScheme.primary
+
+                    // pointerInput(id) 只在 id 变化时重建手势块。
+                    // 换序后 id 不变、下标变了，手势块里捕获的 index 会一直是旧值 ——
+                    // 让位范围算错、落点落错位置，表现就是「拖动动作和动画不一致」。
+                    // 用 rememberUpdatedState 保证手势里读到的永远是当前下标。
+                    val liveIndex by rememberUpdatedState(index)
 
                     // 实时让位：拖动到哪一格，那一段就先滑开一个卡片高的空隙。
                     // 只做视觉平移，不动列表顺序，所以不会引发布局反馈环。
@@ -526,7 +546,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                         val slop = viewConfiguration.touchSlop
                                         var started = false
                                         // 落点：每帧重算，默认就是「回原位」
-                                        var target = index
+                                        var target = liveIndex
 
                                         while (true) {
                                             val event = awaitPointerEvent()
@@ -544,12 +564,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                                 started = true
                                                 // 进入拖动态：记下起点和卡片高度，
                                                 // 相邻卡片开始让位
-                                                dragFromIndex = index
-                                                dragTargetIndex = index
+                                                dragFromIndex = liveIndex
+                                                dragTargetIndex = liveIndex
                                                 dragHeight = listState.layoutInfo
                                                     .visibleItemsInfo
                                                     .firstOrNull {
-                                                        it.index == headerItemCount + index
+                                                        it.index == liveHeaderCount + liveIndex
                                                     }?.size?.toFloat() ?: 0f
                                                 draggingId = id
                                                 haptics.performHapticFeedback(
@@ -571,7 +591,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             val self = listState.layoutInfo
                                                 .visibleItemsInfo
                                                 .firstOrNull {
-                                                    it.index == headerItemCount + index
+                                                    it.index == liveHeaderCount + liveIndex
                                                 }
                                                 ?: continue
                                             // 卡片视觉中心 = 布局偏移 + 半高 + 拖动量
@@ -580,13 +600,13 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             // 换位判据：卡片中心【真正越过】对方中心才换，
                                             // 不是「离谁最近算谁」——后者手指一动就整格跳。
                                             // 向下拖：越过几个就落到第几个；向上拖取最近的那个。
-                                            target = index
+                                            target = liveIndex
                                             val items = listState.layoutInfo.visibleItemsInfo
                                             if (total > 0f) {
                                                 items.forEach { info ->
                                                     val idx =
-                                                        info.index - headerItemCount
-                                                    if (idx <= index || idx >= size) {
+                                                        info.index - liveHeaderCount
+                                                    if (idx <= liveIndex || idx >= size) {
                                                         return@forEach
                                                     }
                                                     val center =
@@ -599,15 +619,15 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             } else if (total < 0f) {
                                                 items.forEach { info ->
                                                     val idx =
-                                                        info.index - headerItemCount
-                                                    if (idx < 0 || idx >= index) {
+                                                        info.index - liveHeaderCount
+                                                    if (idx < 0 || idx >= liveIndex) {
                                                         return@forEach
                                                     }
                                                     val center =
                                                         info.offset + info.size / 2f
                                                     // 目标是「最靠下（最近）的那个被越过的」
                                                     if (center > visualCenter &&
-                                                        (target == index || idx < target)
+                                                        (target == liveIndex || idx < target)
                                                     ) {
                                                         target = idx
                                                     }
@@ -621,8 +641,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
                                         // ---- 松手：只下单，动画与落库由 LaunchedEffect 执行 ----
                                         val count = latestExercises.size
-                                        val moved = started && index in 0 until count &&
-                                            target in 0 until count && target != index
+                                        val moved = started && liveIndex in 0 until count &&
+                                            target in 0 until count && target != liveIndex
                                         when {
                                             !started -> {
                                                 draggingId = null
@@ -636,26 +656,26 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                                 listState.layoutInfo.visibleItemsInfo
                                                     .forEach { info ->
                                                         val idx =
-                                                            info.index - headerItemCount
-                                                        if (target > index) {
-                                                            if (idx > index &&
+                                                            info.index - liveHeaderCount
+                                                        if (target > liveIndex) {
+                                                            if (idx > liveIndex &&
                                                                 idx <= target
                                                             ) {
                                                                 gap += info.size
                                                             }
                                                         } else {
                                                             if (idx >= target &&
-                                                                idx < index
+                                                                idx < liveIndex
                                                             ) {
                                                                 gap -= info.size
                                                             }
                                                         }
                                                     }
-                                                pendingDrop = DropPlan(index, target, gap)
+                                                pendingDrop = DropPlan(liveIndex, target, gap)
                                             }
                                             else -> {
                                                 // 没有换位：滑回原位
-                                                pendingDrop = DropPlan(index, index, 0f)
+                                                pendingDrop = DropPlan(liveIndex, liveIndex, 0f)
                                             }
                                         }
                                     }
