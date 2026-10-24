@@ -154,21 +154,21 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         vm.restoreRestTimer()
     }
 
-    // 拖动落位：滑进空隙 → 同一帧换序并清位移 → 落库
+    // 拖动落位：滑进空隙 → 同一帧换序并清位移 → 等布局接管 → 撤掉拎起态 → 落库
     LaunchedEffect(pendingDrop) {
         val plan = pendingDrop ?: return@LaunchedEffect
         // 1) 先平滑滑进已经让出来的空隙
         slideTo(dragOffsetY, plan.gap, 160L) { dragOffsetY = it }
 
-        // 2) 换序 + 清位移 + 收回让位，全部在同一帧完成，
-        //    这样卡片正好落在空隙里，视觉上没有跳变
+        // 2) 换序 + 清位移 + 收回让位，必须在同一帧、同一个同步块里写完。
+        //    这三件事分开到两帧，中间那帧就是「新布局 + 旧位移」或者
+        //    「旧布局 + 新位移」，卡片会猛地跳一格。
         val moved = plan.to != plan.from
         if (moved) {
             val ids = latestExercises.map { it.sessionExercise.id }.toMutableList()
             ids.add(plan.to, ids.removeAt(plan.from))
             localOrderIds = ids
         }
-        draggingId = null
         dragFromIndex = -1
         dragTargetIndex = -1
         dragOffsetY = 0f
@@ -178,6 +178,16 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             vm.moveExerciseLocal(plan.from, plan.to)
             vm.persistExerciseOrder()
         }
+
+        // 4) 拎起态（放大 / 阴影 / 描边）晚两帧再撤。
+        //    换序后 item 的组合会重建（key 换了槽位），如果同一帧就把
+        //    scale 从 1.02 清成 1、阴影直接抹掉，卡片边缘会硬缩一下，
+        //    看起来就是「整页抽一下」。等布局换完再撤，
+        //    liftAnim 会用 120ms 平滑落回 1.0，视觉上是「放下去」。
+        withFrameNanos { }
+        withFrameNanos { }
+        draggingId = null
+
         pendingDrop = null
     }
 
@@ -379,9 +389,24 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         animationSpec = tween(160),
                         label = "dragShift",
                     )
-                    // 拖动结束的一瞬间立即归零：此时布局已经换成新顺序，
-                    // 位置由布局接管，不能让让位动画再回弹一次
-                    val shift = if (dragFromIndex >= 0) shiftAnim.value else 0f
+                    // 关键：这里【不要】读 shiftAnim.value。
+                    // 在组合阶段读 = 让位动画每帧都让整张卡片重新组合一次。
+                    // 松手那一帧本来就要换序 + 全列表重新测量，再叠加每个 item
+                    // 的重组，这一帧必然掉帧，肉眼就是「整页抽一下」。
+                    // 把 State 本身带进 graphicsLayer，在绘制阶段才读值：
+                    // 让位动画只失效绘制层，不触发组合与测量。
+                    // 拖动结束时（dragFromIndex = -1）直接置空，让位瞬间归零——
+                    // 此刻布局已经换成新顺序，由布局接管位置，不能回弹一次。
+                    val shiftState = if (dragFromIndex >= 0) shiftAnim else null
+
+                    // 「被拎起来」的放大和阴影也要做成动画。
+                    // 原来松手瞬间 scale 从 1.02 硬跳回 1、阴影 12px 直接消失，
+                    // 卡片边缘一下子收缩回去，看起来就像整页抽了一下。
+                    val liftAnim = animateFloatAsState(
+                        targetValue = if (isDragging) 1f else 0f,
+                        animationSpec = tween(120),
+                        label = "dragLift",
+                    )
 
                     // 外层 Box 只用来承接手势，它自己【永远不平移】。
                     //
@@ -403,24 +428,34 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
-                                    // 被拖的卡片跟手，其它卡片让位；两者都在 draw 阶段读取，
-                                    // 拖动过程中不触发重组
-                                    translationY =
-                                        if (draggingId == id) dragOffsetY else shift
-                                    shadowElevation = if (draggingId == id) 12f else 0f
-                                    // 轻微放大一点，让它看起来「被拎起来了」
-                                    val s = if (draggingId == id) 1.02f else 1f
+                                    // 下面这些值全部在【绘制阶段】读取：
+                                    // graphicsLayer 的 lambda 由 draw 阶段重新执行，
+                                    // 不触发组合、不触发测量。
+                                    // 所以拖动时每帧只更新图层，整张卡片不重组。
+                                    val lifted = liftAnim.value
+                                    // 被拖的卡片跟手，其它卡片让位
+                                    translationY = if (isDragging) {
+                                        dragOffsetY
+                                    } else {
+                                        shiftState?.value ?: 0f
+                                    }
+                                    // 阴影和放大跟着 liftAnim 一起淡入淡出，
+                                    // 松手时不会「啪」一下收回去
+                                    shadowElevation = 12f * lifted
+                                    val s = 1f + 0.02f * lifted
                                     scaleX = s
                                     scaleY = s
                                 }
                                 // 拖动高亮：drawBehind 画在内容下层，
-                                // 不参与测量，不会引发布局反馈环
+                                // 不参与测量，不会引发布局反馈环。
+                                // 透明度跟 liftAnim 一起淡出，松手时不会硬切掉。
                                 .drawBehind {
-                                    if (isDragging) {
+                                    val a = liftAnim.value
+                                    if (a > 0.01f) {
                                         val stroke = 3.dp.toPx()
                                         val inset = stroke / 2f
                                         drawRoundRect(
-                                            color = primaryColor,
+                                            color = primaryColor.copy(alpha = a),
                                             topLeft = androidx.compose.ui.geometry.Offset(
                                                 inset, inset
                                             ),
