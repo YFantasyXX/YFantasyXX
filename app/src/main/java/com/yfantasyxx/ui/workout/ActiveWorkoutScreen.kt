@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -25,10 +27,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -100,8 +104,33 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     // 正在拖动的动作 id（null = 没在拖）
     var draggingId by remember { mutableStateOf<Long?>(null) }
-    // 拖动位移：只在 graphicsLayer 的 draw 阶段读取，不参与重组
+    // 被拖动作原来的下标（-1 = 没有拖动在进行）
+    var dragFromIndex by remember { mutableIntStateOf(-1) }
+    // 当前落点下标：相邻卡片据此实时让出空隙
+    var dragTargetIndex by remember { mutableIntStateOf(-1) }
+    // 被拖卡片高度（px）：相邻卡片让位的高度
+    var dragHeight by remember { mutableFloatStateOf(0f) }
+    // 拖动位移（px）。手势里直接写，落位动画由下面的 LaunchedEffect 驱动
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    // 一次「落位计划」：手势只负责下单，动画和落库放到普通协程里做
+    // （awaitEachGesture 是受限作用域，不能调挂起函数）
+    var pendingDrop by remember { mutableStateOf<DropPlan?>(null) }
+    // 拖动落位后的临时顺序（id 列表）。
+    // 为什么要它：数据库顺序更新是异步的（StateFlow → collectAsState），
+    // 如果等它回来再清视觉位移，中间必然有一帧「新布局 + 旧位移」的错位闪烁。
+    // 用 Compose 状态立即换序，就能让「换序」和「清位移」落在同一帧。
+    var localOrderIds by remember { mutableStateOf<List<Long>?>(null) }
+    val displayExercises = remember(exercises, localOrderIds) {
+        val ids = localOrderIds
+        if (ids == null) {
+            exercises
+        } else {
+            val byId = exercises.associateBy { it.sessionExercise.id }
+            // 顺序按 ids 走，ids 里没有的（新增动作等）接在后面
+            ids.mapNotNull { byId[it] } +
+                exercises.filter { it.sessionExercise.id !in ids }
+        }
+    }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
     // 拖动期间要拿到最新的动作顺序（而不是手势启动那一刻的快照）
@@ -123,6 +152,41 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         vm.ensureSession()
         // 退出过 App 的话，恢复仍在跑的休息倒计时
         vm.restoreRestTimer()
+    }
+
+    // 拖动落位：滑进空隙 → 同一帧换序并清位移 → 落库
+    LaunchedEffect(pendingDrop) {
+        val plan = pendingDrop ?: return@LaunchedEffect
+        // 1) 先平滑滑进已经让出来的空隙
+        slideTo(dragOffsetY, plan.gap, 160L) { dragOffsetY = it }
+
+        // 2) 换序 + 清位移 + 收回让位，全部在同一帧完成，
+        //    这样卡片正好落在空隙里，视觉上没有跳变
+        val moved = plan.to != plan.from
+        if (moved) {
+            val ids = latestExercises.map { it.sessionExercise.id }.toMutableList()
+            ids.add(plan.to, ids.removeAt(plan.from))
+            localOrderIds = ids
+        }
+        draggingId = null
+        dragFromIndex = -1
+        dragTargetIndex = -1
+        dragOffsetY = 0f
+
+        // 3) 落库（异步，界面已用临时顺序顶上了）
+        if (moved) {
+            vm.moveExerciseLocal(plan.from, plan.to)
+            vm.persistExerciseOrder()
+        }
+        pendingDrop = null
+    }
+
+    // 数据库顺序追上来之后，撤掉临时顺序
+    LaunchedEffect(exercises, localOrderIds) {
+        val ids = localOrderIds ?: return@LaunchedEffect
+        if (ids == exercises.map { it.sessionExercise.id }) {
+            localOrderIds = null
+        }
     }
 
     Scaffold(
@@ -291,11 +355,33 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 }
 
-                itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { index, item ->
+                itemsIndexed(
+                    displayExercises,
+                    key = { _, it -> it.sessionExercise.id },
+                ) { index, item ->
                     val id = item.sessionExercise.id
                     val isDragging = draggingId == id
                     val isCollapsed = collapsedIds[id] == true
                     val primaryColor = MiuixTheme.colorScheme.primary
+
+                    // 实时让位：拖动到哪一格，那一段就先滑开一个卡片高的空隙。
+                    // 只做视觉平移，不动列表顺序，所以不会引发布局反馈环。
+                    val shiftTarget = when {
+                        dragFromIndex < 0 || index == dragFromIndex -> 0f
+                        dragTargetIndex > dragFromIndex &&
+                            index > dragFromIndex && index <= dragTargetIndex -> -dragHeight
+                        dragTargetIndex < dragFromIndex &&
+                            index >= dragTargetIndex && index < dragFromIndex -> dragHeight
+                        else -> 0f
+                    }
+                    val shiftAnim = animateFloatAsState(
+                        targetValue = shiftTarget,
+                        animationSpec = tween(160),
+                        label = "dragShift",
+                    )
+                    // 拖动结束的一瞬间立即归零：此时布局已经换成新顺序，
+                    // 位置由布局接管，不能让让位动画再回弹一次
+                    val shift = if (dragFromIndex >= 0) shiftAnim.value else 0f
 
                     // 外层 Box 只用来承接手势，它自己【永远不平移】。
                     //
@@ -317,8 +403,15 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
-                                    translationY = if (draggingId == id) dragOffsetY else 0f
+                                    // 被拖的卡片跟手，其它卡片让位；两者都在 draw 阶段读取，
+                                    // 拖动过程中不触发重组
+                                    translationY =
+                                        if (draggingId == id) dragOffsetY else shift
                                     shadowElevation = if (draggingId == id) 12f else 0f
+                                    // 轻微放大一点，让它看起来「被拎起来了」
+                                    val s = if (draggingId == id) 1.02f else 1f
+                                    scaleX = s
+                                    scaleY = s
                                 }
                                 // 拖动高亮：drawBehind 画在内容下层，
                                 // 不参与测量，不会引发布局反馈环
@@ -414,6 +507,15 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             if (!started) {
                                                 if (abs(total) < slop) continue
                                                 started = true
+                                                // 进入拖动态：记下起点和卡片高度，
+                                                // 相邻卡片开始让位
+                                                dragFromIndex = index
+                                                dragTargetIndex = index
+                                                dragHeight = listState.layoutInfo
+                                                    .visibleItemsInfo
+                                                    .firstOrNull {
+                                                        it.index == headerItemCount + index
+                                                    }?.size?.toFloat() ?: 0f
                                                 draggingId = id
                                                 haptics.performHapticFeedback(
                                                     HapticFeedbackType.TextHandleMove
@@ -476,21 +578,51 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                                     }
                                                 }
                                             }
-                                        }
-
-                                        // ---- 松手：应用排序并一次性落库 ----
-                                        if (started) {
-                                            val size = latestExercises.size
-                                            if (index in 0 until size &&
-                                                target in 0 until size &&
-                                                target != index
-                                            ) {
-                                                vm.moveExerciseLocal(index, target)
-                                                vm.persistExerciseOrder()
+                                            // 落点变了就同步给相邻卡片，让它们滑开空隙
+                                            if (target != dragTargetIndex) {
+                                                dragTargetIndex = target
                                             }
                                         }
-                                        draggingId = null
-                                        dragOffsetY = 0f
+
+                                        // ---- 松手：只下单，动画与落库由 LaunchedEffect 执行 ----
+                                        val count = latestExercises.size
+                                        val moved = started && index in 0 until count &&
+                                            target in 0 until count && target != index
+                                        when {
+                                            !started -> {
+                                                draggingId = null
+                                                dragFromIndex = -1
+                                                dragTargetIndex = -1
+                                                dragOffsetY = 0f
+                                            }
+                                            moved -> {
+                                                // 滑进空隙的距离 = 中间被越过卡片的高度之和
+                                                var gap = 0f
+                                                listState.layoutInfo.visibleItemsInfo
+                                                    .forEach { info ->
+                                                        val idx =
+                                                            info.index - headerItemCount
+                                                        if (target > index) {
+                                                            if (idx > index &&
+                                                                idx <= target
+                                                            ) {
+                                                                gap += info.size
+                                                            }
+                                                        } else {
+                                                            if (idx >= target &&
+                                                                idx < index
+                                                            ) {
+                                                                gap -= info.size
+                                                            }
+                                                        }
+                                                    }
+                                                pendingDrop = DropPlan(index, target, gap)
+                                            }
+                                            else -> {
+                                                // 没有换位：滑回原位
+                                                pendingDrop = DropPlan(index, index, 0f)
+                                            }
+                                        }
                                     }
                                 },
                         )
@@ -1083,5 +1215,34 @@ private fun formatDuration(seconds: Int): String {
         "%d:%02d:%02d".format(h, m, s)
     } else {
         "%02d:%02d".format(m, s)
+    }
+}
+
+/**
+ * 一次拖动落位计划。
+ * 手势回调（awaitEachGesture）是受限协程作用域，不能调用挂起函数，
+ * 所以手势只把「落点 + 需要滑动的距离」记下来，动画和落库交给 LaunchedEffect。
+ */
+private class DropPlan(val from: Int, val to: Int, val gap: Float)
+
+/**
+ * 手动补间：把视觉位移从 [from] 平滑推到 [to]。
+ * 用 smoothstep 曲线（先慢—中快—再慢），比线性自然。
+ */
+private suspend fun slideTo(
+    from: Float,
+    to: Float,
+    durationMs: Long,
+    onUpdate: (Float) -> Unit,
+) {
+    if (from == to) return
+    val startNanos = withFrameNanos { it }
+    val totalNanos = durationMs * 1_000_000f
+    while (true) {
+        val now = withFrameNanos { it }
+        val p = ((now - startNanos) / totalNanos).coerceIn(0f, 1f)
+        val eased = p * p * (3f - 2f * p)
+        onUpdate(from + (to - from) * eased)
+        if (p >= 1f) break
     }
 }
