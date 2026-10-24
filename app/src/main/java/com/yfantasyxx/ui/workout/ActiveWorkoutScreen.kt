@@ -397,7 +397,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                         down.consume()
                                         val slop = viewConfiguration.touchSlop
                                         var started = false
-                                        var target = -1
+                                        // 落点：每帧重算，默认就是「回原位」
+                                        var target = index
 
                                         while (true) {
                                             val event = awaitPointerEvent()
@@ -439,26 +440,42 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             // 卡片视觉中心 = 布局偏移 + 半高 + 拖动量
                                             val visualCenter =
                                                 self.offset + self.size / 2f + total
-                                            var best = Float.MAX_VALUE
-                                            listState.layoutInfo.visibleItemsInfo
-                                                .forEach { info ->
-                                                    if (info.index ==
-                                                        headerItemCount + index
-                                                    ) {
-                                                        return@forEach
-                                                    }
-                                                    val idx = info.index - headerItemCount
-                                                    if (idx !in 0 until size) {
+                                            // 换位判据：卡片中心【真正越过】对方中心才换，
+                                            // 不是「离谁最近算谁」——后者手指一动就整格跳。
+                                            // 向下拖：越过几个就落到第几个；向上拖取最近的那个。
+                                            target = index
+                                            val items = listState.layoutInfo.visibleItemsInfo
+                                            if (total > 0f) {
+                                                items.forEach { info ->
+                                                    val idx =
+                                                        info.index - headerItemCount
+                                                    if (idx <= index || idx >= size) {
                                                         return@forEach
                                                     }
                                                     val center =
                                                         info.offset + info.size / 2f
-                                                    val d = abs(center - visualCenter)
-                                                    if (d < best) {
-                                                        best = d
+                                                    // 目标是「最后一个被越过的」，迭代到头自然如此
+                                                    if (center < visualCenter) {
                                                         target = idx
                                                     }
                                                 }
+                                            } else if (total < 0f) {
+                                                items.forEach { info ->
+                                                    val idx =
+                                                        info.index - headerItemCount
+                                                    if (idx < 0 || idx >= index) {
+                                                        return@forEach
+                                                    }
+                                                    val center =
+                                                        info.offset + info.size / 2f
+                                                    // 目标是「最靠下（最近）的那个被越过的」
+                                                    if (center > visualCenter &&
+                                                        (target == index || idx < target)
+                                                    ) {
+                                                        target = idx
+                                                    }
+                                                }
+                                            }
                                         }
 
                                         // ---- 松手：应用排序并一次性落库 ----
