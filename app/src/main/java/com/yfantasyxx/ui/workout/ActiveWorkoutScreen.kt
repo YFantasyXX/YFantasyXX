@@ -108,6 +108,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val latestExercises by rememberUpdatedState(exercises)
     // 列表状态：拖动时用它读各 item 的真实布局位置（官方数据源，比自记坐标可靠）
     val listState = rememberLazyListState()
+    // 动作列表之前还有几个 item（错误提示卡 / 休息倒计时卡）。
+    // visibleItemsInfo.index 是「整个 LazyColumn 的下标」，减掉它才是动作下标。
+    // 若以后在动作列表前面再加 item，这里必须同步 +1。
+    val headerItemCount = (if (error != null) 1 else 0) +
+        (if (restTimer.running) 1 else 0)
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -286,7 +291,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 }
 
-                itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { _, item ->
+                itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { index, item ->
                     val id = item.sessionExercise.id
                     val isDragging = draggingId == id
                     val isCollapsed = collapsedIds[id] == true
@@ -417,10 +422,19 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
                                             // ---- 只计算目标位，不改列表顺序 ----
                                             // 拖动中改顺序 → 重新布局 → 坐标变化 →
-                                            // 又触发换位判断，会形成闪烁反馈环
-                                            val list = latestExercises
-                                            val self = listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.key == id }
+                                            // 又触发换位判断，会形成闪烁反馈环。
+                                            //
+                                            // 下标换算说明：动作列表前面还有「错误提示卡」和
+                                            // 「休息倒计时卡」，所以 visibleItemsInfo.index
+                                            // 要减去 headerItemCount 才是动作下标。
+                                            // 不用 item key 反查——key 一旦对不上，
+                                            // 整条逻辑会静默失效（排查成本极高）。
+                                            val size = latestExercises.size
+                                            val self = listState.layoutInfo
+                                                .visibleItemsInfo
+                                                .firstOrNull {
+                                                    it.index == headerItemCount + index
+                                                }
                                                 ?: continue
                                             // 卡片视觉中心 = 布局偏移 + 半高 + 拖动量
                                             val visualCenter =
@@ -428,15 +442,15 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             var best = Float.MAX_VALUE
                                             listState.layoutInfo.visibleItemsInfo
                                                 .forEach { info ->
-                                                    if (info.key == id) return@forEach
-                                                    // 列表前面还有休息卡片/错误卡片，
-                                                    // info.index 不是动作下标，必须按 key 换算
-                                                    val otherId = info.key as? Long
-                                                        ?: return@forEach
-                                                    val idx = list.indexOfFirst {
-                                                        it.sessionExercise.id == otherId
+                                                    if (info.index ==
+                                                        headerItemCount + index
+                                                    ) {
+                                                        return@forEach
                                                     }
-                                                    if (idx < 0) return@forEach
+                                                    val idx = info.index - headerItemCount
+                                                    if (idx !in 0 until size) {
+                                                        return@forEach
+                                                    }
                                                     val center =
                                                         info.offset + info.size / 2f
                                                     val d = abs(center - visualCenter)
@@ -449,15 +463,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
                                         // ---- 松手：应用排序并一次性落库 ----
                                         if (started) {
-                                            val list = latestExercises
-                                            val from = list.indexOfFirst {
-                                                it.sessionExercise.id == id
-                                            }
-                                            if (from >= 0 &&
-                                                target in list.indices &&
-                                                target != from
+                                            val size = latestExercises.size
+                                            if (index in 0 until size &&
+                                                target in 0 until size &&
+                                                target != index
                                             ) {
-                                                vm.moveExerciseLocal(from, target)
+                                                vm.moveExerciseLocal(index, target)
                                                 vm.persistExerciseOrder()
                                             }
                                         }

@@ -191,7 +191,7 @@ class WorkoutRepository(private val db: AppDatabase) {
     fun observeActiveSession(): Flow<ActiveSessionSummary?> = sessionDao.observeActiveSummary()
 
     suspend fun getActiveDraft(): List<SessionExerciseWithSets>? =
-        sessionDao.getActiveDraft()?.exercises
+        sessionDao.getActiveDraft()?.exercises?.sortedBySessionOrder()
 
     /** 进行中草稿的 session id（草稿可能还没有任何动作） */
     suspend fun getActiveSessionId(): Long? =
@@ -318,10 +318,12 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun discardSession(id: Long) = sessionDao.delete(id)
 
     suspend fun getSessionDetails(id: Long): List<SessionExerciseWithSets>? =
-        sessionDao.getWithDetails(id)?.exercises
+        sessionDao.getWithDetails(id)?.exercises?.sortedBySessionOrder()
 
     fun observeSessionDetails(id: Long): Flow<List<SessionExerciseWithSets>> =
-        sessionDao.observeSession(id).map { it?.exercises ?: emptyList() }
+        sessionDao.observeSession(id).map {
+            it?.exercises?.sortedBySessionOrder() ?: emptyList()
+        }
 
     suspend fun getSession(id: Long): WorkoutSession? = sessionDao.getById(id)
 
@@ -393,7 +395,7 @@ class WorkoutRepository(private val db: AppDatabase) {
             val details = sessionDao.getWithDetails(summary.id) ?: return@forEach
             val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
                 .format(java.util.Date(summary.startTime))
-            details.exercises.forEach { item ->
+            details.exercises.sortedBySessionOrder().forEach { item ->
                 item.sets.filter { it.completed }.sortedBy { it.setNumber }.forEach { set ->
                     sb.append(
                         "%s,%s,%s,%d,%d,%.1f,%.1f\n".format(
@@ -417,3 +419,14 @@ class WorkoutRepository(private val db: AppDatabase) {
             "\"" + value.replace("\"", "\"\"") + "\""
         } else value
 }
+
+/**
+ * Room 的 [androidx.room.Relation] 子查询是 `WHERE x IN (...)`，【没有 ORDER BY】，
+ * 返回顺序由 SQLite 决定（实际就是插入顺序/rowid）。
+ * 所以 sortOrder 虽然写进了库，读取时却没人理会——拖动排序会被立刻“还原”。
+ * 统一在内存里按 sortOrder 排一遍，sortOrder 才真正生效。
+ */
+private fun List<SessionExerciseWithSets>.sortedBySessionOrder(): List<SessionExerciseWithSets> =
+    sortedWith(
+        compareBy({ it.sessionExercise.sortOrder }, { it.sessionExercise.id })
+    )
