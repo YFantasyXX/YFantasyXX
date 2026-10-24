@@ -765,6 +765,25 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                         )
                                     }
                                 }
+
+                                // 进阶策略：训练时会按这个规则给出「该上多少」
+                                Spacer(Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "进阶",
+                                        fontSize = 11.sp,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    com.yfantasyxx.data.ProgressionMode.entries.forEach { mode ->
+                                        com.yfantasyxx.ui.components.FilterChip(
+                                            label = mode.shortLabel,
+                                            selected = item.progression == mode,
+                                            onClick = { vm.updateItem(item.key, progression = mode) },
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                }
                             }
                         }
                     }

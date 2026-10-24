@@ -20,6 +20,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -75,6 +77,14 @@ class WorkoutViewModel(
         _restFinished.value = false
     }
 
+    /** 提示音/震动等全局设置（杠铃片计算器要用杆重与配片） */
+    val settings: kotlinx.coroutines.flow.StateFlow<com.yfantasyxx.data.prefs.AppSettings> =
+        settingsRepo.settings.stateIn(
+            viewModelScope,
+            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+            com.yfantasyxx.data.prefs.AppSettings(),
+        )
+
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
     val lastPerformance: StateFlow<Map<Long, List<SetLog>>> = _lastPerformance.asStateFlow()
@@ -121,6 +131,7 @@ class WorkoutViewModel(
         _sessionId.value = id
         _session.value = repo.getSession(id)
         refreshDefaultName()
+        loadProgressionModes()
         localOrderLock = false
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
@@ -141,6 +152,37 @@ class WorkoutViewModel(
     }
 
     private var loadedPerformanceIds: List<Long> = emptyList()
+
+    /**
+     * 动作 → 进阶策略（来自模板）。
+     *
+     * 空的训练没有模板，也就没有目标次数，进阶建议自然不出现，
+     * 所以这里查不到时给空表即可，不用回落到全局默认。
+     */
+    private val _progressionModes = MutableStateFlow<Map<Long, com.yfantasyxx.data.ProgressionMode>>(
+        emptyMap()
+    )
+    val progressionModes: StateFlow<Map<Long, com.yfantasyxx.data.ProgressionMode>> =
+        _progressionModes.asStateFlow()
+
+    private suspend fun loadProgressionModes() {
+        val templateId = _session.value?.templateId ?: return
+        val tpl = repo.getTemplate(templateId) ?: return
+        _progressionModes.value = tpl.items.associate {
+            it.exercise.id to com.yfantasyxx.data.ProgressionMode.from(it.templateExercise.progression)
+        }
+    }
+
+    /** 应用进阶建议：把所有未完成的组改成建议的重量与次数 */
+    fun applyProgression(item: SessionExerciseWithSets, weightKg: Float, reps: Int) {
+        viewModelScope.launch {
+            runCatching {
+                item.sets.filter { !it.completed }.forEach { set ->
+                    repo.updateSet(set.copy(weightKg = weightKg, reps = reps))
+                }
+            }.onFailure { e -> _error.value = "应用进阶建议失败：${e.message.orEmpty()}" }
+        }
+    }
 
     private fun startTicker() {
         tickerJob?.cancel()
@@ -243,6 +285,70 @@ class WorkoutViewModel(
         }
     }
 
+    /**
+     * 复制上一组：把上一组的重量与次数填进第一个未完成的组。
+     *
+     * 全部组都完成了就新建一组并把最后一组复制过去 ——
+     * 「再来一组同样的」是最常见的意图，不该逼用户先点添加再点复制。
+     * 第一组没有上一组可抄，静默不动（提示反而打扰）。
+     */
+    fun copyPreviousSet(item: SessionExerciseWithSets) {
+        val sets = item.sets.sortedBy { it.setNumber }
+        if (sets.isEmpty()) return
+        val target = sets.firstOrNull { !it.completed }
+        viewModelScope.launch {
+            runCatching {
+                if (target == null) {
+                    val last = sets.last()
+                    repo.addSet(item.sessionExercise.id, last.weightKg, last.reps)
+                } else {
+                    val index = sets.indexOf(target)
+                    val source = sets.take(index).lastOrNull() ?: return@runCatching
+                    repo.updateSet(target.copy(weightKg = source.weightKg, reps = source.reps))
+                }
+            }.onFailure { e -> _error.value = "复制失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    /** 训练中替换动作：组、组号、排序、超级组全部保留 */
+    fun replaceExercise(sessionExerciseId: Long, newExerciseId: Long) {
+        viewModelScope.launch {
+            runCatching {
+                repo.replaceSessionExercise(sessionExerciseId, newExerciseId)
+                // 动作换了，「上次表现」也得换。这个映射原本只在动作增减时刷新，
+                // 换动作不改 sessionExercise id，所以要手动重载一次。
+                _exercises.value.let { list ->
+                    val ids = list.map { it.sessionExercise.exerciseId }
+                    loadedPerformanceIds = ids
+                    _lastPerformance.value = ids.distinct().associateWith {
+                        repo.lastPerformance(it)
+                    }
+                }
+            }.onFailure { e -> _error.value = "替换动作失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    /** 组成 / 退出超级组。组队只影响休息时机与展示，不改组数据 */
+    fun toggleSuperset(current: SessionExerciseWithSets, nextSessionExerciseId: Long?) {
+        val sessionId = _sessionId.value ?: return
+        viewModelScope.launch {
+            runCatching {
+                if (current.sessionExercise.supersetGroup != null) {
+                    repo.unlinkSuperset(sessionId, current.sessionExercise.id)
+                } else if (nextSessionExerciseId != null) {
+                    repo.linkSuperset(sessionId, current.sessionExercise.id, nextSessionExerciseId)
+                }
+            }.onFailure { e -> _error.value = "超级组设置失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    fun savePlateSettings(barWeightKg: Float, plates: String) {
+        viewModelScope.launch {
+            settingsRepo.setBarWeight(barWeightKg)
+            settingsRepo.setPlates(plates)
+        }
+    }
+
     fun removeExercise(sessionExerciseId: Long) {
         viewModelScope.launch {
             runCatching { repo.removeSessionExercise(sessionExerciseId) }
@@ -286,9 +392,33 @@ class WorkoutViewModel(
                 } else {
                     "第 ${set.setNumber} 组"
                 }
-                startRestTimerFor(exerciseId, set.sessionExerciseId, label)
+                // 超级组里交替做，组内不休息：只有轮到最后那一个才起计时器
+                val supersetGroup = item?.sessionExercise?.supersetGroup
+                if (supersetGroup == null || isLastOfSupersetRound(item, set, supersetGroup)) {
+                    startRestTimerFor(exerciseId, set.sessionExerciseId, label)
+                }
             }
         }
+    }
+
+    /**
+     * 超级组是否轮到了「组末」。
+     *
+     * 判据：同一超级组里，其它动作已完成的组数都不少于我这里做完后的组数。
+     * 只要有同伴还落后，就说明该轮到它了，不该开始长休息。
+     */
+    private fun isLastOfSupersetRound(
+        item: SessionExerciseWithSets,
+        set: SetLog,
+        group: Int,
+    ): Boolean {
+        val peers = _exercises.value.filter {
+            it.sessionExercise.supersetGroup == group && it.sessionExercise.id != set.sessionExerciseId
+        }
+        if (peers.isEmpty()) return true
+        val mine = item.sets.count { it.completed && it.id != set.id } + 1
+        val peerMin = peers.minOf { peer -> peer.sets.count { it.completed } }
+        return peerMin >= mine
     }
 
     /** 标记/取消 PR 组（计入 PR 榜，但不作为下次训练参考重量） */

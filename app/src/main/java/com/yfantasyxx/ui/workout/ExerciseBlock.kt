@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,9 +42,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yfantasyxx.data.Progression
+import com.yfantasyxx.data.ProgressionMode
+import com.yfantasyxx.data.RepRange
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SetLog
 import com.yfantasyxx.ui.components.ActionText
+import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.NumberStepper
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
@@ -64,6 +69,10 @@ internal fun ExerciseBlock(
     unitLabel: String,
     collapsed: Boolean = false,
     onToggleCollapse: () -> Unit = {},
+    /** 超级组编号，非空时在标题行显示标记 */
+    supersetGroup: Int? = null,
+    /** 最后一个动作没有「下一个」，不能组超级组 */
+    canSupersetWithNext: Boolean = true,
     modifier: Modifier = Modifier,
     onUpdateSet: (SetLog, Float, Int) -> Unit,
     onToggleSet: (SetLog) -> Unit,
@@ -71,11 +80,39 @@ internal fun ExerciseBlock(
     onRemoveExercise: () -> Unit,
     onDeleteSet: (SetLog) -> Unit,
     onTogglePr: (SetLog) -> Unit,
+    onCopyPreviousSet: () -> Unit = {},
+    onReplaceExercise: () -> Unit = {},
+    onToggleSuperset: () -> Unit = {},
+    onOpenPlateCalculator: () -> Unit = {},
+    /** 模板里的进阶策略；关闭时不显示建议 */
+    progressionMode: ProgressionMode = ProgressionMode.OFF,
+    onApplyProgression: (Float, Int) -> Unit = { _, _ -> },
 ) {
     val completed = item.sets.count { it.completed }
     val lastSummary = if (lastSets.isNotEmpty()) {
         "上次 " + lastSets.take(3).joinToString(" / ") { "${it.weightKg.toInt()}×${it.reps}" }
     } else ""
+    // 动作级操作收进一个菜单：标题行原来挤了收纳 + 删除两个按钮，
+    // 再加替换/超级组就放不下了，而且删除放这么显眼也容易误触。
+    var showMenu by remember { mutableStateOf(false) }
+
+    // 进阶建议：纯计算，输入是上次训练的工作组 + 目标区间 + 策略。
+    // 规则在 Progression 里，这里只负责展示与「应用」。
+    val range = remember(item.sessionExercise) {
+        item.sessionExercise.let { s ->
+            s.plannedRepsMin?.let { min -> s.plannedRepsMax?.let { max -> RepRange(min, max) } }
+        } ?: RepRange.parseOrDefault(item.sessionExercise.plannedReps)
+    }
+    val suggestion = remember(lastSets, progressionMode, range, item.sets) {
+        Progression.suggest(
+            mode = progressionMode,
+            lastWeight = item.sets.firstOrNull()?.weightKg ?: 0f,
+            range = range,
+            lastSets = lastSets,
+            category = item.exercise.category,
+            equipment = item.exercise.equipment,
+        )
+    }
 
     Card(
         modifier = modifier
@@ -99,6 +136,19 @@ internal fun ExerciseBlock(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        if (supersetGroup != null) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "超级组",
+                                fontSize = 10.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                color = MiuixTheme.colorScheme.onPrimary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MiuixTheme.colorScheme.primary)
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                            )
+                        }
                         if (item.sets.isNotEmpty() && item.sets.all { it.isWarmup }) {
                             Spacer(Modifier.width(6.dp))
                             Text(
@@ -191,18 +241,65 @@ internal fun ExerciseBlock(
                         .size(32.dp)
                         .clip(CircleShape)
                         .background(MiuixTheme.colorScheme.surfaceContainer)
-                        .clickable(onClick = onRemoveExercise),
+                        .clickable { showMenu = true },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "移除动作",
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "更多操作",
                         modifier = Modifier.size(16.dp),
                         tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
                 }
             }
             if (collapsed) return@Column
+
+            // ---- 进阶建议 ----
+            // 放在标题下面而不是弹窗：训练时要的是「一眼看到该上多少」，
+            // 点一下就能把建议填进所有未完成的组。
+            if (suggestion != null) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable {
+                            onApplyProgression(suggestion.weightKg, suggestion.reps)
+                        }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = buildString {
+                                append("进阶 ")
+                                append(fmtWeight(suggestion.weightKg))
+                                append(" kg × ")
+                                append(suggestion.reps)
+                                if (suggestion.addedWeight) append("  ↑")
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.primary,
+                        )
+                        Text(
+                            text = suggestion.reason,
+                            fontSize = 11.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = "应用",
+                        style = MiuixTheme.textStyles.footnote1,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                }
+            }
+
             Spacer(Modifier.height(10.dp))
             top.yukonga.miuix.kmp.basic.HorizontalDivider(
                 color = MiuixTheme.colorScheme.dividerLine.copy(alpha = 0.6f),
@@ -250,10 +347,91 @@ internal fun ExerciseBlock(
                 )
             }
             Spacer(Modifier.height(4.dp))
-            ActionText(text = "+ 添加一组", onClick = onAddSet)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ActionText(text = "+ 添加一组", onClick = onAddSet)
+                Spacer(Modifier.width(4.dp))
+                // 复制上一组：最省手指的一个操作。
+                // 同重量做组时，重量本来就已经填好了，真正要改的是次数。
+                ActionText(text = "复制上一组", onClick = onCopyPreviousSet)
+            }
+        }
+    }
+
+    if (showMenu) {
+        AppDialog(
+            title = item.exercise.name,
+            onDismissRequest = { showMenu = false },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                MenuItem("替换动作", "换成同类动作，已完成的组保留") {
+                    showMenu = false
+                    onReplaceExercise()
+                }
+                MenuItem("杠铃片计算器", "按当前重量反推每边挂什么片") {
+                    showMenu = false
+                    onOpenPlateCalculator()
+                }
+                if (supersetGroup != null) {
+                    MenuItem("退出超级组", "恢复成单独做完再休息") {
+                        showMenu = false
+                        onToggleSuperset()
+                    }
+                } else if (canSupersetWithNext) {
+                    MenuItem("和下一个组成超级组", "两个动作交替做，组末才休息") {
+                        showMenu = false
+                        onToggleSuperset()
+                    }
+                }
+                MenuItem(
+                    text = "移除动作",
+                    hint = "本次训练的组记录会一起删除",
+                    danger = true,
+                ) {
+                    showMenu = false
+                    onRemoveExercise()
+                }
+            }
         }
     }
 }
+
+/** 动作菜单里的一行 */
+@Composable
+private fun MenuItem(
+    text: String,
+    hint: String,
+    danger: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+    ) {
+        Text(
+            text = text,
+            style = MiuixTheme.textStyles.main,
+            color = if (danger) {
+                MiuixTheme.colorScheme.error
+            } else {
+                MiuixTheme.colorScheme.onSurface
+            },
+        )
+        Text(
+            text = hint,
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+    }
+}
+
+/** 重量显示：整数不带小数点 */
+private fun fmtWeight(v: Float): String =
+    if (v == v.toInt().toFloat()) v.toInt().toString() else String.format("%.1f", v)
 
 @Composable
 private fun SetRow(
@@ -268,6 +446,24 @@ private fun SetRow(
     LaunchedEffect(weight, reps) {
         if (weight != set.weightKg || reps != set.reps) {
             onUpdateSet(set, weight, reps)
+        }
+    }
+    // 反向同步：程序也可能改这一组（复制上一组 / 应用进阶建议）。
+    // 判据是「本地值等于上次看到的库值」——说明本地没有还没写回去的改动，
+    // 这时候库值变了就是程序改的，可以安全覆盖；
+    // 否则会出现在输入过程中被写库回包打回原值的问题。
+    var lastDbWeight by remember(set.id) { mutableStateOf(set.weightKg) }
+    var lastDbReps by remember(set.id) { mutableStateOf(set.reps) }
+    LaunchedEffect(set.weightKg) {
+        if (set.weightKg != lastDbWeight) {
+            if (weight == lastDbWeight) weight = set.weightKg
+            lastDbWeight = set.weightKg
+        }
+    }
+    LaunchedEffect(set.reps) {
+        if (set.reps != lastDbReps) {
+            if (reps == lastDbReps) reps = set.reps
+            lastDbReps = set.reps
         }
     }
 

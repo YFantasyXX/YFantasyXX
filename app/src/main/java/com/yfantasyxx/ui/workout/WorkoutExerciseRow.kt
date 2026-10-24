@@ -55,6 +55,13 @@ internal fun WorkoutExerciseRow(
     onRemoveExercise: () -> Unit,
     onDeleteSet: (SetLog) -> Unit,
     onTogglePr: (SetLog) -> Unit,
+    onCopyPreviousSet: () -> Unit,
+    onReplaceExercise: () -> Unit,
+    onToggleSuperset: () -> Unit,
+    onOpenPlateCalculator: () -> Unit,
+    canSupersetWithNext: Boolean,
+    progressionMode: com.yfantasyxx.data.ProgressionMode,
+    onApplyProgression: (Float, Int) -> Unit,
 ) {
     val id = item.sessionExercise.id
     val isDragging = drag.draggingId == id
@@ -175,6 +182,8 @@ internal fun WorkoutExerciseRow(
                 unitLabel = unitLabel,
                 collapsed = collapsed,
                 onToggleCollapse = onToggleCollapse,
+                supersetGroup = item.sessionExercise.supersetGroup,
+                canSupersetWithNext = canSupersetWithNext,
                 modifier = Modifier.weight(1f),
                 onUpdateSet = onUpdateSet,
                 onToggleSet = onToggleSet,
@@ -182,6 +191,12 @@ internal fun WorkoutExerciseRow(
                 onRemoveExercise = onRemoveExercise,
                 onDeleteSet = onDeleteSet,
                 onTogglePr = onTogglePr,
+                onCopyPreviousSet = onCopyPreviousSet,
+                onReplaceExercise = onReplaceExercise,
+                onToggleSuperset = onToggleSuperset,
+                onOpenPlateCalculator = onOpenPlateCalculator,
+                progressionMode = progressionMode,
+                onApplyProgression = onApplyProgression,
             )
         }
 
@@ -201,8 +216,16 @@ internal fun WorkoutExerciseRow(
                         var started = false
                         // 落点：每帧重算，默认就是「回原位」
                         var target = liveIndex
-                        // 起手那一刻的行几何快照，整场手势只读它
+                        // 起手那一刻的行几何快照，整场手势只读它（自动滚动时重拍）
                         var snap: DragSnapshot? = null
+
+                        // 自动滚动用：手指在视口里的初始位置与可视范围
+                        var pointerStart = 0f
+                        var viewportTop = 0f
+                        var viewportBottom = 0f
+                        // 触发区约一张卡片高，最高速 9dp/帧（≈540dp/s）
+                        val zone = 88.dp.toPx()
+                        val maxSpeed = 9.dp.toPx()
 
                         while (true) {
                             val event = awaitPointerEvent()
@@ -225,15 +248,16 @@ internal fun WorkoutExerciseRow(
                                 snap = s
                                 started = true
                                 // 进入拖动态：记下起点和卡片高度，相邻卡片开始让位
-                                drag.fromIndex = liveIndex
-                                drag.targetIndex = liveIndex
-                                drag.cardHeight = s.selfHeight
-                                drag.draggingId = id
+                                drag.begin(id, liveIndex, s)
                                 drag.haptics.performHapticFeedback(
                                     HapticFeedbackType.TextHandleMove
                                 )
+                                val layout = drag.listState.layoutInfo
+                                pointerStart = s.selfTopInViewport + down.position.y
+                                viewportTop = layout.viewportStartOffset.toFloat()
+                                viewportBottom = layout.viewportEndOffset.toFloat()
                             }
-                            drag.offsetY = total
+                            drag.move(total)
 
                             // ---- 只计算目标位，不改列表顺序 ----
                             // 拖动中改顺序 → 重新布局 → 坐标变化 →
@@ -241,13 +265,23 @@ internal fun WorkoutExerciseRow(
                             //
                             // 判据：有多少行的中心在我中心之上，我就排第几位。
                             // 这一条同时覆盖向上和向下，不需要分支，也不会差一格。
-                            // 全部基于起手时的快照，不再读实时布局。
                             val s = snap ?: break
-                            target = s.targetFor(liveIndex, total)
+                            target = s.targetFor(liveIndex, drag.cardCenterY)
                             // 落点变了就同步给相邻卡片，让它们滑开空隙
                             if (target != drag.targetIndex) {
                                 drag.targetIndex = target
                             }
+
+                            // ---- 贴边自动滚动 ----
+                            // 手势只负责「想滚多快」，真正的滚动在屏幕的
+                            // LaunchedEffect 里按帧执行（受限协程作用域里不能挂起）。
+                            drag.autoScrollSpeed = autoScrollSpeed(
+                                pointerY = pointerStart + total,
+                                top = viewportTop,
+                                bottom = viewportBottom,
+                                zone = zone,
+                                maxSpeed = maxSpeed,
+                            )
                         }
 
                         // ---- 松手：只下单，动画与落库由屏幕的 LaunchedEffect 执行 ----

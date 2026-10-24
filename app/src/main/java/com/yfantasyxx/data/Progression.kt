@@ -52,10 +52,16 @@ data class RepRange(val min: Int, val max: Int) {
  * - [LINEAR]：达到次数上限就加重，否则原重量重来。
  * - [DOUBLE]：重量不动，先把次数一格一格推到上限，再加重回到下限。
  */
-enum class ProgressionMode(val value: Int, val label: String, val description: String) {
-    OFF(0, "关闭", "不给建议，按上次重量练"),
-    LINEAR(1, "线性加重", "全部组达到次数上限就加重，否则原重量重来"),
-    DOUBLE(2, "双重进阶", "先加次数，全部到上限后再加重并回到下限"),
+enum class ProgressionMode(
+    val value: Int,
+    val label: String,
+    /** 窄条上用的短标签（模板编辑里的三个胶囊） */
+    val shortLabel: String,
+    val description: String,
+) {
+    OFF(0, "关闭", "关闭", "不给建议，按上次重量练"),
+    LINEAR(1, "线性加重", "线性", "全部组达到次数上限就加重，否则原重量重来"),
+    DOUBLE(2, "双重进阶", "双重", "先加次数，全部到上限后再加重并回到下限"),
     ;
 
     companion object {

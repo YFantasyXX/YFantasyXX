@@ -22,46 +22,53 @@ internal class DropPlan(val from: Int, val to: Int, val gap: Float)
 /**
  * 快照里的一行动作。
  *
- * [centerRel] 是「相对被拖卡片顶部」的中心偏移，不是绝对屏幕坐标。
- * 用相对值的原因：休息倒计时卡可能在拖动途中出现或消失，整列会一起平移，
- * 绝对坐标会全部失效；相对值在整体平移下不变，判定不受影响。
+ * [centerY] 是**视口坐标**（`info.offset + size/2`），不是相对被拖卡片的偏移。
+ *
+ * 为什么从「相对被拖卡片」改成「视口坐标」：
+ * 自动滚动实现后，被拖卡片的布局槽位会随着列表滚出视口，
+ * 相对坐标的基准点就消失了；而视口坐标的基准点永远存在，
+ * 而且列表滚动时整列一起移动，比较关系依然成立。
  */
 internal class DragRow(
     val actionIndex: Int,
-    val centerRel: Float,
+    val centerY: Float,
     val height: Float,
 )
 
 /**
- * 起手那一刻的行几何快照。
+ * 起手那一刻（以及每次自动滚动后）的行几何快照。
  *
- * 为什么必须快照、而不是每帧读 `listState.layoutInfo`：
- * 拖动过程中只做 graphicsLayer 平移、不改列表顺序，布局本来就是冻结的，
- * 一份快照足够用整场手势。反过来每帧读实时布局，会把「自己刚做的平移和
- * 让位」间接读回来，容易形成「读布局 → 改视觉 → 再读」的反馈环。
- *
- * [baseIndex] 是可视区第一个动作下标。列表滚到中间时，
- * 「我上面有几行」只能换算成相对下标，必须加回这个基址才对。
+ * 拖动过程中只做 graphicsLayer 平移、不改列表顺序，布局本来是冻结的，
+ * 一份快照足够用整场手势。唯一的例外是自动滚动：那时必须重拍，
+ * 否则滚出视口的行不在快照里，落点会算不到更远的位置。
  */
 internal class DragSnapshot(
     private val rows: List<DragRow>,
     val selfHeight: Float,
     private val baseIndex: Int,
+    /** 被拖卡片当时在视口里的顶部位置，用来算初始中心 */
+    val selfTopInViewport: Float,
 ) {
+    /** 视口顶 / 底部（LazyColumn 的可视范围） */
+    val firstRowTop: Float get() = rows.first().centerY - rows.first().height / 2f
+    val lastRowBottom: Float get() = rows.last().centerY + rows.last().height / 2f
+
     /**
-     * 落点下标：有多少行的中心在我中心之上，我就排第几位。
+     * 落点下标：有多少行的中心在卡片中心之上，我就排第几位。
      * 这一条同时覆盖向上和向下两个方向，不需要分支，也不会差一格。
      */
-    fun targetFor(from: Int, dy: Float): Int {
+    fun targetFor(from: Int, cardCenterY: Float): Int {
         if (rows.isEmpty()) return from
-        val midRel = selfHeight / 2f + dy
-        val above = rows.count { it.actionIndex != from && it.centerRel < midRel }
+        val above = rows.count { it.actionIndex != from && it.centerY < cardCenterY }
         return (baseIndex + above).coerceIn(baseIndex, rows.last().actionIndex)
     }
 
     /**
      * 松手后卡片需要滑进空隙的距离：
      * 向下拖 = 被越过卡片高度之和，向上拖 = 其负值。
+     *
+     * 这个值同时也是「卡片视觉位置」与「新槽位」之间的差：
+     * 动画把这个差值挪完，换序那一帧清位移就不会跳。
      */
     fun gapFor(from: Int, to: Int): Float = when {
         to > from -> rows.filter { it.actionIndex in (from + 1)..to }
@@ -72,6 +79,13 @@ internal class DragSnapshot(
 
         else -> 0f
     }
+    /** 整份快照平移（列表滚动后兜底用） */
+    fun shiftBy(dy: Float): DragSnapshot = DragSnapshot(
+        rows = rows.map { DragRow(it.actionIndex, it.centerY + dy, it.height) },
+        selfHeight = selfHeight,
+        baseIndex = baseIndex,
+        selfTopInViewport = selfTopInViewport + dy,
+    )
 }
 
 /**
@@ -89,13 +103,12 @@ internal fun buildDragSnapshot(
     val self = layout.visibleItemsInfo
         .firstOrNull { it.index - headerCount == selfIndex }
         ?: return null
-    val selfTop = self.offset.toFloat()
     val rows = layout.visibleItemsInfo.mapNotNull { info ->
         val idx = info.index - headerCount
         if (idx < 0 || idx >= exerciseCount) return@mapNotNull null
         DragRow(
             actionIndex = idx,
-            centerRel = info.offset + info.size / 2f - selfTop,
+            centerY = info.offset + info.size / 2f,
             height = info.size.toFloat(),
         )
     }.sortedBy { it.actionIndex }
@@ -104,6 +117,7 @@ internal fun buildDragSnapshot(
         rows = rows,
         selfHeight = self.size.toFloat(),
         baseIndex = rows.first().actionIndex,
+        selfTopInViewport = self.offset.toFloat(),
     )
 }
 
@@ -134,8 +148,76 @@ internal class WorkoutDragState(
     /** 拖动位移（px）。手势里直接写，落位动画由屏幕的 LaunchedEffect 驱动 */
     var offsetY by mutableFloatStateOf(0f)
 
+    /**
+     * 卡片中心在视口里的 Y 坐标（px）。
+     *
+     * 落点判定只看这一个数：手指不动、列表自动滚动时它保持不变，
+     * 而各行的 [DragRow.centerY] 会随滚动整体位移，比较结果自然是「继续往下」。
+     */
+    var cardCenterY by mutableFloatStateOf(0f)
+
+    /** 自动滚动速度（px/帧）：负值向上、正值向下、0 表示不滚 */
+    var autoScrollSpeed by mutableFloatStateOf(0f)
+
+    /** 当前几何快照（自动滚动后会重拍） */
+    var snapshot: DragSnapshot? = null
+
     /** 一次落位计划；非空即触发屏幕的落位流程 */
     var pendingDrop by mutableStateOf<DropPlan?>(null)
+
+    /** 起手时卡片中心的视口坐标；[move] 以它为基准，不受后续滚动影响 */
+    private var startCenterY = 0f
+
+    /** 起手：记下起点、卡片高度，相邻卡片开始让位 */
+    fun begin(id: Long, index: Int, snap: DragSnapshot) {
+        snapshot = snap
+        fromIndex = index
+        targetIndex = index
+        cardHeight = snap.selfHeight
+        // 基准一旦确定就不再跟随快照变化：
+        // 自动滚动后 selfTopInViewport 会变，用新值 + 手指位移会算错中心
+        startCenterY = snap.selfTopInViewport + snap.selfHeight / 2f
+        cardCenterY = startCenterY
+        offsetY = 0f
+        draggingId = id
+    }
+
+    /** 手指移动：位移与落点一起更新 */
+    fun move(dy: Float) {
+        offsetY = dy
+        cardCenterY = startCenterY + dy
+        val snap = snapshot ?: return
+        targetIndex = snap.targetFor(fromIndex, cardCenterY)
+    }
+
+    /**
+     * 自动滚动一帧之后对齐。
+     *
+     * [scrolled] 是这一帧真正滚动的像素（向下为正）。
+     * offsetY 必须同步加上它：槽位向上移动了多少，卡片相对槽位的位移就要补多少，
+     * 否则卡片会跟着列表一起跑掉，手指底下就空了。
+     * 卡片中心在视口里不动，所以 cardCenterY 不调整 —— 这正是「继续拖远」的来源。
+     */
+    fun onAutoScrolled(scrolled: Float) {
+        offsetY += scrolled
+        val snap = snapshot ?: return
+        targetIndex = snap.targetFor(fromIndex, cardCenterY)
+    }
+
+    /**
+     * 重拍快照（列表滚动后视野变了，必须换一份几何）。
+     *
+     * 被拖卡片的**槽位**可能已经滚出视口（卡片本身还挂在手指下），
+     * 这时拍不出来，退化成「把旧快照整体平移」——
+     * 相对关系仍然正确，只是看得没有那么远，比每帧读布局出错好。
+     */
+    fun refreshSnapshot(layout: LazyListLayoutInfo, headerCount: Int, exerciseCount: Int, scrolled: Float) {
+        val fresh = buildDragSnapshot(layout, headerCount, fromIndex, exerciseCount)
+            ?: snapshot?.shiftBy(-scrolled)
+            ?: return
+        snapshot = fresh
+        targetIndex = fresh.targetFor(fromIndex, cardCenterY)
+    }
 
     /**
      * 相邻卡片要滑开的距离。
@@ -156,6 +238,7 @@ internal class WorkoutDragState(
     fun endPhase() {
         fromIndex = -1
         targetIndex = -1
+        autoScrollSpeed = 0f
     }
 
     /** 彻底清空（落位动画播完、布局接管之后） */
@@ -164,7 +247,38 @@ internal class WorkoutDragState(
         fromIndex = -1
         targetIndex = -1
         offsetY = 0f
+        autoScrollSpeed = 0f
+        snapshot = null
     }
+}
+
+/**
+ * 贴边自动滚动：越靠边越快，离开边缘立刻停。
+ *
+ * [pointerY] 手指在视口里的位置；[top] / [bottom] 是 LazyColumn 的可视范围；
+ * [zone] 是触发区高度（约一张卡片），[maxSpeed] 是全速时的每帧像素。
+ * 用线性比例而不是固定速度：贴边 2dp 就想微调、贴到底就想狂滚，
+ * 同一个档位满足不了这两种意图。
+ */
+internal fun autoScrollSpeed(
+    pointerY: Float,
+    top: Float,
+    bottom: Float,
+    zone: Float,
+    maxSpeed: Float,
+): Float = when {
+    zone <= 0f -> 0f
+    pointerY < top + zone -> {
+        val t = ((top + zone - pointerY) / zone).coerceIn(0f, 1f)
+        -maxSpeed * t
+    }
+
+    pointerY > bottom - zone -> {
+        val t = ((pointerY - (bottom - zone)) / zone).coerceIn(0f, 1f)
+        maxSpeed * t
+    }
+
+    else -> 0f
 }
 
 /**

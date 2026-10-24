@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.imePadding
@@ -103,6 +104,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showRestPicker by remember { mutableStateOf(false) }
     var showAddExercise by remember { mutableStateOf(false) }
+    // 正在替换的动作（sessionExerciseId）；非空时打开动作选择器
+    var replaceTargetId by remember { mutableStateOf<Long?>(null) }
+    // 杠铃片计算器的初始重量；非空时打开
+    var plateWeight by remember { mutableStateOf<Float?>(null) }
+    val settings by vm.settings.collectAsState()
+    val progressionModes by vm.progressionModes.collectAsState()
 
     LaunchedEffect(Unit) {
         vm.ensureSession()
@@ -144,6 +151,33 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         drag.draggingId = null
 
         drag.pendingDrop = null
+        drag.snapshot = null
+    }
+
+    // 拖动贴边自动滚动。
+    // 手势里只是写一个「想滚多快」的数值（受限协程作用域不能挂起），
+    // 真正的滚动在这里按帧执行：滚完之后卡片相对槽位的位移、几何快照、
+    // 落点下标三件事必须一起对齐，否则卡片会从手指底下溜走。
+    LaunchedEffect(drag.draggingId) {
+        if (drag.draggingId == null) return@LaunchedEffect
+        while (true) {
+            withFrameNanos { }
+            val speed = drag.autoScrollSpeed
+            if (speed == 0f) continue
+            val scrolled = listState.scrollBy(speed)
+            if (kotlin.math.abs(scrolled) < 0.5f) {
+                // 到顶 / 到底：别再空转，等手指离开边缘或移动后再开
+                drag.autoScrollSpeed = 0f
+            } else {
+                drag.onAutoScrolled(scrolled)
+                drag.refreshSnapshot(
+                    layout = listState.layoutInfo,
+                    headerCount = headerItemCount,
+                    exerciseCount = displayExercises.size,
+                    scrolled = scrolled,
+                )
+            }
+        }
     }
 
     // 数据库顺序追上来之后，撤掉临时顺序
@@ -335,6 +369,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 // 每行输入框是 remember(set.id)，换序不会串味。
                 itemsIndexed(displayExercises) { index, item ->
                     val id = item.sessionExercise.id
+                    // 超级组只能和「下一个」动作组队，最后一个没有下一个
+                    val nextId = displayExercises.getOrNull(index + 1)?.sessionExercise?.id
                     WorkoutExerciseRow(
                         item = item,
                         index = index,
@@ -353,6 +389,18 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         onRemoveExercise = { vm.removeExercise(id) },
                         onDeleteSet = vm::deleteSet,
                         onTogglePr = vm::toggleSetPr,
+                        onCopyPreviousSet = { vm.copyPreviousSet(item) },
+                        onReplaceExercise = { replaceTargetId = id },
+                        onToggleSuperset = { vm.toggleSuperset(item, nextId) },
+                        onOpenPlateCalculator = {
+                            plateWeight = item.sets.firstOrNull()?.weightKg ?: 0f
+                        },
+                        canSupersetWithNext = nextId != null,
+                        progressionMode = progressionModes[item.sessionExercise.exerciseId]
+                            ?: com.yfantasyxx.data.ProgressionMode.OFF,
+                        onApplyProgression = { weight, reps ->
+                            vm.applyProgression(item, weight, reps)
+                        },
                     )
                 }
 
@@ -413,6 +461,32 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     showExercisePicker = false
                     showAddExercise = true
                 },
+            )
+        }
+
+        // 替换动作：复用同一个动作选择器，选完只换 exerciseId，组数据保留
+        replaceTargetId?.let { targetId ->
+            ExercisePickerDialog(
+                container = container,
+                onDismiss = { replaceTargetId = null },
+                onPick = { exerciseId ->
+                    vm.replaceExercise(targetId, exerciseId)
+                    replaceTargetId = null
+                },
+                onRequestCreate = {
+                    replaceTargetId = null
+                    showAddExercise = true
+                },
+            )
+        }
+
+        plateWeight?.let { weight ->
+            com.yfantasyxx.ui.components.PlateCalculatorDialog(
+                initialWeightKg = weight,
+                barWeightKg = settings.barWeightKg,
+                platesCsv = settings.plates,
+                onDismiss = { plateWeight = null },
+                onSaveSettings = { bar, plates -> vm.savePlateSettings(bar, plates) },
             )
         }
 

@@ -45,6 +45,12 @@ data class AppSettings(
     val blurBottomBar: Boolean = false,
     /** 点击时的触觉反馈 */
     val tapHaptics: Boolean = true,
+    /** 杠铃杆重量（kg），杠铃片计算器的基准 */
+    val barWeightKg: Float = 20f,
+    /** 手上有哪些片，逗号分隔（每侧每档的数量视为不限） */
+    val plates: String = "25,20,15,10,5,2.5,1.25",
+    /** 每周训练次数目标；0 表示不设目标 */
+    val weeklyGoal: Int = 0,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -62,6 +68,9 @@ class SettingsRepository(private val context: Context) {
         val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
         val TAP_HAPTICS = booleanPreferencesKey("tap_haptics")
         val LAST_BACKUP = longPreferencesKey("last_backup")
+        val BAR_WEIGHT = floatPreferencesKey("bar_weight")
+        val PLATES = stringPreferencesKey("plates")
+        val WEEKLY_GOAL = longPreferencesKey("weekly_goal")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -76,6 +85,9 @@ class SettingsRepository(private val context: Context) {
             lastBackupTime = prefs[Keys.LAST_BACKUP],
             blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
             tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
+            barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
+            plates = prefs[Keys.PLATES] ?: "25,20,15,10,5,2.5,1.25",
+            weeklyGoal = (prefs[Keys.WEEKLY_GOAL] ?: 0L).toInt(),
         )
     }
 
@@ -113,5 +125,17 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLastBackupTime(time: Long) {
         context.dataStore.edit { it[Keys.LAST_BACKUP] = time }
+    }
+
+    suspend fun setBarWeight(kg: Float) {
+        context.dataStore.edit { it[Keys.BAR_WEIGHT] = kg }
+    }
+
+    suspend fun setPlates(csv: String) {
+        context.dataStore.edit { it[Keys.PLATES] = csv }
+    }
+
+    suspend fun setWeeklyGoal(count: Int) {
+        context.dataStore.edit { it[Keys.WEEKLY_GOAL] = count.toLong() }
     }
 }

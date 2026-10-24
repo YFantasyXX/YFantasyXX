@@ -382,9 +382,16 @@ class WorkoutRepository(private val db: AppDatabase) {
         }
     }
 
-    suspend fun addSet(sessionExerciseId: Long): Long {
+    suspend fun addSet(sessionExerciseId: Long, weightKg: Float = 0f, reps: Int = 0): Long {
         val n = setLogDao.maxSetNumber(sessionExerciseId) + 1
-        return setLogDao.insert(SetLog(sessionExerciseId = sessionExerciseId, setNumber = n))
+        return setLogDao.insert(
+            SetLog(
+                sessionExerciseId = sessionExerciseId,
+                setNumber = n,
+                weightKg = weightKg,
+                reps = reps,
+            )
+        )
     }
 
     suspend fun updateSet(log: SetLog) {
@@ -616,9 +623,15 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     fun observeTotalVolume(since: Long): Flow<Float> = sessionDao.observeTotalVolume(since)
 
-    /** 某动作最近一次完成记录（作为"上次数据"参考） */
+    /**
+     * 某动作最近一次完成记录（作为"上次数据"参考）。
+     *
+     * 取「上一次训练」而不是「最近 5 组」：跨两次训练的数据混在一起，
+     * 会出现「上次 60×8 / 60×8 / 62.5×6 / 60×8」这种看不出是哪次的组合，
+     * 进阶判断「是否全部达到上限」也会被上一轮的组干扰。
+     */
     suspend fun lastPerformance(exerciseId: Long): List<SetLog> =
-        sessionDao.recentSetsForExercise(exerciseId, limit = 5)
+        sessionDao.lastSessionSets(exerciseId)
 
     // ---------- 身体数据 ----------
 
