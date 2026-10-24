@@ -749,7 +749,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                         contentAlignment = Alignment.CenterStart,
                                     ) {
                                         androidx.compose.foundation.text.BasicTextField(
-                                            value = item.targetReps,
+                                            value = item.repsText,
                                             onValueChange = {
                                                 vm.updateItem(item.key, reps = it)
                                             },

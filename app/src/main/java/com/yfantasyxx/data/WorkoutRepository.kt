@@ -100,10 +100,30 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun deleteCustomExercise(id: Long) = exerciseDao.deleteCustom(id)
 
-    /** 首次启动写入种子数据 */
-    suspend fun seedIfEmpty() {
-        if (exerciseDao.count() == 0) {
-            exerciseDao.insertAll(ExerciseSeed.exercises)
+    /** 首次启动写入种子数据；老版本升级补齐新增的内置动作 */
+    suspend fun seedIfEmpty() = seedMissing()
+
+    /**
+     * 增量补齐动作库。
+     *
+     * 只用 `count() == 0` 判断的话，老用户永远拿不到后来新增的动作——
+     * 库里有 57 条，count 不是 0，整段跳过。所以改成按名字对比：
+     * 缺的插入，已有的顺手补上次要肌群（只补空值，不覆盖用户改过的）。
+     *
+     * 整个循环只查一次名字表，插入走同一事务，是幂等的：
+     * 每次冷启动跑一遍，第二次就全是 no-op。
+     */
+    suspend fun seedMissing() {
+        val existing = exerciseDao.allNames().toHashSet()
+        val missing = ExerciseSeed.exercises.filter { it.name !in existing }
+        if (missing.isNotEmpty()) {
+            exerciseDao.insertAll(missing)
+        }
+        // 老数据的次要肌群回填（迁移只加了空列）
+        ExerciseSeed.exercises.forEach { seed ->
+            if (seed.secondaryMuscles.isNotEmpty() && seed.name in existing) {
+                exerciseDao.backfillSecondaryMuscles(seed.name, seed.secondaryMuscles)
+            }
         }
     }
 
@@ -163,10 +183,15 @@ class WorkoutRepository(private val db: AppDatabase) {
                     exerciseId = draft.exerciseId,
                     sortOrder = index,
                     targetSets = draft.targetSets,
-                    targetReps = draft.targetReps,
+                    // 旧文本列继续写，方便回滚到旧版本时仍能看到目标次数
+                    targetReps = draft.range.label,
+                    targetRepsMin = draft.range.min,
+                    targetRepsMax = draft.range.max,
                     targetWeightKg = draft.targetWeightKg,
                     isWarmup = draft.isWarmup,
                     restSeconds = draft.restSeconds,
+                    progression = draft.progression.value,
+                    supersetGroup = draft.supersetGroup,
                 )
             )
         }
@@ -184,6 +209,9 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun setFolderShowOnHome(id: Long, show: Boolean) =
         templateDao.setFolderShowOnHome(id, show)
+
+    suspend fun setFolderRotation(id: Long, rotation: Boolean) =
+        templateDao.setFolderRotation(id, rotation)
 
     suspend fun createFolder(name: String): Long =
         templateDao.insertFolder(TemplateFolder(name = name.trim()))
@@ -210,10 +238,12 @@ class WorkoutRepository(private val db: AppDatabase) {
     data class TemplateExerciseDraft(
         val exerciseId: Long,
         val targetSets: Int,
-        val targetReps: String,
+        val range: RepRange,
         val targetWeightKg: Float? = null,
         val isWarmup: Boolean = false,
         val restSeconds: Int? = null,
+        val progression: ProgressionMode = ProgressionMode.OFF,
+        val supersetGroup: Int? = null,
     )
 
     // ---------- 训练进行 ----------
@@ -262,6 +292,9 @@ class WorkoutRepository(private val db: AppDatabase) {
     private suspend fun applyTemplate(sessionId: Long, templateId: Long) {
         val tpl = templateDao.getWithExercises(templateId) ?: return
         tpl.items.forEach { item ->
+            val range = item.templateExercise.let {
+                it.targetRepsMin?.let { min -> it.targetRepsMax?.let { max -> RepRange(min, max) } }
+            } ?: RepRange.parseOrDefault(item.templateExercise.targetReps)
             val seId = sessionExerciseDao.insert(
                 SessionExercise(
                     sessionId = sessionId,
@@ -269,7 +302,10 @@ class WorkoutRepository(private val db: AppDatabase) {
                     sortOrder = item.templateExercise.sortOrder,
                     restSeconds = item.templateExercise.restSeconds,
                     plannedSets = item.templateExercise.targetSets,
-                    plannedReps = item.templateExercise.targetReps,
+                    plannedReps = range.label,
+                    plannedRepsMin = range.min,
+                    plannedRepsMax = range.max,
+                    supersetGroup = item.templateExercise.supersetGroup,
                 )
             )
             // 重量优先用模板设定，其次沿用该动作上次的表现
@@ -313,6 +349,37 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun removeSessionExercise(id: Long) {
         sessionExerciseDao.delete(id)
         invalidateStats()
+    }
+
+    /**
+     * 训练中替换动作（器械被占时最常用）。
+     *
+     * 只改 exerciseId：已完成的组、组数、排序、超级组编号全部保留，
+     * 等于「这个位置换成另一个动作接着练」。重量沿用原值不改，
+     * 因为换成同类动作时重量通常接近，改了反而要多调一次。
+     */
+    suspend fun replaceSessionExercise(sessionExerciseId: Long, newExerciseId: Long) {
+        sessionExerciseDao.replaceExercise(sessionExerciseId, newExerciseId)
+        invalidateStats()
+    }
+
+    /** 把某动作和它下面的动作组成超级组（原来没有组就新开一个编号） */
+    suspend fun linkSuperset(sessionId: Long, sessionExerciseId: Long, nextId: Long): Int {
+        val group = sessionExerciseDao.nextSupersetGroup(sessionId)
+        sessionExerciseDao.setSupersetGroup(sessionExerciseId, group)
+        sessionExerciseDao.setSupersetGroup(nextId, group)
+        return group
+    }
+
+    /** 退出超级组；同组不足两人时把剩下的也清掉，避免留下孤零零的编号 */
+    suspend fun unlinkSuperset(sessionId: Long, sessionExerciseId: Long) {
+        val members = sessionExerciseDao.getForSession(sessionId)
+        val group = members.firstOrNull { it.id == sessionExerciseId }?.supersetGroup ?: return
+        val rest = members.filter { it.supersetGroup == group && it.id != sessionExerciseId }
+        sessionExerciseDao.setSupersetGroup(sessionExerciseId, null)
+        if (rest.size < 2) {
+            rest.forEach { sessionExerciseDao.setSupersetGroup(it.id, null) }
+        }
     }
 
     suspend fun addSet(sessionExerciseId: Long): Long {
@@ -455,6 +522,94 @@ class WorkoutRepository(private val db: AppDatabase) {
                 bestVolume = bestVolume,
             )
         }
+    }
+
+    /** 该动作最近一次已完成训练的工作组（进阶建议只参考这一次） */
+    suspend fun lastSessionSets(exerciseId: Long): List<SetLog> =
+        sessionDao.lastSessionSets(exerciseId)
+
+    /**
+     * 某动作的 e1RM 曲线。
+     *
+     * 一次训练一个点：取该次里估算 1RM 最高的那一组。
+     * 如果按组画，4 组递减会变成一串锯齿，看不出趋势。
+     */
+    suspend fun e1rmHistory(exerciseId: Long): List<com.yfantasyxx.data.db.E1rmPoint> {
+        val rows = sessionDao.e1rmRowsForExercise(exerciseId)
+        return rows.groupBy { it.sessionId }
+            .mapNotNull { (sessionId, sets) ->
+                val best = sets.mapNotNull { row ->
+                    OneRepMax.estimate(row.weightKg, row.reps)?.let { row to it }
+                }.maxByOrNull { it.second } ?: return@mapNotNull null
+                com.yfantasyxx.data.db.E1rmPoint(
+                    sessionId = sessionId,
+                    startTime = best.first.startTime,
+                    e1rm = best.second,
+                    weightKg = best.first.weightKg,
+                    reps = best.first.reps,
+                )
+            }
+            .sortedBy { it.startTime }
+    }
+
+    /**
+     * 窗口期内各肌群的有效组数。
+     *
+     * 折算规则：主动作肌群算 1 组，次要肌群算 0.5 组。
+     * 直接按「每个动作只算主肌群」会严重低估上肢推拉类动作的负荷。
+     */
+    suspend fun muscleLoads(since: Long): List<com.yfantasyxx.data.db.MuscleLoad> {
+        val rows = sessionDao.muscleSetRows(since)
+        val sets = HashMap<String, Float>()
+        val lastAt = HashMap<String, Long>()
+        rows.forEach { row ->
+            val primary = row.primaryMuscle.trim()
+            if (primary.isNotEmpty()) {
+                sets[primary] = (sets[primary] ?: 0f) + row.sets
+                lastAt[primary] = maxOf(lastAt[primary] ?: 0L, row.lastTrainedAt)
+            }
+            row.secondaryMuscles.split(',', '，')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { muscle ->
+                    sets[muscle] = (sets[muscle] ?: 0f) + row.sets * 0.5f
+                    lastAt[muscle] = maxOf(lastAt[muscle] ?: 0L, row.lastTrainedAt)
+                }
+        }
+        return sets.map { (muscle, count) ->
+            com.yfantasyxx.data.db.MuscleLoad(
+                muscle = muscle,
+                sets = count,
+                lastTrainedAt = lastAt[muscle] ?: 0L,
+            )
+        }.sortedByDescending { it.sets }
+    }
+
+    /** 历史搜索：含该动作名的训练 id */
+    suspend fun sessionIdsMatchingExercise(keyword: String): Set<Long> =
+        if (keyword.isBlank()) emptySet() else sessionDao.sessionIdsMatchingExercise(keyword).toSet()
+
+    /**
+     * 计划轮换的下一个模板。
+     *
+     * 取最近一次用模板完成的训练，在「轮换文件夹」里找它的位置，返回下一个；
+     * 找不到（没练过、模板被删）就从第一个开始。轮换只看顺序，不看星期几——
+     * A/B/C 计划真正要的是「上次练到哪」，而不是「今天周几」。
+     */
+    suspend fun nextRotationTemplate(): WorkoutTemplate? {
+        val folders = templateDao.observeFolders().first()
+            .filter { it.rotation }
+            .sortedBy { it.sortOrder }
+        if (folders.isEmpty()) return null
+        val all = templateDao.observeAll().first()
+        // 按文件夹顺序展开，文件夹内按 sortOrder：这个顺序就是 A → B → C
+        val templates = folders.flatMap { folder ->
+            all.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
+        }
+        if (templates.isEmpty()) return null
+        val lastId = sessionDao.lastUsedTemplateId()
+        val index = templates.indexOfFirst { it.id == lastId }
+        return if (index < 0) templates.first() else templates[(index + 1) % templates.size]
     }
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)

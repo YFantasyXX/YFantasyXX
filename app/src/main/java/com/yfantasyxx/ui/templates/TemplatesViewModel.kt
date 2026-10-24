@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
+import com.yfantasyxx.data.ProgressionMode
+import com.yfantasyxx.data.RepRange
 import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.TemplateExerciseWithExercise
@@ -29,10 +31,15 @@ data class EditableTemplateItem(
     val exerciseId: Long,
     val exerciseName: String,
     val targetSets: Int,
-    val targetReps: String,
+    /** 输入框里的原文，允许「8-」这种中间态 */
+    val repsText: String,
+    /** 解析后的区间；解析失败时保留上一次的有效值 */
+    val range: RepRange,
     val targetWeightKg: Float,
     val isWarmup: Boolean,
     val restSeconds: Int?,
+    val progression: ProgressionMode = ProgressionMode.OFF,
+    val supersetGroup: Int? = null,
 )
 
 /** 模板分组（folderId 为 null 表示未分组） */
@@ -154,16 +161,24 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         }
     }
 
-    private fun TemplateExerciseWithExercise.toEditable() = EditableTemplateItem(
-        key = templateExercise.id,
-        exerciseId = exercise.id,
-        exerciseName = exercise.name,
-        targetSets = templateExercise.targetSets,
-        targetReps = templateExercise.targetReps,
-        targetWeightKg = templateExercise.targetWeightKg ?: 0f,
-        isWarmup = templateExercise.isWarmup,
-        restSeconds = templateExercise.restSeconds,
-    )
+    private fun TemplateExerciseWithExercise.toEditable(): EditableTemplateItem {
+        val range = templateExercise.let { t ->
+            t.targetRepsMin?.let { min -> t.targetRepsMax?.let { max -> RepRange(min, max) } }
+        } ?: RepRange.parseOrDefault(templateExercise.targetReps)
+        return EditableTemplateItem(
+            key = templateExercise.id,
+            exerciseId = exercise.id,
+            exerciseName = exercise.name,
+            targetSets = templateExercise.targetSets,
+            repsText = range.label,
+            range = range,
+            targetWeightKg = templateExercise.targetWeightKg ?: 0f,
+            isWarmup = templateExercise.isWarmup,
+            restSeconds = templateExercise.restSeconds,
+            progression = ProgressionMode.from(templateExercise.progression),
+            supersetGroup = templateExercise.supersetGroup,
+        )
+    }
 
     fun setName(value: String) {
         _state.value = _state.value.copy(name = value)
@@ -186,7 +201,8 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                     exerciseId = exercise.id,
                     exerciseName = exercise.name,
                     targetSets = 3,
-                    targetReps = "8-12",
+                    repsText = RepRange.DEFAULT.label,
+                    range = RepRange.DEFAULT,
                     targetWeightKg = lastWeight,
                     isWarmup = false,
                     restSeconds = null,
@@ -203,16 +219,50 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
         weight: Float? = null,
         restSeconds: Int? = null,
         clearRest: Boolean = false,
+        progression: ProgressionMode? = null,
+        supersetGroup: Int? = null,
     ) {
         val items = _state.value.items.map {
             if (it.key == key) {
                 it.copy(
                     targetSets = sets ?: it.targetSets,
-                    targetReps = reps ?: it.targetReps,
+                    repsText = reps ?: it.repsText,
+                    // 输入中途（如「8-」）解析不出来时保留上一次的有效区间，
+                    // 否则每敲一个字符区间就会跳一次
+                    range = reps?.let { text -> RepRange.parse(text) ?: it.range } ?: it.range,
                     targetWeightKg = weight ?: it.targetWeightKg,
                     restSeconds = if (clearRest) null else (restSeconds ?: it.restSeconds),
+                    progression = progression ?: it.progression,
+                    supersetGroup = supersetGroup ?: it.supersetGroup,
                 )
             } else it
+        }
+        _state.value = _state.value.copy(items = items)
+    }
+
+    /** 和下一个动作组成超级组 / 退出超级组 */
+    fun toggleSuperset(key: Long) {
+        val items = _state.value.items.toMutableList()
+        val index = items.indexOfFirst { it.key == key }
+        if (index < 0) return
+        val current = items[index]
+        if (current.supersetGroup != null) {
+            // 退出：同组不足两人时把另一个也清掉
+            val group = current.supersetGroup
+            val siblings = items.count { it.supersetGroup == group }
+            items[index] = current.copy(supersetGroup = null)
+            if (siblings <= 2) {
+                items.indices.forEach { i ->
+                    if (items[i].supersetGroup == group) {
+                        items[i] = items[i].copy(supersetGroup = null)
+                    }
+                }
+            }
+        } else {
+            if (index == items.lastIndex) return
+            val group = (items.mapNotNull { it.supersetGroup }.maxOrNull() ?: 0) + 1
+            items[index] = current.copy(supersetGroup = group)
+            items[index + 1] = items[index + 1].copy(supersetGroup = group)
         }
         _state.value = _state.value.copy(items = items)
     }
@@ -273,10 +323,12 @@ class TemplateEditViewModel(private val repo: WorkoutRepository) : ViewModel() {
                     WorkoutRepository.TemplateExerciseDraft(
                         exerciseId = it.exerciseId,
                         targetSets = it.targetSets,
-                        targetReps = it.targetReps,
+                        range = it.range,
                         targetWeightKg = it.targetWeightKg.takeIf { w -> w > 0f },
                         isWarmup = it.isWarmup,
                         restSeconds = it.restSeconds,
+                        progression = it.progression,
+                        supersetGroup = it.supersetGroup,
                     )
                 },
             )

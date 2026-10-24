@@ -70,6 +70,22 @@ interface ExerciseDao {
 
     @Query("SELECT * FROM exercises WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<Long>): List<Exercise>
+
+    /** 已有动作名（用于增量补齐内置动作库，按名字去重） */
+    @Query("SELECT name FROM exercises")
+    suspend fun allNames(): List<String>
+
+    /**
+     * 老版本升级后补次要肌群：只动「内置动作且当前为空」的行，
+     * 用户自己改过的一律不覆盖。
+     */
+    @Query(
+        """
+        UPDATE exercises SET secondaryMuscles = :secondary
+        WHERE name = :name AND isCustom = 0 AND secondaryMuscles = ''
+        """
+    )
+    suspend fun backfillSecondaryMuscles(name: String, secondary: String)
 }
 
 @Dao
@@ -114,6 +130,9 @@ interface TemplateDao {
 
     @Query("UPDATE template_folders SET showOnHome = :show WHERE id = :id")
     suspend fun setFolderShowOnHome(id: Long, show: Boolean)
+
+    @Query("UPDATE template_folders SET rotation = :rotation WHERE id = :id")
+    suspend fun setFolderRotation(id: Long, rotation: Boolean)
 
     @Transaction
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
@@ -357,6 +376,85 @@ interface SessionDao {
         """
     )
     fun observeTotalVolume(since: Long): Flow<Float>
+
+    // ---- 历史搜索 / 进阶 / 热力图 ----
+
+    /** 含有匹配动作名的训练 id（历史页按动作筛选） */
+    @Query(
+        """
+        SELECT DISTINCT se.sessionId FROM session_exercises se
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE e.name LIKE '%' || :keyword || '%'
+        """
+    )
+    suspend fun sessionIdsMatchingExercise(keyword: String): List<Long>
+
+    /**
+     * 某动作的 e1RM 原始行，按时间升序。
+     *
+     * 不在 SQL 里算 1RM：它是七条公式的加权融合，SQL 表达不出来；
+     * 也不在这里按组聚合，一次训练里的高低起伏由调用方取最好一组。
+     */
+    @Query(
+        """
+        SELECT s.id AS sessionId, COALESCE(s.activeStartedAt, s.startTime) AS startTime,
+               sl.weightKg AS weightKg, sl.reps AS reps
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND sl.completed = 1 AND sl.isWarmup = 0
+          AND sl.reps > 0 AND s.endTime IS NOT NULL
+        ORDER BY s.startTime
+        """
+    )
+    suspend fun e1rmRowsForExercise(exerciseId: Long): List<E1rmRow>
+
+    /**
+     * 最近一次「已完成」训练里某动作的工作组。
+     * 进阶建议只看上一次，看得太多反而会把中断前的旧记录算进来。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.completed = 1
+          AND sl.isWarmup = 0
+          AND s.startTime = (
+              SELECT MAX(s2.startTime) FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun lastSessionSets(exerciseId: Long): List<SetLog>
+
+    /** 窗口期内每个动作练了多少组、最后一次是什么时候（热力图用） */
+    @Query(
+        """
+        SELECT e.primaryMuscle AS primaryMuscle, e.secondaryMuscles AS secondaryMuscles,
+               COUNT(*) AS sets, MAX(s.startTime) AS lastTrainedAt
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
+          AND s.startTime >= :since
+        GROUP BY se.exerciseId
+        """
+    )
+    suspend fun muscleSetRows(since: Long): List<MuscleSetRow>
+
+    /** 最近一次用模板完成的训练，用于算出「下一个该练哪个」 */
+    @Query(
+        """
+        SELECT templateId FROM sessions
+        WHERE endTime IS NOT NULL AND templateId IS NOT NULL
+        ORDER BY startTime DESC LIMIT 1
+        """
+    )
+    suspend fun lastUsedTemplateId(): Long?
 }
 
 data class BucketVolume(
@@ -386,6 +484,25 @@ interface SessionExerciseDao {
 
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM session_exercises WHERE sessionId = :sessionId")
     suspend fun nextSortOrder(sessionId: Long): Int
+
+    /**
+     * 训练中换动作：只改 exerciseId。
+     *
+     * 组记录、组号、排序、超级组编号全部保留 —— 这正是「器械被占」时想要的效果：
+     * 换成同类动作，已经打过的勾不用重打。
+     */
+    @Query("UPDATE session_exercises SET exerciseId = :exerciseId WHERE id = :id")
+    suspend fun replaceExercise(id: Long, exerciseId: Long)
+
+    @Query("UPDATE session_exercises SET supersetGroup = :group WHERE id = :id")
+    suspend fun setSupersetGroup(id: Long, group: Int?)
+
+    /** 新超级组编号：当前最大值 +1，同一个训练内不重复 */
+    @Query("SELECT COALESCE(MAX(supersetGroup), 0) + 1 FROM session_exercises WHERE sessionId = :sessionId")
+    suspend fun nextSupersetGroup(sessionId: Long): Int
+
+    @Query("SELECT * FROM session_exercises WHERE sessionId = :sessionId ORDER BY sortOrder, id")
+    fun observeForSession(sessionId: Long): kotlinx.coroutines.flow.Flow<List<SessionExercise>>
 }
 
 @Dao
@@ -441,7 +558,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -454,6 +571,69 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /**
+         * v11 -> v12：
+         * - 动作补次要肌群（热力图折算用）
+         * - 模板/训练动作把「目标次数」从文本拆成 min/max 两列（进阶判断要用整数比较）
+         * - 进阶策略、超级组编号
+         * - 模板文件夹可标记为「轮换计划」
+         *
+         * 旧文本列保留（Room 不允许悄悄少列），迁移时把 `8-12` 解析后回填到新列。
+         * 解析分两步做：先收集，再写回 —— 一边遍历游标一边 UPDATE 同一张表
+         * 在部分设备上会让游标错位。
+         */
+        val MIGRATION_11_12 = object : androidx.room.migration.Migration(11, 12) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE exercises ADD COLUMN secondaryMuscles TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetRepsMin INTEGER")
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetRepsMax INTEGER")
+                db.execSQL(
+                    "ALTER TABLE template_exercises ADD COLUMN progression INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN supersetGroup INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedRepsMin INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedRepsMax INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN supersetGroup INTEGER")
+
+                backfillRepRange(
+                    db, "template_exercises", "targetReps", "targetRepsMin", "targetRepsMax"
+                )
+                backfillRepRange(
+                    db, "session_exercises", "plannedReps", "plannedRepsMin", "plannedRepsMax"
+                )
+            }
+        }
+
+        /** 把旧的自由文本次数解析成 min/max（`8-12` → 8,12；`10` → 10,10） */
+        private fun backfillRepRange(
+            db: androidx.sqlite.db.SupportSQLiteDatabase,
+            table: String,
+            source: String,
+            minColumn: String,
+            maxColumn: String,
+        ) {
+            val parsed = mutableListOf<Pair<Long, com.yfantasyxx.data.RepRange>>()
+            db.query("SELECT id, $source FROM $table WHERE $source IS NOT NULL").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val range = com.yfantasyxx.data.RepRange.parse(cursor.getString(1))
+                        ?: continue
+                    parsed += id to range
+                }
+            }
+            // 值来自正则匹配出的整数，直接拼进 SQL 是安全的（不存在注入面）
+            parsed.forEach { (id, range) ->
+                db.execSQL(
+                    "UPDATE $table SET $minColumn = ${range.min}, $maxColumn = ${range.max} WHERE id = $id"
+                )
+            }
+        }
 
         /**
          * v10 -> v11：sessions 的 startTime / endTime 建索引。

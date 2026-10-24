@@ -46,6 +46,13 @@ data class Exercise(
     /** 器械，见 [Equipment] */
     val equipment: String = Equipment.OTHER,
     val primaryMuscle: String = "",
+    /**
+     * 次要肌群，逗号分隔（如「肱三头肌,三角肌前束」）。
+     *
+     * 热力图和疲劳度按「主肌群计 1 组、次肌群计 0.5 组」折算，
+     * 否则卧推只算胸、不算三头与前束，胸日看起来练了很多、手臂却永远是 0。
+     */
+    val secondaryMuscles: String = "",
     val note: String = "",
     /** 该动作的默认组间休息秒数；null 表示使用全局默认 */
     val restSeconds: Int? = null,
@@ -82,6 +89,11 @@ data class TemplateFolder(
     val sortOrder: Int = 0,
     /** 该文件夹下的模板是否在首页快捷开始区显示 */
     val showOnHome: Boolean = true,
+    /**
+     * 计划轮换：把文件夹里勾了此项的模板当成 A/B/C 循环，
+     * 首页给出「练完 A 下一个是 B」的入口，而不是按星期几排。
+     */
+    val rotation: Boolean = false,
 )
 
 /**
@@ -112,13 +124,22 @@ data class TemplateExercise(
     val exerciseId: Long,
     val sortOrder: Int = 0,
     val targetSets: Int = 3,
+    /** 旧字段：自由文本（「8-12」）。只作为兼容保留，逻辑一律看 min/max */
     val targetReps: String = "8-12",
+    /** 目标次数下限（含）。null 表示没有设定 */
+    val targetRepsMin: Int? = null,
+    /** 目标次数上限（含）。等于下限时表示固定次数 */
+    val targetRepsMax: Int? = null,
     /** 目标重量（kg）；null 表示不指定，训练时用上次重量或手动填 */
     val targetWeightKg: Float? = null,
     /** 该动作是否作为热身动作 */
     val isWarmup: Boolean = false,
     /** 模板内为该动作指定的休息秒数；null 表示沿用动作默认/全局 */
     val restSeconds: Int? = null,
+    /** 进阶策略，见 [com.yfantasyxx.data.ProgressionMode] */
+    val progression: Int = 0,
+    /** 超级组编号：相同非空值的相邻动作为一组，交替完成、只在组末休息 */
+    val supersetGroup: Int? = null,
 )
 
 /**
@@ -176,8 +197,14 @@ data class SessionExercise(
     val restSeconds: Int? = null,
     /** 模板计划的组数（快照，模板后续修改不影响历史记录）；null 表示手动添加 */
     val plannedSets: Int? = null,
-    /** 模板设定的目标次数（如 8-12），快照保存 */
+    /** 模板设定的目标次数（如 8-12），快照保存。旧字段，仅兼容 */
     val plannedReps: String? = null,
+    /** 目标次数下限快照 */
+    val plannedRepsMin: Int? = null,
+    /** 目标次数上限快照 */
+    val plannedRepsMax: Int? = null,
+    /** 超级组编号（来自模板或训练中手工编组） */
+    val supersetGroup: Int? = null,
 )
 
 /**
@@ -285,4 +312,46 @@ data class PrSetRow(
     val exerciseName: String,
     val weightKg: Float,
     val reps: Int,
+)
+
+/**
+ * e1RM 曲线上的一个点：某次训练里该动作的最好一组。
+ *
+ * 按「每次训练一个点」而不是「每组一个点」：
+ * 一次训练里 4 组通常一路递减，全画出来是一串锯齿，趋势看不出来。
+ */
+data class E1rmPoint(
+    val sessionId: Long,
+    val startTime: Long,
+    val e1rm: Float,
+    val weightKg: Float,
+    val reps: Int,
+)
+
+/** 算 e1RM 曲线的原始行：一个动作的全部工作组 */
+data class E1rmRow(
+    val sessionId: Long,
+    val startTime: Long,
+    val weightKg: Float,
+    val reps: Int,
+)
+
+/**
+ * 肌群负荷的一行原始数据：一个动作在窗口期内练了多少组。
+ * 次要肌群在 Kotlin 侧按 0.5 折算。
+ */
+data class MuscleSetRow(
+    val primaryMuscle: String,
+    val secondaryMuscles: String,
+    val sets: Int,
+    val lastTrainedAt: Long,
+)
+
+/** 热力图上的一个肌群 */
+data class MuscleLoad(
+    val muscle: String,
+    /** 折算后的有效组数（主 1.0 / 次 0.5） */
+    val sets: Float,
+    /** 最近一次练到的时间戳；0 表示窗口期内没练过 */
+    val lastTrainedAt: Long,
 )
