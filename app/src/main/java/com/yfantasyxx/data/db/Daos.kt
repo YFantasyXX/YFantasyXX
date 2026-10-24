@@ -295,23 +295,24 @@ interface SessionDao {
     )
     suspend fun volumeByCategory(since: Long): List<CategoryVolume>
 
-    /** 每个动作的 PR */
+    /**
+     * PR 计算的原始行。
+     *
+     * 不在这里做聚合：1RM 是多条公式的加权融合（见 OneRepMax），SQL 表达不出来。
+     * 也不做成 Flow：原来的写法是「任意一组数据变更就重跑整个历史的三表 join」，
+     * 训练中每填一次重量都会触发。现在是一次性查询，由仓库层缓存 + 显式失效。
+     */
     @Query(
         """
         SELECT e.id AS exerciseId, e.name AS exerciseName,
-               MAX(sl.weightKg) AS bestWeightKg,
-               MAX(sl.reps) AS bestReps,
-               MAX(sl.weightKg * sl.reps) AS bestVolume
+               sl.weightKg AS weightKg, sl.reps AS reps
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN exercises e ON se.exerciseId = e.id
         WHERE sl.completed = 1 AND sl.isWarmup = 0 AND sl.reps > 0
-        GROUP BY e.id, e.name
-        HAVING MAX(sl.weightKg * sl.reps) > 0
-        ORDER BY bestVolume DESC
         """
     )
-    fun observePersonalRecords(): Flow<List<ExercisePr>>
+    suspend fun workingSetsForPr(): List<PrSetRow>
 
     /** 某动作最近一次训练的数据（历史参考） */
     @Query(
@@ -325,7 +326,12 @@ interface SessionDao {
     )
     suspend fun recentSetsForExercise(exerciseId: Long, limit: Int): List<SetLog>
 
-    /** 该动作历史最佳一组（重量优先，含 PR 组，排除热身） */
+    /**
+     * 该动作所有已完成工作组（含 PR 组，排除热身）。
+     *
+     * 不在 SQL 里排序：最佳组要按估算 1RM 挑，
+     * 而 `ORDER BY weightKg DESC` 会让 100 kg × 1 赢过 95 kg × 8。
+     */
     @Query(
         """
         SELECT * FROM set_logs sl
@@ -333,10 +339,9 @@ interface SessionDao {
         INNER JOIN sessions s ON se.sessionId = s.id
         WHERE se.exerciseId = :exerciseId AND sl.completed = 1
           AND sl.isWarmup = 0 AND sl.reps > 0 AND s.endTime IS NOT NULL
-        ORDER BY sl.weightKg DESC, sl.reps DESC LIMIT 1
         """
     )
-    suspend fun bestSetFor(exerciseId: Long): SetLog?
+    suspend fun workingSetsForExercise(exerciseId: Long): List<SetLog>
 
     /** 近 N 天训练次数 */
     @Query("SELECT COUNT(*) FROM sessions WHERE endTime IS NOT NULL AND startTime >= :since")
@@ -436,7 +441,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -449,6 +454,23 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "yfantasyxx.db"
+
+        /**
+         * v10 -> v11：sessions 的 startTime / endTime 建索引。
+         * 统计查询全部按 startTime 范围过滤，草稿查询按 endTime IS NULL 过滤，
+         * 没有索引时两者都是全表扫描。索引名必须是 Room 的默认命名格式
+         * （index_<表>_<列>），否则启动时 schema 校验会报 IllegalStateException。
+         */
+        val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sessions_startTime` ON `sessions` (`startTime`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sessions_endTime` ON `sessions` (`endTime`)"
+                )
+            }
+        }
 
         /** v9 -> v10：训练动作记录模板设定的目标次数 */
         val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {

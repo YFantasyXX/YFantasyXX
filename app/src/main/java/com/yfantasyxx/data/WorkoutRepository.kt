@@ -18,8 +18,12 @@ import com.yfantasyxx.data.db.WorkoutTemplate
 import androidx.room.withTransaction
 import com.yfantasyxx.data.seed.ExerciseSeed
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.data.db.TemplateFolder
 
 /**
@@ -33,6 +37,31 @@ class WorkoutRepository(private val db: AppDatabase) {
     private val sessionExerciseDao = db.sessionExerciseDao()
     private val setLogDao = db.setLogDao()
     private val bodyMetricDao = db.bodyMetricDao()
+
+    // ---------- 统计数据的失效信号 ----------
+
+    /**
+     * 数据版本号：任何「会改变统计结果」的写入都把它 +1。
+     *
+     * 统计页据此重算，而不是让 PR 去 observe 整张 set_logs 表——
+     * 后者意味着训练中每填一次重量都要重跑一遍全历史聚合，
+     * 而一次训练里真正会改变 PR 的时刻只有「勾选完成 / 删除 / 结束训练」这几次。
+     */
+    private val dataVersion = MutableStateFlow(0)
+
+    fun observeDataVersion(): StateFlow<Int> = dataVersion
+
+    /** PR 列表缓存；[invalidateStats] 时置空 */
+    @Volatile
+    private var prCache: List<ExercisePr>? = null
+
+    private val prMutex = Mutex()
+
+    /** 写入 set_logs / sessions 之后调用 */
+    private fun invalidateStats() {
+        prCache = null
+        dataVersion.value += 1
+    }
 
     // ---------- 动作库 ----------
 
@@ -84,6 +113,7 @@ class WorkoutRepository(private val db: AppDatabase) {
         sessionDao.deleteStaleDraftSets()
         sessionDao.deleteStaleDraftExercises()
         sessionDao.deleteStaleDraftSessions()
+        invalidateStats()
     }
 
     // ---------- 模板 ----------
@@ -280,16 +310,26 @@ class WorkoutRepository(private val db: AppDatabase) {
         return seId
     }
 
-    suspend fun removeSessionExercise(id: Long) = sessionExerciseDao.delete(id)
+    suspend fun removeSessionExercise(id: Long) {
+        sessionExerciseDao.delete(id)
+        invalidateStats()
+    }
 
     suspend fun addSet(sessionExerciseId: Long): Long {
         val n = setLogDao.maxSetNumber(sessionExerciseId) + 1
         return setLogDao.insert(SetLog(sessionExerciseId = sessionExerciseId, setNumber = n))
     }
 
-    suspend fun updateSet(log: SetLog) = setLogDao.update(log)
+    suspend fun updateSet(log: SetLog) {
+        setLogDao.update(log)
+        // 重量 / 次数 / 是否完成都走这里，是 PR 失效最主要的入口
+        invalidateStats()
+    }
 
-    suspend fun deleteSet(id: Long) = setLogDao.delete(id)
+    suspend fun deleteSet(id: Long) {
+        setLogDao.delete(id)
+        invalidateStats()
+    }
 
     /** 删除某一组并把剩余组重新编号，避免出现 1、2、4 这样的空缺 */
     suspend fun deleteSetAndRenumber(id: Long) {
@@ -302,6 +342,7 @@ class WorkoutRepository(private val db: AppDatabase) {
                 setLogDao.update(item.copy(setNumber = index + 1))
             }
         }
+        invalidateStats()
     }
 
     suspend fun getSet(id: Long): SetLog? = setLogDao.getById(id)
@@ -311,11 +352,17 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun markSessionStarted(id: Long, time: Long = System.currentTimeMillis()) =
         sessionDao.markStarted(id, time)
 
-    suspend fun finishSession(id: Long, name: String, note: String) =
+    suspend fun finishSession(id: Long, name: String, note: String) {
         sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
+        // endTime 从 null 变成有值，周容量 / 分类容量的统计口径会跟着变
+        invalidateStats()
+    }
 
     /** 放弃草稿 */
-    suspend fun discardSession(id: Long) = sessionDao.delete(id)
+    suspend fun discardSession(id: Long) {
+        sessionDao.delete(id)
+        invalidateStats()
+    }
 
     suspend fun getSessionDetails(id: Long): List<SessionExerciseWithSets>? =
         sessionDao.getWithDetails(id)?.exercises?.sortedBySessionOrder()
@@ -334,7 +381,10 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     fun observeHistory(): Flow<List<SessionSummary>> = sessionDao.observeSummaries()
 
-    suspend fun deleteSession(id: Long) = sessionDao.delete(id)
+    suspend fun deleteSession(id: Long) {
+        sessionDao.delete(id)
+        invalidateStats()
+    }
 
     // ---------- 统计 ----------
 
@@ -344,7 +394,68 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun volumeByCategory(since: Long): List<CategoryVolume> =
         sessionDao.volumeByCategory(since)
 
-    fun observePersonalRecords(): Flow<List<ExercisePr>> = sessionDao.observePersonalRecords()
+    /**
+     * 各动作 PR，按估算 1RM 从高到低。
+     *
+     * 计算一次后缓存，直到 [invalidateStats] 把缓存置空。
+     * [refresh] 为 true 时强制重算。
+     */
+    suspend fun personalRecords(refresh: Boolean = false): List<ExercisePr> = prMutex.withLock {
+        if (!refresh) prCache?.let { return@withLock it }
+        computePersonalRecords().also { prCache = it }
+    }
+
+    private suspend fun computePersonalRecords(): List<ExercisePr> {
+        val rows = sessionDao.workingSetsForPr()
+        val acc = HashMap<Long, PrAcc>()
+        rows.forEach { row ->
+            val item = acc.getOrPut(row.exerciseId) {
+                PrAcc(row.exerciseId, row.exerciseName)
+            }
+            val volume = row.weightKg * row.reps
+            if (volume > item.bestVolume) {
+                item.bestVolume = volume
+                item.volumeWeight = row.weightKg
+                item.volumeReps = row.reps
+            }
+            val e1rm = OneRepMax.estimate(row.weightKg, row.reps)
+            if (e1rm != null && e1rm > item.estOneRm) {
+                item.estOneRm = e1rm
+                item.bestWeight = row.weightKg
+                item.bestReps = row.reps
+            }
+        }
+        return acc.values
+            .filter { it.bestVolume > 0f }
+            .map { it.toPr() }
+            .sortedWith(
+                compareByDescending<ExercisePr> { it.estOneRm ?: -1f }
+                    .thenByDescending { it.bestVolume }
+            )
+    }
+
+    /** 聚合中间态：一趟扫完同时维护「最高 e1RM」和「最大容量」两个口径 */
+    private class PrAcc(val exerciseId: Long, val exerciseName: String) {
+        var estOneRm = 0f
+        var bestWeight = 0f
+        var bestReps = 0
+        var bestVolume = 0f
+        var volumeWeight = 0f
+        var volumeReps = 0
+
+        fun toPr(): ExercisePr {
+            val hasE1rm = estOneRm > 0f
+            return ExercisePr(
+                exerciseId = exerciseId,
+                exerciseName = exerciseName,
+                estOneRm = if (hasE1rm) estOneRm else null,
+                // 没有可估算的组（全是 12 次以上）时，用最大容量那组兜底展示
+                bestWeightKg = if (hasE1rm) bestWeight else volumeWeight,
+                bestReps = if (hasE1rm) bestReps else volumeReps,
+                bestVolume = bestVolume,
+            )
+        }
+    }
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)
 
@@ -364,8 +475,20 @@ class WorkoutRepository(private val db: AppDatabase) {
         }
     }
 
-    /** 该动作历史最佳一组（用于动作库 PR 展示） */
-    suspend fun bestSetFor(exerciseId: Long): SetLog? = sessionDao.bestSetFor(exerciseId)
+    /**
+     * 该动作历史最佳一组（用于动作库 PR 展示）。
+     *
+     * 按估算 1RM 挑，不再按重量挑：`ORDER BY weightKg DESC` 会让
+     * 100 kg × 1 赢过 95 kg × 8，可后者显然更强。
+     * 算不出 1RM（次数 > 12）的组排在后面，只有全都不算不出来时才轮到它们。
+     */
+    suspend fun bestSetFor(exerciseId: Long): SetLog? {
+        val sets = sessionDao.workingSetsForExercise(exerciseId)
+        return sets.maxWithOrNull(
+            compareBy<SetLog> { OneRepMax.estimate(it.weightKg, it.reps) ?: -1f }
+                .thenBy { it.weightKg * it.reps }
+        )
+    }
 
     /** 训练动作（可能来自模板）指定的休息时长 */
     suspend fun sessionRestSeconds(sessionExerciseId: Long): Int? =

@@ -15,7 +15,8 @@
   - 近 8 周训练容量柱状图
   - 近 30 天部位训练分布
   - 体重趋势折线图
-  - 个人纪录（PR）排行
+  - 个人纪录（PR）排行：按**估算 1RM** 排序，100 kg × 10 强于 110 kg × 3
+- **动作排序**：训练中按住左侧把手上下拖动即可调整动作顺序，相邻卡片实时让位，松手滑入空位
 - **WebDAV 备份**：整库备份 / 恢复 / 保留最近 5 份；支持训练完成后自动备份
 - **CSV 导出**：训练记录导出为 CSV，方便二次分析
 - **悬浮底栏**：胶囊形底部导航，可选毛玻璃（默认关闭，开启会有额外 GPU 开销）
@@ -100,17 +101,37 @@ app/src/main/java/com/yfantasyxx/
 └── YFantasyXXApplication.kt
 ```
 
+## 借鉴与参考
+
+训练智能与交互细节的一部分，是读完 [DuarteSantos8/openGym](https://github.com/DuarteSantos8/openGym) 的源码之后重新设计的。
+对方是 React + Node 的 Web 应用、AGPL-3.0；这里是 Kotlin + Compose + Room、Apache-2.0，
+**没有复制任何代码**，借鉴的是思路、公式与判定方式，实现全部重写。
+
+| 本项目位置 | 借鉴了什么 | 具体实现 |
+| --- | --- | --- |
+| `data/OneRepMax.kt` | 单条 1RM 公式只在低次数区间可信，应多公式加权融合；次数越高越不该给数字 | 七条公式（Epley / Brzycki / Lombardi / O'Conner / Wathan / Lander / Mayhew）按可靠度加权，整体置信度随次数衰减；超过 12 次返回 `null`，不猜 |
+| `WorkoutRepository` 的 PR 口径 | 力量指标用**估算 1RM**排序，而不是最大重量 | 100 kg × 10（e1RM ≈ 131）排在 110 kg × 3（≈ 119）之前；PR 卡片上的「最佳组」和「e1RM」来自同一组，不再出现「最大重量 × 最大次数」这种从未发生过的组合 |
+| `ui/workout/WorkoutDragSort.kt` | 拖动排序在**起手时一次性快照**所有行的几何，整场手势只读快照；落点用「数有多少行的中心在我之上」 | `buildDragSnapshot()` + `DragSnapshot.targetFor()`。原来是每帧读实时布局，容易形成「读布局 → 改视觉 → 再读」的反馈环；改成快照后反馈环从设计上消失，落点判据也从上下两个分支收敛成一句 `count { 中心在我之上 }` |
+
+补充两点说明：
+
+- 拖动排序的快照方案不能直接照搬到 `LazyColumn`——它只对非虚拟化列表成立。这里做了改造：只快照**当前可见**的 item，下标加上 `baseIndex` 基址，因此拖出屏幕外的部分不会被误算。
+- 疲劳度模型、进阶引擎（`nextPrescription`）等设计也读过，但尚未实现，列在下方路线图里。
+
 ## 路线图
 
 - [ ] 训练过程中的组间休息通知（后台计时）
 - [ ] 训练计划 / 周期化
-- [ ] 1RM 估算与进步曲线
+- [x] 1RM 估算（七公式加权融合，PR 按 e1RM 排序）
+- [ ] e1RM 进步曲线
+- [ ] 自动进阶（线性 / 双重进阶）
 - [ ] 数据导入（CSV）
 - [ ] 小组件（今日训练概览）
 
 ## 致谢
 
 - [MIUIX](https://github.com/compose-miuix-ui/miuix) — HyperOS 风格 Compose UI 组件库
+- [DuarteSantos8/openGym](https://github.com/DuarteSantos8/openGym) — 1RM 估算与拖动排序的设计参考（见上节）
 - 数据模型与交互设计参考了 [flandyw/Workout](https://github.com/flandyw/Workout)、[mihretu-dev/HomeWorkoutApp](https://github.com/mihretu-dev/HomeWorkoutApp) 等优秀开源健身项目
 
 ## License

@@ -105,19 +105,26 @@ fun StatsScreen() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(pr.exerciseName, style = MiuixTheme.textStyles.main)
                                 Text(
-                                    text = "最大重量 ${pr.bestWeightKg.toInt()} kg",
+                                    // 这组是真实发生过的，不是「最大重量」和「最大次数」拼出来的
+                                    text = if (pr.bestWeightKg > 0f) {
+                                        "最佳组 ${pr.bestWeightKg.toInt()} kg × ${pr.bestReps}"
+                                    } else {
+                                        "最佳组 ${pr.bestReps} 次（自重）"
+                                    },
                                     style = MiuixTheme.textStyles.footnote1,
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )
                             }
                             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                                 Text(
-                                    text = "${pr.bestWeightKg.toInt()} × ${pr.bestReps}",
+                                    // 力量指标看估算 1RM：100 kg × 10 强于 110 kg × 3
+                                    text = pr.estOneRm?.let { "e1RM ${it.toInt()} kg" }
+                                        ?: "e1RM —",
                                     style = MiuixTheme.textStyles.subtitle,
                                     color = MiuixTheme.colorScheme.primary,
                                 )
                                 Text(
-                                    text = "最大容量 ${formatVolume(pr.bestVolume)} kg",
+                                    text = "容量 ${formatVolume(pr.bestVolume)} kg",
                                     style = MiuixTheme.textStyles.footnote1,
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )

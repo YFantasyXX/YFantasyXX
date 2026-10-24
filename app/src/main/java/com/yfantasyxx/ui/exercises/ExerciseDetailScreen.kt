@@ -134,6 +134,11 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                         "${best.reps} 次（自重）"
                                     }
                                 )
+                                // 最佳记录按估算 1RM 挑，这里把估出来的值一并显示，
+                                // 否则「95 kg × 8 为什么比 100 kg × 1 更好」看不出来
+                                com.yfantasyxx.data.OneRepMax
+                                    .estimate(best.weightKg, best.reps)
+                                    ?.let { InfoRow("估算 1RM", "${it.toInt()} kg") }
                             }
                             Row(
                                 modifier = Modifier

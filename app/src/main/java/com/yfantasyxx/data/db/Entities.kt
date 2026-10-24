@@ -123,8 +123,16 @@ data class TemplateExercise(
 
 /**
  * 一次训练记录（endTime 为 null 表示进行中的草稿）
+ *
+ * startTime / endTime 都建了索引：
+ * 四条统计查询全部按 startTime 范围过滤，getActiveDraft 是
+ * 「WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1」，
+ * 没有索引时两者都是全表扫描。
  */
-@Entity(tableName = "sessions")
+@Entity(
+    tableName = "sessions",
+    indices = [Index("startTime"), Index("endTime")]
+)
 data class WorkoutSession(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -249,11 +257,32 @@ data class CategoryVolume(
     val volume: Float,
 )
 
-/** 统计：单个动作的 PR */
+/**
+ * 统计：单个动作的 PR。
+ *
+ * 口径统一到「估算 1RM」，而不是最大重量：
+ * 100 kg × 10 的 e1RM ≈ 131，明显强于 110 kg × 3 的 e1RM ≈ 119，
+ * 但按最大重量排会把后者排到前面。
+ *
+ * [bestWeightKg] / [bestReps] 是产生 [estOneRm] 的那一组，
+ * 也就是说这两个数是**同一组里真实发生过的**，
+ * 而不是把「历史最大重量」和「历史最大次数」各自取极值拼出来。
+ */
 data class ExercisePr(
     val exerciseId: Long,
     val exerciseName: String,
+    /** 估算 1RM（kg）；该动作所有工作组都是 12 次以上时无法估算，为 null */
+    val estOneRm: Float?,
     val bestWeightKg: Float,
     val bestReps: Int,
+    /** 历史最大单组容量 weight × reps */
     val bestVolume: Float,
+)
+
+/** PR 计算的原始行：只取需要的列，1RM 融合公式在 Kotlin 侧算 */
+data class PrSetRow(
+    val exerciseId: Long,
+    val exerciseName: String,
+    val weightKg: Float,
+    val reps: Int,
 )

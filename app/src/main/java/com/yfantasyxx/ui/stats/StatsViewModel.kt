@@ -6,15 +6,17 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
 import com.yfantasyxx.data.WorkoutRepository
+import com.yfantasyxx.data.db.BodyMetric
 import com.yfantasyxx.data.db.CategoryVolume
 import com.yfantasyxx.data.db.ExercisePr
 import com.yfantasyxx.data.prefs.SettingsRepository
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -36,37 +38,37 @@ class StatsViewModel(
     private val dayMs = 24L * 3600 * 1000
     private val dateFormat = SimpleDateFormat("M/d", Locale.CHINA)
 
-    /** 派生数据（周容量/部位分布）在数据变化时重算 */
-    private val _derived = MutableStateFlow(StatsUiState())
+    /** 已经算过的数据版本，用来判断 PR 是复用缓存还是重算 */
+    private var computedVersion = -1
 
-    private val refreshTrigger = MutableStateFlow(0)
-
+    /**
+     * 数据版本（任何影响统计的写入 +1）和体重记录一起驱动重算。
+     *
+     * 原来 PR 是 `observePersonalRecords()` 这个 Room Flow：
+     * 训练中每改一次重量都会重跑整个历史的三表 join + GROUP BY，
+     * 而且这个 Flow 还兼作「周容量 / 分类容量」的重算信号，一次写入触发四次查询。
+     * 现在 PR 走仓库缓存（只在勾选完成 / 删除 / 结束训练时失效），
+     * 周容量与分类容量按版本号重算。
+     */
     val uiState: StateFlow<StatsUiState> = combine(
-        repo.observePersonalRecords(),
+        repo.observeDataVersion(),
         repo.observeBodyMetrics(),
-        _derived,
-        refreshTrigger,
-    ) { prs, weights, derived, _ ->
-        derived.copy(
-            personalRecords = prs,
+    ) { version, weights -> version to weights }
+        .map { (version, weights) -> build(weights, version) }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
+
+    private suspend fun build(weights: List<BodyMetric>, version: Int): StatsUiState {
+        val refresh = version != computedVersion
+        computedVersion = version
+        return StatsUiState(
+            weekVolumes = buildWeekBuckets(),
+            categoryVolumes = repo.volumeByCategory(System.currentTimeMillis() - 30 * dayMs),
+            personalRecords = repo.personalRecords(refresh = refresh),
             weightTrend = weights.sortedBy { it.date }.takeLast(30).map {
                 dateFormat.format(Date(it.date)) to it.weightKg
             },
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
-
-    init {
-        viewModelScope.launch {
-            // 训练记录变化时重算（用 PR flow 作为数据变化信号即可覆盖大多数情况）
-            repo.observePersonalRecords().collect {
-                val weeks = buildWeekBuckets()
-                val cats = repo.volumeByCategory(System.currentTimeMillis() - 30 * dayMs)
-                _derived.value = _derived.value.copy(
-                    weekVolumes = weeks,
-                    categoryVolumes = cats,
-                )
-            }
-        }
     }
 
     /** 近 8 周训练容量 */
