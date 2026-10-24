@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.CreateNewFolder
@@ -162,6 +163,12 @@ fun TemplatesScreen(
                             onToggleHome = {
                                 group.folderId?.let { id ->
                                     vm.toggleFolderHome(id, folderEntity?.showOnHome ?: true)
+                                }
+                            },
+                            rotation = folderEntity?.rotation ?: false,
+                            onToggleRotation = {
+                                group.folderId?.let { id ->
+                                    vm.toggleFolderRotation(id, folderEntity?.rotation ?: false)
                                 }
                             },
                             onAddTemplate = { onCreateTemplate(group.folderId) },
@@ -434,6 +441,8 @@ private fun FolderHeader(
     isRealFolder: Boolean,
     showOnHome: Boolean,
     onToggleHome: () -> Unit,
+    rotation: Boolean,
+    onToggleRotation: () -> Unit,
     onAddTemplate: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -479,6 +488,25 @@ private fun FolderHeader(
                     contentDescription = if (showOnHome) "首页显示中，点击隐藏" else "首页已隐藏，点击显示",
                     modifier = Modifier.size(18.dp),
                     tint = if (showOnHome) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f)
+                    },
+                )
+            }
+            // 轮换计划：把该文件夹的模板当成 A/B/C 循环，首页提示下一个该练哪个
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onToggleRotation),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Autorenew,
+                    contentDescription = if (rotation) "轮换计划已开启" else "设为轮换计划",
+                    modifier = Modifier.size(18.dp),
+                    tint = if (rotation) {
                         MiuixTheme.colorScheme.primary
                     } else {
                         MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.5f)

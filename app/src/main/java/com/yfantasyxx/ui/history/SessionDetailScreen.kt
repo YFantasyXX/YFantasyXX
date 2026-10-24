@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -96,6 +97,44 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     }.toFloat()
     val totalSets = details.sumOf { item -> item.sets.count { it.completed } }
 
+    // 分享卡片：画图 + PNG 压缩放到 IO 线程，点一下不会卡住界面
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun shareCard() {
+        val s = session ?: return
+        val data = com.yfantasyxx.util.ShareCard.Data(
+            title = s.name.ifBlank { "训练" },
+            date = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.CHINA).format(Date(s.startTime)),
+            durationMinutes = (((s.endTime ?: System.currentTimeMillis()) -
+                (s.activeStartedAt ?: s.startTime)) / 60000).toInt(),
+            exerciseCount = details.count { item -> item.sets.any { it.completed } },
+            setCount = totalSets,
+            volumeKg = totalVolume,
+            // 亮点按每个动作最强的一组取，最多三条
+            highlights = details
+                .sortedByDescending { item ->
+                    item.sets.filter { it.completed }.sumOf { (it.weightKg * it.reps).toDouble() }
+                }
+                .take(3)
+                .mapNotNull { item ->
+                    val best = item.sets
+                        .filter { it.completed && !it.isWarmup }
+                        .maxByOrNull {
+                            com.yfantasyxx.data.OneRepMax.estimate(it.weightKg, it.reps) ?: -1f
+                        } ?: return@mapNotNull null
+                    "${item.exercise.name} ${best.weightKg.toInt()} kg × ${best.reps}"
+                },
+        )
+        scope.launch {
+            runCatching {
+                val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.yfantasyxx.util.ShareCard.write(context, data)
+                }
+                com.yfantasyxx.util.ShareCard.share(context, file)
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             SmallTopAppBar(
@@ -113,6 +152,13 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { shareCard() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "分享",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
                     IconButton(onClick = { showDelete = true }) {
                         Icon(
                             imageVector = Icons.Filled.Delete,

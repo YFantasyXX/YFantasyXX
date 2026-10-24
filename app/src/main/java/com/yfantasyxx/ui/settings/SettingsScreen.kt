@@ -202,6 +202,68 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         )
                         ActionText(text = "管理", onClick = onOpenTemplates)
                     }
+                    Spacer(Modifier.height(14.dp))
+                    Text("每周训练目标", style = MiuixTheme.textStyles.main)
+                    Text(
+                        text = "设为 0 表示不设目标；首页会显示本周进度",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    NumberStepper(
+                        value = settings.weeklyGoal.toFloat(),
+                        onValueChange = { vm.setWeeklyGoal(it.toInt()) },
+                        step = 1f,
+                        unit = " 次",
+                    )
+                }
+            }
+
+            // ---- 杠铃片计算器设置 ----
+            SectionHeader("杠铃片")
+            Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "训练页里可以通过动作菜单里的「杠铃片计算器」反推每边挂什么片，" +
+                            "这里设定你的杆重和现有的片。",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text("杠铃杆重量", style = MiuixTheme.textStyles.main)
+                    Spacer(Modifier.height(8.dp))
+                    NumberStepper(
+                        value = settings.barWeightKg,
+                        onValueChange = { vm.setBarWeight(it) },
+                        step = 2.5f,
+                        unit = " kg",
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    var platesInput by remember(settings.plates) {
+                        mutableStateOf(settings.plates)
+                    }
+                    TextField(
+                        value = platesInput,
+                        onValueChange = { platesInput = it },
+                        label = "每侧可用的片（逗号分隔）",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            vm.setPlates(platesInput)
+                            toastMessage = "配片已保存"
+                        }) {
+                            Text("保存配片", style = MiuixTheme.textStyles.button)
+                        }
+                        ActionText(
+                            text = "恢复默认",
+                            onClick = {
+                                platesInput = "25,20,15,10,5,2.5,1.25"
+                                vm.setPlates(platesInput)
+                            },
+                        )
+                    }
                 }
             }
 

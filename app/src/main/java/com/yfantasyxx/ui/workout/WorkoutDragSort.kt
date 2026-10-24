@@ -168,6 +168,15 @@ internal class WorkoutDragState(
     /** 起手时卡片中心的视口坐标；[move] 以它为基准，不受后续滚动影响 */
     private var startCenterY = 0f
 
+    /**
+     * 自动滚动累计补偿。
+     *
+     * 手指位移是「相对按下点」的绝对值（不做增量累加，才不会漂移），
+     * 但列表滚动会让槽位自己走动，所以视觉位移 = 手指位移 + 滚动补偿。
+     * 两者必须分开记，否则下一次 move() 会把补偿抹掉，卡片瞬间跳回原位。
+     */
+    private var scrollCompensation = 0f
+
     /** 起手：记下起点、卡片高度，相邻卡片开始让位 */
     fun begin(id: Long, index: Int, snap: DragSnapshot) {
         snapshot = snap
@@ -179,12 +188,13 @@ internal class WorkoutDragState(
         startCenterY = snap.selfTopInViewport + snap.selfHeight / 2f
         cardCenterY = startCenterY
         offsetY = 0f
+        scrollCompensation = 0f
         draggingId = id
     }
 
     /** 手指移动：位移与落点一起更新 */
     fun move(dy: Float) {
-        offsetY = dy
+        offsetY = dy + scrollCompensation
         cardCenterY = startCenterY + dy
         val snap = snapshot ?: return
         targetIndex = snap.targetFor(fromIndex, cardCenterY)
@@ -199,6 +209,7 @@ internal class WorkoutDragState(
      * 卡片中心在视口里不动，所以 cardCenterY 不调整 —— 这正是「继续拖远」的来源。
      */
     fun onAutoScrolled(scrolled: Float) {
+        scrollCompensation += scrolled
         offsetY += scrolled
         val snap = snapshot ?: return
         targetIndex = snap.targetFor(fromIndex, cardCenterY)
@@ -248,6 +259,7 @@ internal class WorkoutDragState(
         targetIndex = -1
         offsetY = 0f
         autoScrollSpeed = 0f
+        scrollCompensation = 0f
         snapshot = null
     }
 }

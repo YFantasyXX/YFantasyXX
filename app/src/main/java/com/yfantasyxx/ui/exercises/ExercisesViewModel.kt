@@ -75,6 +75,10 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
 
     suspend fun getBestSet(exerciseId: Long): SetLog? = repo.bestSetFor(exerciseId)
 
+    /** 该动作的 e1RM 曲线（一次训练一个点） */
+    suspend fun getE1rmHistory(exerciseId: Long): List<com.yfantasyxx.data.db.E1rmPoint> =
+        repo.e1rmHistory(exerciseId)
+
     fun updateExercise(exercise: Exercise) {
         viewModelScope.launch { repo.updateExercise(exercise) }
     }

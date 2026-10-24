@@ -55,6 +55,18 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepo.setAutoBackup(enabled) }
     }
 
+    fun setWeeklyGoal(count: Int) {
+        viewModelScope.launch { settingsRepo.setWeeklyGoal(count.coerceIn(0, 14)) }
+    }
+
+    fun setBarWeight(kg: Float) {
+        viewModelScope.launch { settingsRepo.setBarWeight(kg.coerceIn(0f, 50f)) }
+    }
+
+    fun setPlates(csv: String) {
+        viewModelScope.launch { settingsRepo.setPlates(csv) }
+    }
+
     fun saveWebdav(url: String, user: String, pass: String) {
         viewModelScope.launch { settingsRepo.setWebdavConfig(url, user, pass) }
     }

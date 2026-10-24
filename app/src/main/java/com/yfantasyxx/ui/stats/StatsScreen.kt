@@ -10,6 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -81,6 +87,27 @@ fun StatsScreen() {
                 }
             }
 
+            // 肌群热力图 + 疲劳度
+            item {
+                SectionHeader("近 7 天肌群负荷")
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (state.muscleLoads.isEmpty()) {
+                            EmptyState(text = "暂无数据")
+                        } else {
+                            MuscleHeatmap(loads = state.muscleLoads)
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = "主肌群记 1 组、次要肌群记 0.5 组；" +
+                                    "48 小时内练过的部位标为恢复中",
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
+                    }
+                }
+            }
+
             // 体重趋势
             item {
                 SectionHeader("体重趋势 (kg)")
@@ -137,8 +164,90 @@ fun StatsScreen() {
     }
 }
 
-private val categoryColors = listOf(
-    androidx.compose.ui.graphics.Color(0xFF3482FF),
+/**
+ * 肌群热力图。
+ *
+ * 两列小格子，颜色深浅 = 近 7 天有效组数，副标题 = 恢复状态。
+ * 不用真的画人体：肌群是一组离散的名字，用格子比拼一张图更好读，
+ * 而且不用维护身体轮廓的坐标。两列而不是三列，是为了让「胸大肌」「三角肌前束」
+ * 这类四五个字的名字不会被截断。
+ */
+@Composable
+private fun MuscleHeatmap(loads: List<com.yfantasyxx.data.db.MuscleLoad>) {
+    val maxSets = (loads.maxOfOrNull { it.sets } ?: 1f).coerceAtLeast(1f)
+    val now = remember { System.currentTimeMillis() }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        loads.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                pair.forEach { load ->
+                    MuscleCell(
+                        load = load,
+                        maxSets = maxSets,
+                        now = now,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // 单数个时补一个空位，避免最后一个格子被拉成整行宽
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MuscleCell(
+    load: com.yfantasyxx.data.db.MuscleLoad,
+    maxSets: Float,
+    now: Long,
+    modifier: Modifier = Modifier,
+) {
+    val intensity = (load.sets / maxSets).coerceIn(0f, 1f)
+    val base = MiuixTheme.colorScheme.surfaceContainer
+    val accent = MiuixTheme.colorScheme.primary
+    val background = androidx.compose.ui.graphics.lerp(base, accent, intensity * 0.7f)
+    val onBackground = if (intensity > 0.55f) {
+        MiuixTheme.colorScheme.onPrimary
+    } else {
+        MiuixTheme.colorScheme.onSurface
+    }
+    val hours = if (load.lastTrainedAt > 0L) {
+        (now - load.lastTrainedAt) / 3_600_000f
+    } else {
+        null
+    }
+    val status = when {
+        hours == null -> "本周未练"
+        hours < 24f -> "恢复中"
+        hours < 48f -> "恢复期"
+        else -> "可练"
+    }
+    Column(
+        modifier = modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+            .background(background)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = load.muscle,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = onBackground,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+        Text(
+            text = "${load.sets.toInt()} 组 · $status",
+            fontSize = 11.sp,
+            color = onBackground.copy(alpha = 0.75f),
+            maxLines = 1,
+        )
+    }
+}
+
+private val categoryColors = listOf(    androidx.compose.ui.graphics.Color(0xFF3482FF),
     androidx.compose.ui.graphics.Color(0xFF34C759),
     androidx.compose.ui.graphics.Color(0xFFFF9500),
     androidx.compose.ui.graphics.Color(0xAF52DE),

@@ -43,6 +43,11 @@ import com.yfantasyxx.ui.LocalBottomBarSpace
 import com.yfantasyxx.ui.components.EmptyState
 import com.yfantasyxx.ui.components.formatVolume
 import com.yfantasyxx.ui.rememberAppContainer
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import top.yukonga.miuix.kmp.basic.Card
@@ -59,9 +64,31 @@ import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
-class HistoryViewModel(repo: WorkoutRepository) : ViewModel() {
-    val sessions = repo.observeHistory()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList<SessionSummary>())
+class HistoryViewModel(private val repo: WorkoutRepository) : ViewModel() {
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
+
+    /**
+     * 搜索：同时匹配训练名和动作名。
+     *
+     * 动作名要查库（摘要在 SQL 里没有动作列），所以这里是 suspend 的 map，
+     * 只在关键词变化时跑一次 —— 全部历史只有 200 条上下，内存过滤足够快。
+     */
+    val sessions: StateFlow<List<SessionSummary>> =
+        combine(repo.observeHistory(), _query) { list, keyword -> list to keyword }
+            .map { (list, keyword) ->
+                if (keyword.isBlank()) {
+                    list
+                } else {
+                    val byExercise = repo.sessionIdsMatchingExercise(keyword)
+                    list.filter { it.id in byExercise || it.name.contains(keyword, true) }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList<SessionSummary>())
+
+    fun setQuery(value: String) {
+        _query.value = value
+    }
 
     companion object {
         fun factory(container: AppContainer) = viewModelFactory {
@@ -75,6 +102,7 @@ fun HistoryScreen(onOpenSession: (Long) -> Unit) {
     val container = rememberAppContainer()
     val vm: HistoryViewModel = viewModel(factory = HistoryViewModel.factory(container))
     val sessions by vm.sessions.collectAsState()
+    val query by vm.query.collectAsState()
 
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
@@ -88,44 +116,87 @@ fun HistoryScreen(onOpenSession: (Long) -> Unit) {
     Scaffold(
         topBar = { SmallTopAppBar(title = "训练历史") },
     ) { padding ->
-        if (sessions.isEmpty()) {
-            EmptyState(text = "暂无训练记录")
-        } else {
-            Column(
+        Column(modifier = Modifier.padding(padding)) {
+            // 搜索框固定在顶部：翻到哪个月都能直接搜
+            top.yukonga.miuix.kmp.basic.TextField(
+                value = query,
+                onValueChange = vm::setQuery,
+                label = "搜索训练名称或动作",
+                singleLine = true,
                 modifier = Modifier
-                    .padding(padding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 16.dp + LocalBottomBarSpace.current),
-            ) {
-                MonthCalendar(
-                    month = month,
-                    sessionsByDate = sessionsByDate,
-                    selectedDate = selectedDate,
-                    onSelectDate = { selectedDate = it },
-                    onMonthChange = { month = it },
-                )
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            )
 
-                Spacer(Modifier.height(16.dp))
-
-                val daySessions = sessionsByDate[selectedDate].orEmpty()
-                Text(
-                    text = "${selectedDate.monthValue}月${selectedDate.dayOfMonth}日 · " +
-                        "${daySessions.size} 次训练",
-                    style = MiuixTheme.textStyles.subtitle,
-                )
-                Spacer(Modifier.height(8.dp))
-
-                if (daySessions.isEmpty()) {
+            if (query.isNotBlank()) {
+                // 搜索结果：不受月份限制，全历史匹配
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp + LocalBottomBarSpace.current),
+                ) {
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "这天没有训练记录",
-                        style = MiuixTheme.textStyles.paragraph,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(vertical = 12.dp),
+                        text = "找到 ${sessions.size} 次训练",
+                        style = MiuixTheme.textStyles.subtitle,
                     )
-                } else {
-                    daySessions.forEach { session ->
-                        SessionCard(session = session, onClick = { onOpenSession(session.id) })
+                    Spacer(Modifier.height(8.dp))
+                    if (sessions.isEmpty()) {
+                        Text(
+                            text = "换个关键词试试，可以搜动作名",
+                            style = MiuixTheme.textStyles.paragraph,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    } else {
+                        sessions.forEach { session ->
+                            SessionCard(
+                                session = session,
+                                showDate = true,
+                                onClick = { onOpenSession(session.id) },
+                            )
+                        }
+                    }
+                }
+            } else if (sessions.isEmpty()) {
+                EmptyState(text = "暂无训练记录")
+            } else {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp + LocalBottomBarSpace.current),
+                ) {
+                    MonthCalendar(
+                        month = month,
+                        sessionsByDate = sessionsByDate,
+                        selectedDate = selectedDate,
+                        onSelectDate = { selectedDate = it },
+                        onMonthChange = { month = it },
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    val daySessions = sessionsByDate[selectedDate].orEmpty()
+                    Text(
+                        text = "${selectedDate.monthValue}月${selectedDate.dayOfMonth}日 · " +
+                            "${daySessions.size} 次训练",
+                        style = MiuixTheme.textStyles.subtitle,
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    if (daySessions.isEmpty()) {
+                        Text(
+                            text = "这天没有训练记录",
+                            style = MiuixTheme.textStyles.paragraph,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    } else {
+                        daySessions.forEach { session ->
+                            SessionCard(session = session, onClick = { onOpenSession(session.id) })
+                        }
                     }
                 }
             }
@@ -279,7 +350,11 @@ private fun DayCell(
 }
 
 @Composable
-private fun SessionCard(session: SessionSummary, onClick: () -> Unit) {
+private fun SessionCard(
+    session: SessionSummary,
+    onClick: () -> Unit,
+    showDate: Boolean = false,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -304,7 +379,10 @@ private fun SessionCard(session: SessionSummary, onClick: () -> Unit) {
                 )
             }
             Text(
-                text = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(session.startTime)),
+                text = SimpleDateFormat(
+                    if (showDate) "MM-dd HH:mm" else "HH:mm",
+                    Locale.CHINA,
+                ).format(Date(session.startTime)),
                 style = MiuixTheme.textStyles.paragraph,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )

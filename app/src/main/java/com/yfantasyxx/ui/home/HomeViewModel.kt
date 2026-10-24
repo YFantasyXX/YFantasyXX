@@ -30,6 +30,8 @@ data class HomeUiState(
     val settings: AppSettings = AppSettings(),
     val weightUnitLabel: String = "kg",
     val latestWeightKg: Float? = null,
+    /** 轮换计划里的下一个模板；没有开启轮换时为 null */
+    val nextInRotation: WorkoutTemplate? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,6 +47,7 @@ class HomeViewModel(
         repo.observeSessionCount(weekStart()),
         repo.observeTotalVolume(weekStart()),
         settingsRepo.settings,
+        repo.observeNextRotation(),
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val active = values[0] as ActiveSessionSummary?
@@ -53,6 +56,7 @@ class HomeViewModel(
         val weekCount = values[3] as Int
         val weekVolume = values[4] as Float
         val settings = values[5] as AppSettings
+        val rotation = values[6] as WorkoutTemplate?
         HomeUiState(
             activeSession = active,
             templates = templates,
@@ -63,6 +67,7 @@ class HomeViewModel(
             settings = settings,
             weightUnitLabel = settings.weightUnit.label,
             latestWeightKg = null,
+            nextInRotation = rotation,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 

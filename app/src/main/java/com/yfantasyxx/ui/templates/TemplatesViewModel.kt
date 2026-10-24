@@ -102,6 +102,11 @@ class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         viewModelScope.launch { repo.setFolderShowOnHome(id, !current) }
     }
 
+    /** 切换「轮换计划」：开启后首页会提示下一个该练哪个模板 */
+    fun toggleFolderRotation(id: Long, current: Boolean) {
+        viewModelScope.launch { repo.setFolderRotation(id, !current) }
+    }
+
     fun deleteFolder(id: Long) {
         viewModelScope.launch { repo.deleteFolder(id) }
     }

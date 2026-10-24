@@ -285,6 +285,9 @@ internal fun WorkoutExerciseRow(
                         }
 
                         // ---- 松手：只下单，动画与落库由屏幕的 LaunchedEffect 执行 ----
+                        // 先把自动滚动停掉：落位动画要滑进「此刻」的空隙，
+                        // 如果这 160ms 里列表还在滚，空隙位置会一路跑掉。
+                        drag.autoScrollSpeed = 0f
                         val count = liveCount
                         val moved = started && liveIndex in 0 until count &&
                             target in 0 until count && target != liveIndex

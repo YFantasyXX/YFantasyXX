@@ -56,6 +56,9 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     var exercise by remember { mutableStateOf<Exercise?>(null) }
     var lastSets by remember { mutableStateOf<List<SetLog>>(emptyList()) }
     var bestSet by remember { mutableStateOf<SetLog?>(null) }
+    var e1rmPoints by remember {
+        mutableStateOf<List<com.yfantasyxx.data.db.E1rmPoint>>(emptyList())
+    }
     var showRestPicker by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
@@ -67,6 +70,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
         exercise = vm.getExercise(exerciseId)
         lastSets = vm.getLastPerformance(exerciseId)
         bestSet = vm.getBestSet(exerciseId)
+        e1rmPoints = vm.getE1rmHistory(exerciseId)
     }
 
     Scaffold(
@@ -171,6 +175,72 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                         }
                     }
                 }
+                // ---- 估算 1RM 趋势 ----
+                // 这是所有训练智能的地基：只有一条能看出「有没有进步」的曲线，
+                // 才知道该不该加重、该不该换计划。
+                item { SectionHeader("估算 1RM 趋势") }
+                item {
+                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            if (e1rmPoints.size < 2) {
+                                Text(
+                                    text = "记录两次以上训练后显示趋势",
+                                    style = MiuixTheme.textStyles.paragraph,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                            } else {
+                                val best = e1rmPoints.maxOf { it.e1rm }
+                                val latest = e1rmPoints.last()
+                                val first = e1rmPoints.first()
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${latest.e1rm.toInt()} kg",
+                                            style = MiuixTheme.textStyles.title3,
+                                            color = MiuixTheme.colorScheme.primary,
+                                        )
+                                        Text(
+                                            text = "最近一次 · 最佳组 " +
+                                                "${latest.weightKg.toInt()} × ${latest.reps}",
+                                            style = MiuixTheme.textStyles.footnote1,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        // 涨跌用中文习惯：涨红跌绿
+                                        val delta = latest.e1rm - first.e1rm
+                                        Text(
+                                            text = (if (delta >= 0) "+" else "") +
+                                                "${delta.toInt()} kg",
+                                            style = MiuixTheme.textStyles.subtitle,
+                                            color = if (delta >= 0) {
+                                                androidx.compose.ui.graphics.Color(0xFFFF3B30)
+                                            } else {
+                                                androidx.compose.ui.graphics.Color(0xFF34C759)
+                                            },
+                                        )
+                                        Text(
+                                            text = "较首次 · 峰值 ${best.toInt()}",
+                                            style = MiuixTheme.textStyles.footnote1,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                com.yfantasyxx.ui.components.WeightLineChart(
+                                    data = e1rmPoints.map {
+                                        java.text.SimpleDateFormat("M/d", Locale.CHINA)
+                                            .format(Date(it.startTime)) to it.e1rm
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
                 item { SectionHeader("最近表现") }
                 if (lastSets.isEmpty()) {
                     item {

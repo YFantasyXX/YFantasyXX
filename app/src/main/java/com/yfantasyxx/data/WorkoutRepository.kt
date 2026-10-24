@@ -51,6 +51,14 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     fun observeDataVersion(): StateFlow<Int> = dataVersion
 
+    /**
+     * 轮换计划的下一个模板。
+     *
+     * 挂在数据版本号上：结束一次训练后版本 +1，首页的「下一个」自动跟着变。
+     */
+    fun observeNextRotation(): Flow<WorkoutTemplate?> =
+        dataVersion.map { nextRotationTemplate() }
+
     /** PR 列表缓存；[invalidateStats] 时置空 */
     @Volatile
     private var prCache: List<ExercisePr>? = null

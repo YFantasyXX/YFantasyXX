@@ -124,6 +124,15 @@ private fun YFantasyXXNavHost() {
                     onOpenTemplates = { navController.navigate(Routes.TEMPLATES) },
                     onOpenSession = { id -> navController.navigate(Routes.sessionDetail(id)) },
                     onStartFromTemplate = { navController.navigate(Routes.WORKOUT) },
+                    onOpenSettings = {
+                        navController.navigate(Routes.SETTINGS) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    },
                 )
             }
             composable(Routes.EXERCISES) {

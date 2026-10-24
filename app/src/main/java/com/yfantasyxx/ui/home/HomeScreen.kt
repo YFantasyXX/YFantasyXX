@@ -1,6 +1,7 @@
 package com.yfantasyxx.ui.home
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,6 +12,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.PlayArrow
@@ -57,6 +63,7 @@ fun HomeScreen(
     onOpenTemplates: () -> Unit,
     onOpenSession: (Long) -> Unit,
     onStartFromTemplate: () -> Unit,
+    onOpenSettings: () -> Unit = {},
 ) {
     val container = rememberAppContainer()
     val vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container))
@@ -196,6 +203,114 @@ fun HomeScreen(
                                     )
                                 } ?: "--",
                                 state.weightUnitLabel,
+                            )
+                        }
+
+                        // ---- 周目标 ----
+                        // 没设目标时给一个入口，而不是空白：不然用户不知道有这个功能
+                        Spacer(Modifier.height(14.dp))
+                        if (state.settings.weeklyGoal > 0) {
+                            val goal = state.settings.weeklyGoal
+                            val done = state.weekSessionCount
+                            val ratio = (done.toFloat() / goal).coerceIn(0f, 1f)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "本周目标",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = "$done / $goal 次" +
+                                        if (done >= goal) " · 已达成" else "",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = if (done >= goal) {
+                                        MiuixTheme.colorScheme.primary
+                                    } else {
+                                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                    },
+                                )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+                                    .background(MiuixTheme.colorScheme.surfaceContainer),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(ratio)
+                                        .height(6.dp)
+                                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+                                        .background(MiuixTheme.colorScheme.primary),
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenSettings)
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "设定每周训练目标",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    modifier = Modifier.height(16.dp),
+                                    tint = MiuixTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- 轮换计划：下一个该练哪个 ----
+            state.nextInRotation?.let { next ->
+                item {
+                    Spacer(Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        onClick = { vm.startWorkout(next.id) { onStartFromTemplate() } },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Autorenew,
+                                contentDescription = null,
+                                tint = MiuixTheme.colorScheme.primary,
+                            )
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(start = 12.dp),
+                            ) {
+                                Text(
+                                    text = "轮换 · 下一个",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                                Text(next.name, style = MiuixTheme.textStyles.main)
+                            }
+                            Text(
+                                text = "开始",
+                                style = MiuixTheme.textStyles.button,
+                                color = MiuixTheme.colorScheme.primary,
                             )
                         }
                     }

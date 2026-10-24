@@ -27,6 +27,7 @@ data class StatsUiState(
     val categoryVolumes: List<CategoryVolume> = emptyList(),
     val personalRecords: List<ExercisePr> = emptyList(),
     val weightTrend: List<Pair<String, Float>> = emptyList(),
+    val muscleLoads: List<com.yfantasyxx.data.db.MuscleLoad> = emptyList(),
 )
 
 class StatsViewModel(
@@ -68,6 +69,9 @@ class StatsViewModel(
             weightTrend = weights.sortedBy { it.date }.takeLast(30).map {
                 dateFormat.format(Date(it.date)) to it.weightKg
             },
+            // 热力图看 7 天：一个肌群一周练 10-20 组是常见区间，
+            // 只看 3 天会看不出「这周还没练过」的空白
+            muscleLoads = repo.muscleLoads(System.currentTimeMillis() - 7 * dayMs),
         )
     }
 
