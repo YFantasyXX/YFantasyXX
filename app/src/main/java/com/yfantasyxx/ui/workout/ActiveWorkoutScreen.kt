@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.items
@@ -547,6 +548,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                         var started = false
                                         // 落点：每帧重算，默认就是「回原位」
                                         var target = liveIndex
+                                        // 起手那一刻的行几何快照，整场手势只读它
+                                        var snap: DragSnapshot? = null
 
                                         while (true) {
                                             val event = awaitPointerEvent()
@@ -561,16 +564,21 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                                 change.position.y - down.position.y
                                             if (!started) {
                                                 if (abs(total) < slop) continue
+                                                // 拍快照：整场手势不再读实时布局。
+                                                // 拿不到几何（比如卡片刚好被回收）就放弃这次拖动。
+                                                val s = buildDragSnapshot(
+                                                    layout = listState.layoutInfo,
+                                                    headerCount = liveHeaderCount,
+                                                    selfIndex = liveIndex,
+                                                    exerciseCount = latestExercises.size,
+                                                ) ?: break
+                                                snap = s
                                                 started = true
                                                 // 进入拖动态：记下起点和卡片高度，
                                                 // 相邻卡片开始让位
                                                 dragFromIndex = liveIndex
                                                 dragTargetIndex = liveIndex
-                                                dragHeight = listState.layoutInfo
-                                                    .visibleItemsInfo
-                                                    .firstOrNull {
-                                                        it.index == liveHeaderCount + liveIndex
-                                                    }?.size?.toFloat() ?: 0f
+                                                dragHeight = s.selfHeight
                                                 draggingId = id
                                                 haptics.performHapticFeedback(
                                                     HapticFeedbackType.TextHandleMove
@@ -582,57 +590,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             // 拖动中改顺序 → 重新布局 → 坐标变化 →
                                             // 又触发换位判断，会形成闪烁反馈环。
                                             //
-                                            // 下标换算说明：动作列表前面还有「错误提示卡」和
-                                            // 「休息倒计时卡」，所以 visibleItemsInfo.index
-                                            // 要减去 headerItemCount 才是动作下标。
-                                            // 不用 item key 反查——key 一旦对不上，
-                                            // 整条逻辑会静默失效（排查成本极高）。
-                                            val size = latestExercises.size
-                                            val self = listState.layoutInfo
-                                                .visibleItemsInfo
-                                                .firstOrNull {
-                                                    it.index == liveHeaderCount + liveIndex
-                                                }
-                                                ?: continue
-                                            // 卡片视觉中心 = 布局偏移 + 半高 + 拖动量
-                                            val visualCenter =
-                                                self.offset + self.size / 2f + total
-                                            // 换位判据：卡片中心【真正越过】对方中心才换，
-                                            // 不是「离谁最近算谁」——后者手指一动就整格跳。
-                                            // 向下拖：越过几个就落到第几个；向上拖取最近的那个。
-                                            target = liveIndex
-                                            val items = listState.layoutInfo.visibleItemsInfo
-                                            if (total > 0f) {
-                                                items.forEach { info ->
-                                                    val idx =
-                                                        info.index - liveHeaderCount
-                                                    if (idx <= liveIndex || idx >= size) {
-                                                        return@forEach
-                                                    }
-                                                    val center =
-                                                        info.offset + info.size / 2f
-                                                    // 目标是「最后一个被越过的」，迭代到头自然如此
-                                                    if (center < visualCenter) {
-                                                        target = idx
-                                                    }
-                                                }
-                                            } else if (total < 0f) {
-                                                items.forEach { info ->
-                                                    val idx =
-                                                        info.index - liveHeaderCount
-                                                    if (idx < 0 || idx >= liveIndex) {
-                                                        return@forEach
-                                                    }
-                                                    val center =
-                                                        info.offset + info.size / 2f
-                                                    // 目标是「最靠下（最近）的那个被越过的」
-                                                    if (center > visualCenter &&
-                                                        (target == liveIndex || idx < target)
-                                                    ) {
-                                                        target = idx
-                                                    }
-                                                }
-                                            }
+                                            // 判据：有多少行的中心在我中心之上，我就排第几位。
+                                            // 这一条同时覆盖向上和向下，不需要分支，也不会差一格。
+                                            // 全部基于起手时的快照，不再读实时布局。
+                                            val s = snap ?: break
+                                            target = s.targetFor(liveIndex, total)
                                             // 落点变了就同步给相邻卡片，让它们滑开空隙
                                             if (target != dragTargetIndex) {
                                                 dragTargetIndex = target
@@ -652,25 +614,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                             }
                                             moved -> {
                                                 // 滑进空隙的距离 = 中间被越过卡片的高度之和
-                                                var gap = 0f
-                                                listState.layoutInfo.visibleItemsInfo
-                                                    .forEach { info ->
-                                                        val idx =
-                                                            info.index - liveHeaderCount
-                                                        if (target > liveIndex) {
-                                                            if (idx > liveIndex &&
-                                                                idx <= target
-                                                            ) {
-                                                                gap += info.size
-                                                            }
-                                                        } else {
-                                                            if (idx >= target &&
-                                                                idx < liveIndex
-                                                            ) {
-                                                                gap -= info.size
-                                                            }
-                                                        }
-                                                    }
+                                                val gap = snap?.gapFor(liveIndex, target) ?: 0f
                                                 pendingDrop = DropPlan(liveIndex, target, gap)
                                             }
                                             else -> {
@@ -1279,6 +1223,88 @@ private fun formatDuration(seconds: Int): String {
  * 所以手势只把「落点 + 需要滑动的距离」记下来，动画和落库交给 LaunchedEffect。
  */
 private class DropPlan(val from: Int, val to: Int, val gap: Float)
+
+/**
+ * 快照里的一行动作。
+ *
+ * [centerRel] 是「相对被拖卡片顶部」的中心偏移，不是绝对屏幕坐标。
+ * 用相对值的原因：休息倒计时卡可能在拖动途中出现或消失，整列会一起平移，
+ * 绝对坐标会全部失效；相对值在整体平移下不变，判定不受影响。
+ */
+private class DragRow(
+    val actionIndex: Int,
+    val centerRel: Float,
+    val height: Float,
+)
+
+/**
+ * 起手那一刻的行几何快照。
+ *
+ * 为什么必须快照、而不是每帧读 `listState.layoutInfo`：
+ * 拖动过程中只做 graphicsLayer 平移、不改列表顺序，布局本来就是冻结的，
+ * 一份快照足够用整场手势。反过来每帧读实时布局，会把「自己刚做的平移和
+ * 让位」间接读回来，容易形成「读布局 → 改视觉 → 再读」的反馈环。
+ *
+ * [baseIndex] 是可视区第一个动作下标。列表滚到中间时，
+ * 「我上面有几行」只能换算成相对下标，必须加回这个基址才对。
+ */
+private class DragSnapshot(
+    val rows: List<DragRow>,
+    val baseIndex: Int,
+    val selfHeight: Float,
+) {
+    /**
+     * 落点下标：有多少行的中心在我中心之上，我就排第几位。
+     * 这一条同时覆盖向上和向下两个方向，不需要分支，也不会差一格。
+     */
+    fun targetFor(from: Int, dy: Float): Int {
+        if (rows.isEmpty()) return from
+        val midRel = selfHeight / 2f + dy
+        val above = rows.count { it.actionIndex != from && it.centerRel < midRel }
+        return (baseIndex + above).coerceIn(baseIndex, rows.last().actionIndex)
+    }
+
+    /**
+     * 松手后卡片需要滑进空隙的距离：
+     * 向下拖 = 被越过卡片高度之和，向上拖 = 其负值。
+     */
+    fun gapFor(from: Int, to: Int): Float = when {
+        to > from -> rows.filter { it.actionIndex in (from + 1)..to }
+            .map { it.height }.sum()
+        to < from -> -rows.filter { it.actionIndex in to until from }
+            .map { it.height }.sum()
+        else -> 0f
+    }
+}
+
+/**
+ * 从当前布局拍一份快照。拿不到被拖卡片的几何时返回 null（放弃这次拖动）。
+ *
+ * [headerCount]：动作列表前面还有「错误提示卡 / 休息倒计时卡」，
+ * `visibleItemsInfo.index` 是整条 LazyColumn 的下标，减去它才是动作下标。
+ */
+private fun buildDragSnapshot(
+    layout: LazyListLayoutInfo,
+    headerCount: Int,
+    selfIndex: Int,
+    exerciseCount: Int,
+): DragSnapshot? {
+    val self = layout.visibleItemsInfo
+        .firstOrNull { it.index - headerCount == selfIndex }
+        ?: return null
+    val selfTop = self.offset.toFloat()
+    val rows = layout.visibleItemsInfo.mapNotNull { info ->
+        val idx = info.index - headerCount
+        if (idx < 0 || idx >= exerciseCount) return@mapNotNull null
+        DragRow(
+            actionIndex = idx,
+            centerRel = info.offset + info.size / 2f - selfTop,
+            height = info.size.toFloat(),
+        )
+    }.sortedBy { it.actionIndex }
+    if (rows.isEmpty()) return null
+    return DragSnapshot(rows, rows.first().actionIndex, self.size.toFloat())
+}
 
 /**
  * 手动补间：把视觉位移从 [from] 平滑推到 [to]。
