@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -74,12 +75,11 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.material.icons.filled.Menu
 
 @Composable
@@ -103,13 +103,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var dropTargetIndex by remember { mutableStateOf(-1) }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
-    // 用普通 HashMap 记录布局：布局阶段写快照状态会引起不必要的重组抖动
-    val itemBounds = remember { HashMap<Long, Pair<Float, Float>>() }
     // 拖动期间要拿到最新的动作顺序（而不是手势启动那一刻的快照）
     val latestExercises by rememberUpdatedState(exercises)
-    // 拖动标记的稳定快照引用：手势协程内读它始终拿到最新值，
-    // 且它作为普通对象不会引起重组或 modifier 链变化
-    val draggingIdSnapshot = rememberUpdatedState(draggingId)
+    // 列表状态：拖动时用它读各 item 的真实布局位置（官方数据源，比自记坐标可靠）
+    val listState = rememberLazyListState()
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -187,23 +184,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             }
 
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // 拖动中禁止列表滚动。
-                    // 这个 modifier 必须「无条件存在」：如果按 draggingId 条件添加，
-                    // 拖动开始瞬间会改变 LazyColumn 的 modifier 链，等于在手势进行中
-                    // 重建 scrollable，手势会被直接取消（这就是之前拖不动的根因）。
-                    // 这里改为恒定挂载，只在内部读最新状态决定是否吞掉事件。
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures(
-                            onVerticalDrag = { change, _ ->
-                                // 正在拖动动作时吞掉纵向事件，列表不跟着滚。
-                                // key 恒为 Unit：手势协程永不重启，
-                                // draggingFlag 读的是最新快照值
-                                if (draggingIdSnapshot.value != null) change.consume()
-                            },
-                        )
-                    },
+                state = listState,
+                modifier = Modifier.fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
             ) {
                 // 操作异常提示（不闪退，显示原因）
@@ -338,96 +320,124 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                         ),
                                     )
                                 }
-                            }
-                            .onGloballyPositioned { coords ->
-                                itemBounds[item.sessionExercise.id] =
-                                    coords.positionInParent().y to coords.size.height.toFloat()
                             },
                         verticalAlignment = Alignment.Top,
                     ) {
                         // 拖动把手：按住上下拖动排序。
                         //
-                        // 关键设计（前几版反复踩坑后定下的方案）：
-                        // 拖动过程中【绝不修改列表顺序】。列表顺序一变，LazyColumn
-                        // 重新布局 → onGloballyPositioned 重新回调 → 坐标变化 →
-                        // 又触发换位判断，形成反馈环，表现为持续闪烁。
-                        // 正确做法：拖动中只把卡片平移，同时算出一个「目标插入位」，
-                        // 用高亮线显示；松手时才一次性改顺序并落库。
+                        // 为什么自己写手势而不用 detectVerticalDragGestures：
+                        // 那个检测器内部的 verticalDrag 一旦发现事件已被消费
+                        // （change.isConsumed()）就返回 null，整个手势会被判定为
+                        // 「取消」而走 onDragCancel，onDragEnd 再也不执行——
+                        // 这就是之前「拖到位了却没反应」的真正原因。
+                        // 自己写 awaitEachGesture 循环可以完全控制：
+                        // 该消费时消费、该结束时结束，结束逻辑必然执行。
+                        //
+                        // 另外两条铁律（前几版踩过）：
+                        // 1. 拖动中【绝不修改列表顺序】，否则重新布局 → 坐标变化 →
+                        //    又触发换位判断，形成反馈环（表现为持续闪烁）
+                        // 2. 位置数据取自 listState.layoutInfo（官方数据源），
+                        //    不用 onGloballyPositioned 自记坐标
                         Box(
                             modifier = Modifier
                                 .width(40.dp)
                                 .heightIn(min = 72.dp)
                                 .pointerInput(item.sessionExercise.id) {
-                                    detectVerticalDragGestures(
-                                        onDragStart = {
-                                            draggingId = item.sessionExercise.id
-                                            dragOffsetY = 0f
-                                            haptics.performHapticFeedback(
-                                                HapticFeedbackType.TextHandleMove
-                                            )
-                                        },
-                                        onVerticalDrag = { change, amount ->
+                                    awaitEachGesture {
+                                        // 不要求未被消费，保证一定能拿到这次手势
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false
+                                        )
+                                        // 立即占用手势：把手是专用拖拽区，
+                                        // 阻止外层 LazyColumn 的滚动抢走事件
+                                        down.consume()
+                                        draggingId = item.sessionExercise.id
+                                        dragOffsetY = 0f
+                                        // 进入拖动态时给一次触觉反馈，确认「抓住了」
+                                        haptics.performHapticFeedback(
+                                            HapticFeedbackType.TextHandleMove
+                                        )
+                                        var started = false
+                                        var total = 0f
+                                        var lastY = down.position.y
+                                        val slop = viewConfiguration.touchSlop
+
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes
+                                                .firstOrNull { it.id == down.id }
+                                                ?: break
+                                            // 手指抬起或指针消失 → 手势结束
+                                            if (!change.pressed) break
+                                            val dy = change.position.y - lastY
+                                            lastY = change.position.y
+                                            if (!started) {
+                                                // 未超过滑动阈值前不算拖动，
+                                                // 但照样消费，避免列表滚动启动
+                                                if (abs(dy) <= slop) {
+                                                    change.consume()
+                                                    continue
+                                                }
+                                                started = true
+                                            }
+                                            total += dy
                                             change.consume()
-                                            val id = draggingId
-                                                ?: return@detectVerticalDragGestures
+                                            dragOffsetY = total
+
+                                            // ---- 计算目标插入位（此时不改列表）----
                                             val list = latestExercises
                                             val from = list.indexOfFirst {
-                                                it.sessionExercise.id == id
+                                                it.sessionExercise.id == draggingId
                                             }
-                                            if (from < 0) return@detectVerticalDragGestures
-                                            val selfH = itemBounds[id]?.second
-                                                ?: return@detectVerticalDragGestures
-                                            dragOffsetY += amount
-                                            // 被拖卡片的视觉中心 = 自身布局中心 + 累积位移
+                                            if (from < 0) continue
+                                            val infos =
+                                                listState.layoutInfo.visibleItemsInfo
+                                            val self =
+                                                infos.firstOrNull { it.key == draggingId }
+                                                    ?: continue
+                                            // 被拖卡片视觉中心 = 布局中心 + 累积位移
                                             val visualCenter =
-                                                (itemBounds[id]?.first ?: 0f) +
-                                                    selfH / 2f + dragOffsetY
-                                            // 只与「已测量的相邻项」比较，按各自中心判断
-                                            // 被拖中心落在谁的区间内，目标位就是它后面
+                                                self.offset + self.size / 2f + total
                                             var target = from
-                                            var bestDist = Float.MAX_VALUE
-                                            list.forEachIndexed { i, ex ->
-                                                if (i == from) return@forEachIndexed
-                                                val b = itemBounds[ex.sessionExercise.id]
-                                                    ?: return@forEachIndexed
-                                                val center = b.first + b.second / 2f
+                                            var best = Float.MAX_VALUE
+                                            infos.forEach { info ->
+                                                if (info.key == draggingId) {
+                                                    return@forEach
+                                                }
+                                                val center =
+                                                    info.offset + info.size / 2f
                                                 val d = abs(center - visualCenter)
-                                                if (d < bestDist) {
-                                                    bestDist = d
-                                                    target = i
+                                                if (d < best) {
+                                                    best = d
+                                                    target = info.index
                                                 }
                                             }
-                                            // target 就是松手后要插入的位置；此时不动列表
                                             dropTargetIndex = target
-                                        },
-                                        onDragEnd = {
-                                            val id = draggingId
-                                            val from = latestExercises.indexOfFirst {
-                                                it.sessionExercise.id == id
-                                            }
-                                            val to = dropTargetIndex
-                                            if (id != null && from >= 0 && to >= 0 &&
-                                                to != from
-                                            ) {
-                                                vm.moveExerciseLocal(from, to)
-                                                vm.persistExerciseOrder()
-                                            }
-                                            draggingId = null
-                                            dragOffsetY = 0f
-                                            dropTargetIndex = -1
-                                        },
-                                        onDragCancel = {
-                                            draggingId = null
-                                            dragOffsetY = 0f
-                                            dropTargetIndex = -1
-                                        },
-                                    )
+                                        }
+
+                                        // ---- 手势结束：应用排序并一次性落库 ----
+                                        val id = draggingId
+                                        val list = latestExercises
+                                        val from = list.indexOfFirst {
+                                            it.sessionExercise.id == id
+                                        }
+                                        val to = dropTargetIndex
+                                        if (id != null && from >= 0 &&
+                                            to in list.indices && to != from
+                                        ) {
+                                            vm.moveExerciseLocal(from, to)
+                                            vm.persistExerciseOrder()
+                                        }
+                                        draggingId = null
+                                        dragOffsetY = 0f
+                                        dropTargetIndex = -1
+                                    }
                                 },
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Menu,
-                                contentDescription = "长按拖动排序",
+                                contentDescription = "拖动排序",
                                 modifier = Modifier.size(16.dp),
                                 tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
                                     .copy(alpha = 0.6f),
