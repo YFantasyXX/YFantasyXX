@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -97,10 +98,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
     // 训练内动作拖动排序
     val haptics = LocalHapticFeedback.current
+    // 正在拖动的动作 id（null = 没在拖）
     var draggingId by remember { mutableStateOf<Long?>(null) }
-    var dragOffsetY by remember { mutableStateOf(0f) }
-    // 拖动中的目标插入位（-1 表示未拖动）
-    var dropTargetIndex by remember { mutableStateOf(-1) }
+    // 拖动位移：只在 graphicsLayer 的 draw 阶段读取，不参与重组
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
     // 拖动期间要拿到最新的动作顺序（而不是手势启动那一刻的快照）
@@ -286,181 +287,184 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 }
 
                 itemsIndexed(exercises, key = { _, it -> it.sessionExercise.id }) { _, item ->
-                    val isDragging = draggingId == item.sessionExercise.id
-                    val isCollapsed = collapsedIds[item.sessionExercise.id] == true
+                    val id = item.sessionExercise.id
+                    val isDragging = draggingId == id
+                    val isCollapsed = collapsedIds[id] == true
                     val primaryColor = MiuixTheme.colorScheme.primary
-                    Row(
+
+                    // 外层 Box 只用来承接手势，它自己【永远不平移】。
+                    //
+                    // 关键原因（这次抽搐的真正根因）：
+                    // Compose 的 graphicsLayer 平移会参与指针坐标换算——
+                    // NodeCoordinator.fromParentPosition 里对 layer 做了逆变换
+                    // （layer.mapOffset(position, inverse = true)）。
+                    // 所以只要 pointerInput 挂在被平移的节点内部，手指的局部坐标
+                    // 就会跟着卡片一起移动，算出来的位移等于「自己减自己」，
+                    // 每帧来回折返 → 卡片原地高频抖动。
+                    // 把手指监听放到不被平移的外层，坐标恒定，位移 1:1 跟手。
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .zIndex(if (isDragging) 1f else 0f)
-                            .graphicsLayer {
-                                translationY = if (isDragging) dragOffsetY else 0f
-                                shadowElevation = if (isDragging) 12f else 0f
-                            }
-                            // 拖动高亮：用 drawBehind 画在内容下层，
-                            // 完全不参与测量和布局，不会引发布局反馈环
-                            .drawBehind {
-                                if (isDragging) {
-                                    val stroke = 3.dp.toPx()
-                                    val inset = stroke / 2f
-                                    drawRoundRect(
-                                        color = primaryColor,
-                                        topLeft = androidx.compose.ui.geometry.Offset(
-                                            inset, inset
-                                        ),
-                                        size = androidx.compose.ui.geometry.Size(
-                                            size.width - stroke,
-                                            size.height - stroke
-                                        ),
-                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(
-                                            16.dp.toPx()
-                                        ),
-                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                            stroke
-                                        ),
-                                    )
-                                }
-                            },
-                        verticalAlignment = Alignment.Top,
+                            .zIndex(if (isDragging) 1f else 0f),
                     ) {
-                        // 拖动把手：按住上下拖动排序。
-                        //
-                        // 为什么自己写手势而不用 detectVerticalDragGestures：
-                        // 那个检测器内部的 verticalDrag 一旦发现事件已被消费
-                        // （change.isConsumed()）就返回 null，整个手势会被判定为
-                        // 「取消」而走 onDragCancel，onDragEnd 再也不执行——
-                        // 这就是之前「拖到位了却没反应」的真正原因。
-                        // 自己写 awaitEachGesture 循环可以完全控制：
-                        // 该消费时消费、该结束时结束，结束逻辑必然执行。
-                        //
-                        // 另外两条铁律（前几版踩过）：
-                        // 1. 拖动中【绝不修改列表顺序】，否则重新布局 → 坐标变化 →
-                        //    又触发换位判断，形成反馈环（表现为持续闪烁）
-                        // 2. 位置数据取自 listState.layoutInfo（官方数据源），
-                        //    不用 onGloballyPositioned 自记坐标
+                        // 真正会移动的卡片
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    translationY = if (draggingId == id) dragOffsetY else 0f
+                                    shadowElevation = if (draggingId == id) 12f else 0f
+                                }
+                                // 拖动高亮：drawBehind 画在内容下层，
+                                // 不参与测量，不会引发布局反馈环
+                                .drawBehind {
+                                    if (isDragging) {
+                                        val stroke = 3.dp.toPx()
+                                        val inset = stroke / 2f
+                                        drawRoundRect(
+                                            color = primaryColor,
+                                            topLeft = androidx.compose.ui.geometry.Offset(
+                                                inset, inset
+                                            ),
+                                            size = androidx.compose.ui.geometry.Size(
+                                                size.width - stroke,
+                                                size.height - stroke
+                                            ),
+                                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                                                16.dp.toPx()
+                                            ),
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                stroke
+                                            ),
+                                        )
+                                    }
+                                },
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            // 视觉把手：跟着卡片一起走
+                            Box(
+                                modifier = Modifier
+                                    .width(40.dp)
+                                    .heightIn(min = 72.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Menu,
+                                    contentDescription = "拖动排序",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                        .copy(alpha = 0.6f),
+                                )
+                            }
+
+                            ExerciseBlock(
+                                item = item,
+                                lastSets = lastPerformance[item.sessionExercise.exerciseId]
+                                    .orEmpty(),
+                                unitLabel = WeightUnit.KG.label,
+                                collapsed = isCollapsed,
+                                onToggleCollapse = {
+                                    collapsedIds[id] = !isCollapsed
+                                },
+                                modifier = Modifier.weight(1f),
+                                onUpdateSet = { set, weight, reps ->
+                                    vm.updateSet(set, weight, reps)
+                                },
+                                onToggleSet = vm::toggleSetComplete,
+                                onAddSet = { vm.addSet(id) },
+                                onRemoveExercise = { vm.removeExercise(id) },
+                                onDeleteSet = vm::deleteSet,
+                                onTogglePr = vm::toggleSetPr,
+                            )
+                        }
+
+                        // 手势层：透明、位置恒定，只覆盖左上角把手区域。
+                        // 它不参与平移，所以 change.position 就是稳定的屏幕坐标。
                         Box(
                             modifier = Modifier
+                                .align(Alignment.TopStart)
                                 .width(40.dp)
-                                .heightIn(min = 72.dp)
-                                .pointerInput(item.sessionExercise.id) {
+                                .height(72.dp)
+                                .pointerInput(id) {
                                     awaitEachGesture {
-                                        // 不要求未被消费，保证一定能拿到这次手势
-                                        val down = awaitFirstDown(
-                                            requireUnconsumed = false
-                                        )
-                                        // 立即占用手势：把手是专用拖拽区，
-                                        // 阻止外层 LazyColumn 的滚动抢走事件
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        // 立即占住手势，避免 LazyColumn 从把手上开始滚
                                         down.consume()
-                                        draggingId = item.sessionExercise.id
-                                        dragOffsetY = 0f
-                                        // 进入拖动态时给一次触觉反馈，确认「抓住了」
-                                        haptics.performHapticFeedback(
-                                            HapticFeedbackType.TextHandleMove
-                                        )
-                                        var started = false
-                                        var total = 0f
-                                        var lastY = down.position.y
                                         val slop = viewConfiguration.touchSlop
+                                        var started = false
+                                        var target = -1
 
                                         while (true) {
                                             val event = awaitPointerEvent()
                                             val change = event.changes
                                                 .firstOrNull { it.id == down.id }
                                                 ?: break
-                                            // 手指抬起或指针消失 → 手势结束
                                             if (!change.pressed) break
-                                            val dy = change.position.y - lastY
-                                            lastY = change.position.y
-                                            if (!started) {
-                                                // 未超过滑动阈值前不算拖动，
-                                                // 但照样消费，避免列表滚动启动
-                                                if (abs(dy) <= slop) {
-                                                    change.consume()
-                                                    continue
-                                                }
-                                                started = true
-                                            }
-                                            total += dy
                                             change.consume()
+                                            // 相对按下点的绝对位移：不做增量累加，
+                                            // 天然没有累积漂移
+                                            val total =
+                                                change.position.y - down.position.y
+                                            if (!started) {
+                                                if (abs(total) < slop) continue
+                                                started = true
+                                                draggingId = id
+                                                haptics.performHapticFeedback(
+                                                    HapticFeedbackType.TextHandleMove
+                                                )
+                                            }
                                             dragOffsetY = total
 
-                                            // ---- 计算目标插入位（此时不改列表）----
+                                            // ---- 只计算目标位，不改列表顺序 ----
+                                            // 拖动中改顺序 → 重新布局 → 坐标变化 →
+                                            // 又触发换位判断，会形成闪烁反馈环
                                             val list = latestExercises
-                                            val from = list.indexOfFirst {
-                                                it.sessionExercise.id == draggingId
-                                            }
-                                            if (from < 0) continue
-                                            val infos =
-                                                listState.layoutInfo.visibleItemsInfo
-                                            val self =
-                                                infos.firstOrNull { it.key == draggingId }
-                                                    ?: continue
-                                            // 被拖卡片视觉中心 = 布局中心 + 累积位移
+                                            val self = listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.key == id }
+                                                ?: continue
+                                            // 卡片视觉中心 = 布局偏移 + 半高 + 拖动量
                                             val visualCenter =
                                                 self.offset + self.size / 2f + total
-                                            var target = from
                                             var best = Float.MAX_VALUE
-                                            infos.forEach { info ->
-                                                if (info.key == draggingId) {
-                                                    return@forEach
+                                            listState.layoutInfo.visibleItemsInfo
+                                                .forEach { info ->
+                                                    if (info.key == id) return@forEach
+                                                    // 列表前面还有休息卡片/错误卡片，
+                                                    // info.index 不是动作下标，必须按 key 换算
+                                                    val otherId = info.key as? Long
+                                                        ?: return@forEach
+                                                    val idx = list.indexOfFirst {
+                                                        it.sessionExercise.id == otherId
+                                                    }
+                                                    if (idx < 0) return@forEach
+                                                    val center =
+                                                        info.offset + info.size / 2f
+                                                    val d = abs(center - visualCenter)
+                                                    if (d < best) {
+                                                        best = d
+                                                        target = idx
+                                                    }
                                                 }
-                                                val center =
-                                                    info.offset + info.size / 2f
-                                                val d = abs(center - visualCenter)
-                                                if (d < best) {
-                                                    best = d
-                                                    target = info.index
-                                                }
-                                            }
-                                            dropTargetIndex = target
                                         }
 
-                                        // ---- 手势结束：应用排序并一次性落库 ----
-                                        val id = draggingId
-                                        val list = latestExercises
-                                        val from = list.indexOfFirst {
-                                            it.sessionExercise.id == id
-                                        }
-                                        val to = dropTargetIndex
-                                        if (id != null && from >= 0 &&
-                                            to in list.indices && to != from
-                                        ) {
-                                            vm.moveExerciseLocal(from, to)
-                                            vm.persistExerciseOrder()
+                                        // ---- 松手：应用排序并一次性落库 ----
+                                        if (started) {
+                                            val list = latestExercises
+                                            val from = list.indexOfFirst {
+                                                it.sessionExercise.id == id
+                                            }
+                                            if (from >= 0 &&
+                                                target in list.indices &&
+                                                target != from
+                                            ) {
+                                                vm.moveExerciseLocal(from, target)
+                                                vm.persistExerciseOrder()
+                                            }
                                         }
                                         draggingId = null
                                         dragOffsetY = 0f
-                                        dropTargetIndex = -1
                                     }
                                 },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Menu,
-                                contentDescription = "拖动排序",
-                                modifier = Modifier.size(16.dp),
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    .copy(alpha = 0.6f),
-                            )
-                        }
-
-                        ExerciseBlock(
-                            item = item,
-                            lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
-                            unitLabel = WeightUnit.KG.label,
-                            collapsed = isCollapsed,
-                            onToggleCollapse = {
-                                collapsedIds[item.sessionExercise.id] = !isCollapsed
-                            },
-                            modifier = Modifier.weight(1f),
-                            onUpdateSet = { set, weight, reps ->
-                                vm.updateSet(set, weight, reps)
-                            },
-                            onToggleSet = vm::toggleSetComplete,
-                            onAddSet = { vm.addSet(item.sessionExercise.id) },
-                            onRemoveExercise = { vm.removeExercise(item.sessionExercise.id) },
-                            onDeleteSet = vm::deleteSet,
-                            onTogglePr = vm::toggleSetPr,
                         )
                     }
                 }
