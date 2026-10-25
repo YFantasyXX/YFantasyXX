@@ -92,23 +92,41 @@ class SettingsViewModel(
         return WebDavClient(s.webdavUrl, s.webdavUsername, s.webdavPassword)
     }
 
-    fun testWebdav(onResult: (Boolean, String) -> Unit) {
+    /** 用输入框里的当前值构造客户端（避免刚改完配置、DataStore 还没写完时用旧配置） */
+    private fun clientFor(url: String, user: String, pass: String): WebDavClient? {
+        if (url.isBlank() || user.isBlank()) return null
+        return WebDavClient(url.trim(), user.trim(), pass)
+    }
+
+    /**
+     * 测试连接。
+     *
+     * 只做 PROPFIND 只能证明「连得上」，证明不了「写得进去」——
+     * 而备份失败往往就死在写权限/配额上。所以这里连完再试写一次。
+     */
+    fun testWebdav(url: String, user: String, pass: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val s = settings.value
-            val c = client(s)
+            val c = clientFor(url, user, pass)
             if (c == null) {
                 onResult(false, "请先填写服务器地址和用户名")
                 return@launch
             }
-            val result = c.testConnection()
-            onResult(result.isSuccess, result.exceptionOrNull()?.message ?: "连接成功")
+            val conn = c.testConnection()
+            if (conn.isFailure) {
+                onResult(false, conn.exceptionOrNull()?.message ?: "连接失败")
+                return@launch
+            }
+            c.writeTest().fold(
+                onSuccess = { onResult(true, "连接正常，可以正常读写") },
+                onFailure = { onResult(false, "能连上，但写不进去：${it.message ?: "未知错误"}") },
+            )
         }
     }
 
-    fun backupNow() {
+    fun backupNow(url: String = "", user: String = "", pass: String = "") {
         viewModelScope.launch {
-            val s = settings.value
-            val c = client(s)
+            // 输入框有内容就按输入框来，否则用已保存的配置
+            val c = clientFor(url, user, pass) ?: client(settings.value)
             if (c == null) {
                 backupManager.setError("请先完成 WebDAV 配置")
                 return@launch

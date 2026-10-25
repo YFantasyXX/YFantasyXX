@@ -1,6 +1,7 @@
 package com.yfantasyxx.sync
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
@@ -27,6 +28,17 @@ data class RemoteBackupFile(
     val name: String,
     val size: Long = -1L,
     val lastModified: Long? = null,
+)
+
+/**
+ * 上传回执。
+ *
+ * @param bytes 实际写出的字节数
+ * @param verified 是否已在服务器上回查到这份文件；false 表示服务器没给出可校验的信息
+ */
+data class UploadReceipt(
+    val bytes: Long,
+    val verified: Boolean,
 )
 
 /**
@@ -92,19 +104,90 @@ class WebDavClient(
         }
     }
 
-    /** 上传文件 */
-    suspend fun upload(path: String, bytes: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            val body = bytes.toRequestBody("application/octet-stream".toMediaType())
-            val request = Request.Builder()
-                .url("$baseUrl$path")
-                .put(body)
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (response.code !in 200..299) {
-                    throw IOException("上传失败(${response.code})：${response.message}")
+    /**
+     * 上传文件。
+     *
+     * **写完必须能查回来**：PUT 返回 2xx 不代表文件真的落盘了（目录只读、
+     * 网关吞请求、空间超限后返回畸形的 200 都可能）。所以这里补一次
+     * Depth 0 的 PROPFIND，逐项核对：
+     * - 服务器上找不到这份文件 → 直接算失败；
+     * - 服务器报的大小和本地不一致 → 直接算失败；
+     * - 服务器不支持查大小 → 成功但不标记 verified。
+     */
+    suspend fun upload(path: String, bytes: ByteArray): Result<UploadReceipt> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                if (bytes.isEmpty()) throw IOException("内容为空，已取消上传")
+                val body = bytes.toRequestBody("application/octet-stream".toMediaType())
+                val request = Request.Builder()
+                    .url("$baseUrl$path")
+                    .put(body)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.code !in 200..299) {
+                        throw IOException(
+                            "上传失败(${response.code})：${response.message}${bodySnippet(response)}"
+                        )
+                    }
                 }
+                verifyUploaded(path, bytes.size.toLong())
             }
+        }
+
+    /** 查询单个文件的信息；返回 success(null) 表示服务器明确说「不存在」 */
+    suspend fun stat(path: String): Result<RemoteBackupFile?> =
+        withContext(Dispatchers.IO) { statNow(path) }
+
+    private fun statNow(path: String): Result<RemoteBackupFile?> = runCatching {
+        val request = Request.Builder()
+            .url("$baseUrl$path")
+            .method("PROPFIND", PROPFIND_DEPTH1_BODY)
+            .header("Depth", "0")
+            .build()
+        client.newCall(request).execute().use { response ->
+            when {
+                response.code == 404 || response.code == 410 -> null
+                response.code !in 200..299 ->
+                    throw IOException("查询文件失败(${response.code})：${response.message}")
+
+                else -> parseSingleFile(response.body?.string().orEmpty())
+            }
+        }
+    }
+
+    /** 上传后回查；查不到就抛异常，绝不假装成功 */
+    private suspend fun verifyUploaded(path: String, expected: Long): UploadReceipt {
+        var found: RemoteBackupFile? = null
+        for (attempt in 0..1) {
+            val result = statNow(path)
+            // 查询本身失败（服务器不支持 PROPFIND 之类）：不推翻已经 2xx 的上传
+            if (result.isFailure) return UploadReceipt(expected, verified = false)
+            found = result.getOrNull()
+            if (found != null) break
+            // 有些服务写完要过一下才能查到，等一下再试一次
+            if (attempt == 0) delay(250)
+        }
+        val file = found
+            ?: throw IOException("上传返回成功，但服务器上找不到这个文件（目录可能不可写）")
+        // 有些服务对单文件 PROPFIND 不返回长度，报 0 或 -1；只有拿到明确的正数才比对
+        if (file.size > 0 && file.size != expected) {
+            throw IOException("上传后大小不符：服务器 ${file.size} 字节，本地 $expected 字节")
+        }
+        return UploadReceipt(expected, verified = file.size == expected)
+    }
+
+    /**
+     * 试写测试：建目录 → 传一个几字节的临时文件 → 回查 → 删掉。
+     * 用来区分「能连上」和「能写进去」——只连上不代表备份能成。
+     */
+    suspend fun writeTest(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            ensureDirectory(BACKUP_DIRECTORY).getOrThrow()
+            val testPath = "$BACKUP_DIRECTORY/$WRITE_TEST_FILE"
+            upload(testPath, "yfantasyxx-write-test".toByteArray()).getOrThrow()
+            // 删不掉不影响结论，忽略
+            delete(testPath).getOrNull()
+            Unit
         }
     }
 
@@ -188,6 +271,26 @@ class WebDavClient(
         return out.distinctBy { it.name }.sortedBy { it.name }
     }
 
+    /** 解析 Depth 0 的单个文件响应 */
+    private fun parseSingleFile(xml: String): RemoteBackupFile? {
+        val block = RESPONSE_BLOCK.find(xml)?.groupValues?.get(1) ?: return null
+        val href = tagValue(block, "href") ?: return null
+        val name = href.substringAfterLast('/')
+        if (name.isEmpty()) return null
+        val size = tagValue(block, "getcontentlength")?.trim()?.toLongOrNull() ?: -1L
+        val modified = tagValue(block, "getlastmodified")?.trim()?.let { parseHttpDate(it) }
+        return RemoteBackupFile(name, size, modified)
+    }
+
+    /** 失败时带一点响应正文，方便看出是权限、配额还是路径问题 */
+    private fun bodySnippet(response: okhttp3.Response, limit: Int = 120): String {
+        val text = runCatching { response.body?.string() }.getOrNull()
+            ?.trim()
+            .orEmpty()
+        if (text.isEmpty()) return ""
+        return "（" + text.replace(WHITESPACE, " ").take(limit) + "）"
+    }
+
     /** 取某个标签的文本内容，取不到返回 null */
     private fun tagValue(block: String, tag: String): String? {
         val re = Regex(
@@ -216,6 +319,11 @@ class WebDavClient(
     companion object {
         const val BACKUP_PREFIX = "yfantasyxx-backup-"
         const val BACKUP_DIRECTORY = "YFantasyXX"
+
+        /** 试写测试用的临时文件名 */
+        private const val WRITE_TEST_FILE = ".write-test"
+
+        private val WHITESPACE = Regex("\\s+")
 
         private val EMPTY_BODY: RequestBody = object : RequestBody() {
             override fun contentType() = null

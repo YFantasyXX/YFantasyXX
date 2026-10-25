@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,12 +43,25 @@ class BackupManager(
             client.ensureDirectory(WebDavClient.BACKUP_DIRECTORY).getOrThrow()
             val bytes = checkpointAndReadDb()
             val name = backupFileName()
-            client.upload("${WebDavClient.BACKUP_DIRECTORY}/$name", bytes).getOrThrow()
-            pruneOldBackups(client)
+            val receipt = client
+                .upload("${WebDavClient.BACKUP_DIRECTORY}/$name", bytes)
+                .getOrThrow()
+            // 清理旧备份：绝不能失手删掉刚传上去的这份，失败也只提示不影响本次
+            val pruneNote = pruneOldBackups(client, name)
             _state.value = _state.value.copy(
                 running = false,
-                message = "备份成功（" + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
-                    .format(Date()) + "）",
+                message = buildString {
+                    append("备份成功（")
+                    append(SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date()))
+                    append(" · ")
+                    append(formatSize(receipt.bytes))
+                    if (!receipt.verified) append(" · 服务器未回报校验")
+                    append("）")
+                    if (pruneNote != null) {
+                        append('\n')
+                        append(pruneNote)
+                    }
+                },
                 lastBackupTime = System.currentTimeMillis(),
             )
             name
@@ -80,6 +94,12 @@ class BackupManager(
             _state.value = _state.value.copy(running = true, message = null, isError = false)
             runCatching {
                 val bytes = client.download("${WebDavClient.BACKUP_DIRECTORY}/$fileName").getOrThrow()
+                // 覆盖本地库前先验一下，避免把 HTML 错误页 / 半个文件写进去导致应用起不来
+                if (!looksLikeSqlite(bytes)) {
+                    throw IOException(
+                        "这份备份不是有效的数据库（${formatSize(bytes.size.toLong())}），未执行恢复"
+                    )
+                }
                 // 关闭当前数据库连接，先删 wal/shm，再覆盖 db 文件
                 dbProvider().close()
                 listOf("${AppDatabase.NAME}-wal", "${AppDatabase.NAME}-shm").forEach { suffix ->
@@ -121,29 +141,65 @@ class BackupManager(
         val helper = db.openHelper
         // Room 2.7+: openHelper.writableDatabase
         val sqlite = helper.writableDatabase
-        sqlite.query("PRAGMA wal_checkpoint(FULL_TRUNCATE)").use { it.moveToFirst() }
-        return dbFile.readBytes()
+        // 返回值第一列是 busy 标记：非 0 说明有一页没写回主库，
+        // 此时只拷 .db 会漏掉最近的数据（备份"成功"但内容是旧的），必须报错重试
+        var busy = -1
+        sqlite.query("PRAGMA wal_checkpoint(FULL_TRUNCATE)").use { cursor ->
+            if (cursor.moveToFirst()) busy = cursor.getInt(0)
+        }
+        if (busy != 0) {
+            throw IOException("数据库正忙，最近的数据还没写回备份文件，请稍后重试")
+        }
+        val bytes = dbFile.readBytes()
+        if (bytes.isEmpty()) throw IOException("数据库文件为空，已取消备份")
+        return bytes
     }
 
-    /** 仅保留最近 [KEEP_COUNT] 个备份 */
-    private suspend fun pruneOldBackups(client: WebDavClient) {
-        val list = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY).getOrDefault(emptyList())
-        if (list.size > KEEP_COUNT) {
-            // 丢时间戳解析不出来的（排到最后），保证老的先被删
-            sortByTimeDesc(list).take(list.size - KEEP_COUNT).forEach { old ->
-                client.delete("${WebDavClient.BACKUP_DIRECTORY}/${old.name}")
-            }
+    /**
+     * 只保留最近 [KEEP_COUNT] 份备份。
+     *
+     * 注意：[keepName] 是刚上传成功的那份，任何情况下都不能被清掉；
+     * 其余按时间从新到旧保留，**超出保留数的从最老的开始删**。
+     * 单份删除失败不影响本次备份，只回一句提示。
+     */
+    private suspend fun pruneOldBackups(client: WebDavClient, keepName: String): String? {
+        val list = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY).getOrElse {
+            return "旧备份未清理（${it.message ?: "获取列表失败"}），不影响本次备份"
+        }
+        val others = list
+            .filter { it.name != keepName }
+            .sortedWith(TIME_DESC)
+        // 保留额度里已经有一份是 keepName，其余还能留 KEEP_COUNT - 1 份
+        val stale = others.drop((KEEP_COUNT - 1).coerceAtLeast(0))
+        if (stale.isEmpty()) return null
+        var failed = 0
+        stale.forEach { old ->
+            client.delete("${WebDavClient.BACKUP_DIRECTORY}/${old.name}")
+                .onFailure { failed++ }
+        }
+        return if (failed == 0) {
+            null
+        } else {
+            "有 $failed 份旧备份没删掉（不影响本次备份）"
         }
     }
 
     /** 按备份时间倒序（最新的在前）；时间解析不出来的排最后 */
     private fun sortByTimeDesc(list: List<RemoteBackupFile>): List<RemoteBackupFile> =
-        list.sortedWith(
-            // 解析不出时间的用 Long.MIN_VALUE 兜底，倒序时自然沉到最后
-            compareByDescending<RemoteBackupFile> {
-                BackupFileMeta.effectiveTimestamp(it) ?: Long.MIN_VALUE
-            }.thenByDescending { it.name }
-        )
+        list.sortedWith(TIME_DESC)
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> String.format(Locale.CHINA, "%.1f MB", bytes / 1024.0 / 1024)
+    }
+
+    /** 是不是一个真正的 SQLite 数据库文件（头部魔数 + 至少一页） */
+    private fun looksLikeSqlite(bytes: ByteArray): Boolean {
+        if (bytes.size < 1024) return false
+        if (bytes.size < SQLITE_MAGIC.size) return false
+        return SQLITE_MAGIC.indices.all { bytes[it] == SQLITE_MAGIC[it] }
+    }
 
     private fun backupFileName(): String {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
@@ -152,5 +208,17 @@ class BackupManager(
 
     companion object {
         const val KEEP_COUNT = 5
+
+        /** SQLite 文件头：`SQLite format 3\0` */
+        private val SQLITE_MAGIC = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
+
+        /**
+         * 按备份时间倒序（最新的在前）。
+         * 解析不出时间的用 Long.MIN_VALUE 兜底，倒序时自然沉到最后。
+         */
+        private val TIME_DESC: Comparator<RemoteBackupFile> =
+            compareByDescending<RemoteBackupFile> {
+                BackupFileMeta.effectiveTimestamp(it) ?: Long.MIN_VALUE
+            }.thenByDescending { it.name }
     }
 }

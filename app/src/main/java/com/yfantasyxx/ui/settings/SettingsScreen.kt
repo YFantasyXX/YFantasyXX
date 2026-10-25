@@ -487,12 +487,13 @@ fun SettingsScreen(
                             text = "测试连接",
                             onClick = {
                                 vm.saveWebdav(url, user, pass)
-                                vm.testWebdav { _, msg -> toastMessage = msg }
+                                // 直接用输入框里的值测，别等 DataStore 写完
+                                vm.testWebdav(url, user, pass) { _, msg -> toastMessage = msg }
                             },
                         )
                         ActionText(
                             text = "立即备份",
-                            onClick = { vm.backupNow() },
+                            onClick = { vm.backupNow(url, user, pass) },
                         )
                         ActionText(
                             text = "管理备份",

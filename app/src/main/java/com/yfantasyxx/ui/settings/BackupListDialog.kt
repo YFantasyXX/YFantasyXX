@@ -30,8 +30,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yfantasyxx.sync.BackupFileMeta
+import com.yfantasyxx.sync.BackupManager
 import com.yfantasyxx.sync.BackupState
 import com.yfantasyxx.sync.RemoteBackupFile
+import com.yfantasyxx.sync.WebDavClient
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.EmptyState
@@ -118,6 +120,13 @@ fun BackupListDialog(
                     },
                 )
             }
+
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "网盘目录 ${WebDavClient.BACKUP_DIRECTORY}/ · 最多保留 ${BackupManager.KEEP_COUNT} 份",
+                style = MiuixTheme.textStyles.footnote1,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f),
+            )
 
             if (state.running) {
                 Spacer(Modifier.height(6.dp))
@@ -235,6 +244,8 @@ private fun BackupRow(
     val secondary = listOfNotNull(
         item.relativeLabel(now),
         item.sizeLabel(),
+        // 0 字节说明上次上传被打断了，这份不能用来恢复
+        if (item.size == 0L) "文件为空，可能不可用" else null,
     ).joinToString(" · ")
 
     Box(
@@ -270,7 +281,11 @@ private fun BackupRow(
                     Text(
                         text = secondary,
                         style = MiuixTheme.textStyles.footnote1,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        color = if (item.size == 0L) {
+                            MiuixTheme.colorScheme.error
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        },
                     )
                 }
             }
