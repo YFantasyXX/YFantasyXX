@@ -102,9 +102,13 @@ class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         viewModelScope.launch { repo.setFolderShowOnHome(id, !current) }
     }
 
-    /** 切换「轮换计划」：开启后首页会提示下一个该练哪个模板 */
-    fun toggleFolderRotation(id: Long, current: Boolean) {
-        viewModelScope.launch { repo.setFolderRotation(id, !current) }
+    /**
+     * 保存训练计划设定：是否作为循环计划 + 每轮休息几天。
+     *
+     * 一次写完两个字段，避免首页先看到「已开启但还没休息日」的中间态。
+     */
+    fun savePlanConfig(id: Long, enabled: Boolean, restDays: Int) {
+        viewModelScope.launch { repo.savePlanConfig(id, enabled, restDays) }
     }
 
     fun deleteFolder(id: Long) {

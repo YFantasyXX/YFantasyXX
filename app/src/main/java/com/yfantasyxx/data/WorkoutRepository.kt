@@ -20,6 +20,7 @@ import com.yfantasyxx.data.seed.ExerciseSeed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -52,12 +53,19 @@ class WorkoutRepository(private val db: AppDatabase) {
     fun observeDataVersion(): StateFlow<Int> = dataVersion
 
     /**
-     * 轮换计划的下一个模板。
+     * 当前训练计划（循环制）的状态；没启用轮换时为 null。
      *
-     * 挂在数据版本号上：结束一次训练后版本 +1，首页的「下一个」自动跟着变。
+     * 三路合并：数据版本（练完 / 删记录后要重算）、文件夹设定（开关与休息天数）、
+     * 模板列表（改名 / 排序后提示要跟着变）。只挂在数据版本上的话，
+     * 用户在模板页把休息天数从 0 改成 1，首页会一直显示旧节奏直到重启。
      */
-    fun observeNextRotation(): Flow<WorkoutTemplate?> =
-        dataVersion.map { nextRotationTemplate() }
+    fun observePlan(): Flow<TrainingPlan?> = combine(
+        dataVersion,
+        templateDao.observeFolders(),
+        templateDao.observeAll(),
+    ) { _, folders, templates ->
+        resolvePlan(folders, templates)
+    }
 
     /** PR 列表缓存；[invalidateStats] 时置空 */
     @Volatile
@@ -271,6 +279,17 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun setFolderRotation(id: Long, rotation: Boolean) =
         templateDao.setFolderRotation(id, rotation)
+
+    /**
+     * 保存训练计划设定（是否作为计划 + 每轮休息天数）。
+     *
+     * 两个字段一起写：先勾「启用」再设休息要分两次写入的话，
+     * 首页会先闪一下「没休息日」的旧状态。
+     */
+    suspend fun savePlanConfig(id: Long, enabled: Boolean, restDays: Int) = db.withTransaction {
+        templateDao.setFolderRotation(id, enabled)
+        templateDao.setFolderRestDays(id, restDays.coerceIn(0, TrainingCycle.MAX_REST_DAYS))
+    }
 
     suspend fun createFolder(name: String): Long =
         templateDao.insertFolder(TemplateFolder(name = name.trim()))
@@ -712,26 +731,37 @@ class WorkoutRepository(private val db: AppDatabase) {
         if (keyword.isBlank()) emptySet() else sessionDao.sessionIdsMatchingExercise(keyword).toSet()
 
     /**
-     * 计划轮换的下一个模板。
+     * 计划轮换的当前状态。
      *
-     * 取最近一次用模板完成的训练，在「轮换文件夹」里找它的位置，返回下一个；
-     * 找不到（没练过、模板被删）就从第一个开始。轮换只看顺序，不看星期几——
-     * A/B/C 计划真正要的是「上次练到哪」，而不是「今天周几」。
+     * 只认一个计划：开了轮换的文件夹里，排在最前面的那个（文件夹内模板按 sortOrder）。
+     * 以前是把所有轮换文件夹摊平成一个长循环，但「每轮休息几天」是文件夹级别的设定，
+     * 摊平之后休息日该插在哪就没有意义了。
+     *
+     * 顺序只看「上次练到哪」，不看星期几——A/B/C 计划真正要的是这个。
      */
-    suspend fun nextRotationTemplate(): WorkoutTemplate? {
-        val folders = templateDao.observeFolders().first()
+    suspend fun resolvePlan(
+        folders: List<TemplateFolder> = templateDao.observeFolders().first(),
+        templates: List<WorkoutTemplate> = templateDao.observeAll().first(),
+        now: Long = System.currentTimeMillis(),
+    ): TrainingPlan? {
+        val folder = folders
             .filter { it.rotation }
             .sortedBy { it.sortOrder }
-        if (folders.isEmpty()) return null
-        val all = templateDao.observeAll().first()
-        // 按文件夹顺序展开，文件夹内按 sortOrder：这个顺序就是 A → B → C
-        val templates = folders.flatMap { folder ->
-            all.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
-        }
-        if (templates.isEmpty()) return null
-        val lastId = sessionDao.lastUsedTemplateId()
-        val index = templates.indexOfFirst { it.id == lastId }
-        return if (index < 0) templates.first() else templates[(index + 1) % templates.size]
+            .firstOrNull { f -> templates.any { it.folderId == f.id } }
+            ?: return null
+        val cycle = templates.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
+        if (cycle.isEmpty()) return null
+        val last = sessionDao.lastSessionForTemplates(cycle.map { it.id })
+        return TrainingCycle.resolve(
+            folderId = folder.id,
+            name = folder.name,
+            templateIds = cycle.map { it.id },
+            dayNames = cycle.map { it.name },
+            restDays = folder.restDays,
+            lastTemplateId = last?.templateId,
+            lastStartTime = last?.startTime,
+            now = now,
+        )
     }
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)

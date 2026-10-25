@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
 import com.yfantasyxx.data.WorkoutRepository
+import com.yfantasyxx.data.TrainingPlan
 import com.yfantasyxx.data.db.ActiveSessionSummary
 import com.yfantasyxx.data.db.SessionSummary
 import com.yfantasyxx.data.db.WorkoutTemplate
@@ -30,8 +31,8 @@ data class HomeUiState(
     val settings: AppSettings = AppSettings(),
     val weightUnitLabel: String = "kg",
     val latestWeightKg: Float? = null,
-    /** 轮换计划里的下一个模板；没有开启轮换时为 null */
-    val nextInRotation: WorkoutTemplate? = null,
+    /** 循环训练计划的当前状态；没启用轮换时为 null */
+    val plan: TrainingPlan? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -47,7 +48,7 @@ class HomeViewModel(
         repo.observeSessionCount(weekStart()),
         repo.observeTotalVolume(weekStart()),
         settingsRepo.settings,
-        repo.observeNextRotation(),
+        repo.observePlan(),
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val active = values[0] as ActiveSessionSummary?
@@ -56,7 +57,7 @@ class HomeViewModel(
         val weekCount = values[3] as Int
         val weekVolume = values[4] as Float
         val settings = values[5] as AppSettings
-        val rotation = values[6] as WorkoutTemplate?
+        val plan = values[6] as TrainingPlan?
         HomeUiState(
             activeSession = active,
             templates = templates,
@@ -67,7 +68,7 @@ class HomeViewModel(
             settings = settings,
             weightUnitLabel = settings.weightUnit.label,
             latestWeightKg = null,
-            nextInRotation = rotation,
+            plan = plan,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 

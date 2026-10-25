@@ -153,6 +153,9 @@ interface TemplateDao {
     @Query("UPDATE template_folders SET rotation = :rotation WHERE id = :id")
     suspend fun setFolderRotation(id: Long, rotation: Boolean)
 
+    @Query("UPDATE template_folders SET restDays = :restDays WHERE id = :id")
+    suspend fun setFolderRestDays(id: Long, restDays: Int)
+
     @Transaction
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
     fun observeAllWithExercises(): Flow<List<TemplateWithExercises>>
@@ -488,16 +491,27 @@ interface SessionDao {
     )
     suspend fun muscleSetRows(since: Long): List<MuscleSetRow>
 
-    /** 最近一次用模板完成的训练，用于算出「下一个该练哪个」 */
+    /**
+     * 某个训练计划（= 一个轮换文件夹里的模板集合）最近一次练到哪。
+     *
+     * 只在这个集合里找，回的是「模板 id + 开始时间」两列：
+     * 前者用来定位练到第几个，后者用来算离那天过了几天（休息日靠它推）。
+     */
     @Query(
         """
-        SELECT templateId FROM sessions
-        WHERE endTime IS NOT NULL AND templateId IS NOT NULL
+        SELECT templateId, startTime FROM sessions
+        WHERE endTime IS NOT NULL AND templateId IN (:templateIds)
         ORDER BY startTime DESC LIMIT 1
         """
     )
-    suspend fun lastUsedTemplateId(): Long?
+    suspend fun lastSessionForTemplates(templateIds: List<Long>): LastPlanSession?
 }
+
+/** 计划推算用的最小投影：练的哪个模板、什么时候练的 */
+data class LastPlanSession(
+    val templateId: Long,
+    val startTime: Long,
+)
 
 data class BucketVolume(
     val bucket: Long,
@@ -600,7 +614,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -680,6 +694,20 @@ abstract class AppDatabase : RoomDatabase() {
                 inferred.forEach { (id, value) ->
                     db.execSQL("UPDATE exercises SET pattern = $value WHERE id = $id")
                 }
+            }
+        }
+
+        /**
+         * v13 -> v14：训练计划增加「每轮休息天数」。
+         *
+         * 默认 0 = 不插休息日，也就是老行为（A→B→C→A 一路循环）。
+         * 已有用户里开过轮换的人不会被塞进休息日，要休息自己设。
+         */
+        val MIGRATION_13_14 = object : androidx.room.migration.Migration(13, 14) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN restDays INTEGER NOT NULL DEFAULT 0"
+                )
             }
         }
 

@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.db.WorkoutTemplate
+import com.yfantasyxx.data.TrainingCycle
 import com.yfantasyxx.ui.components.EmptyState
 import com.yfantasyxx.ui.components.NumberStepper
 import com.yfantasyxx.ui.components.SectionHeader
@@ -34,6 +35,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.text.SimpleDateFormat
@@ -90,6 +92,8 @@ fun TemplatesScreen(
     var folderNameInput by remember { mutableStateOf("") }
     var renamingFolder by remember { mutableStateOf<com.yfantasyxx.data.db.TemplateFolder?>(null) }
     var moveTarget by remember { mutableStateOf<WorkoutTemplate?>(null) }
+    /** 正在配置训练计划的文件夹 */
+    var planFolder by remember { mutableStateOf<com.yfantasyxx.data.db.TemplateFolder?>(null) }
 
     // 拖动排序状态
     val density = LocalDensity.current
@@ -166,11 +170,7 @@ fun TemplatesScreen(
                                 }
                             },
                             rotation = folderEntity?.rotation ?: false,
-                            onToggleRotation = {
-                                group.folderId?.let { id ->
-                                    vm.toggleFolderRotation(id, folderEntity?.rotation ?: false)
-                                }
-                            },
+                            onOpenPlan = { planFolder = folderEntity },
                             onAddTemplate = { onCreateTemplate(group.folderId) },
                             onRename = {
                                 renamingFolder = folders.firstOrNull { it.id == group.folderId }
@@ -431,6 +431,100 @@ fun TemplatesScreen(
             }
         }
     }
+
+    // ---- 训练计划（循环制） ----
+    planFolder?.let { folder ->
+        val cycle = groups.firstOrNull { it.folderId == folder.id }?.templates.orEmpty()
+        var planEnabled by remember(folder.id) { mutableStateOf(folder.rotation) }
+        var restDays by remember(folder.id) { mutableStateOf(folder.restDays.toFloat()) }
+        AppDialog(
+            title = "训练计划",
+            summary = folder.name,
+            onDismissRequest = { planFolder = null },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("作为循环计划", style = MiuixTheme.textStyles.main)
+                        Text(
+                            text = "首页提示「本轮该练第几天」，不看星期几",
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = planEnabled,
+                        onCheckedChange = { planEnabled = it },
+                    )
+                }
+
+                if (cycle.isEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "这个文件夹还没有模板。先放 2~3 个（如推／拉／腿），" +
+                            "循环顺序就是它们在文件夹里的排列顺序。",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.error,
+                    )
+                } else {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        text = "循环顺序",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = cycle.mapIndexed { i, t -> "${i + 1}. ${t.name}" }
+                            .joinToString("  →  "),
+                        style = MiuixTheme.textStyles.paragraph,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text("每轮结束休息", style = MiuixTheme.textStyles.main)
+                    Spacer(Modifier.height(8.dp))
+                    NumberStepper(
+                        value = restDays,
+                        onValueChange = {
+                            restDays = it.coerceIn(0f, TrainingCycle.MAX_REST_DAYS.toFloat())
+                        },
+                        step = 1f,
+                        unit = " 天",
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = if (restDays.toInt() == 0) {
+                            "0 = 不插休息日，练完最后一天直接回到第一天。"
+                        } else {
+                            "练完最后一天起算，休满 ${restDays.toInt()} 天再回到第 1 天。" +
+                                "三分化练三休一就是 3 个模板 + 休息 1 天。"
+                        },
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionText(text = "取消", onClick = { planFolder = null })
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            vm.savePlanConfig(folder.id, planEnabled, restDays.toInt())
+                            planFolder = null
+                        },
+                        enabled = cycle.isNotEmpty(),
+                    ) {
+                        Text("保存", style = MiuixTheme.textStyles.button)
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** 分组标题 */
@@ -442,7 +536,7 @@ private fun FolderHeader(
     showOnHome: Boolean,
     onToggleHome: () -> Unit,
     rotation: Boolean,
-    onToggleRotation: () -> Unit,
+    onOpenPlan: () -> Unit,
     onAddTemplate: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -494,17 +588,17 @@ private fun FolderHeader(
                     },
                 )
             }
-            // 轮换计划：把该文件夹的模板当成 A/B/C 循环，首页提示下一个该练哪个
+            // 训练计划：把该文件夹的模板当成 A/B/C 循环，首页提示「本轮练到第几天」
             Box(
                 modifier = Modifier
                     .size(30.dp)
                     .clip(CircleShape)
-                    .clickable(onClick = onToggleRotation),
+                    .clickable(onClick = onOpenPlan),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Autorenew,
-                    contentDescription = if (rotation) "轮换计划已开启" else "设为轮换计划",
+                    contentDescription = if (rotation) "训练计划已开启，点击设置" else "设为训练计划",
                     modifier = Modifier.size(18.dp),
                     tint = if (rotation) {
                         MiuixTheme.colorScheme.primary

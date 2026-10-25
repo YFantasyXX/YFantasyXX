@@ -101,6 +101,14 @@ data class TemplateFolder(
      * 首页给出「练完 A 下一个是 B」的入口，而不是按星期几排。
      */
     val rotation: Boolean = false,
+    /**
+     * 每轮结束后休息几个自然日（三分化「练三休一」就是 3 个模板 + 1 天）。
+     *
+     * 只在轮换（[rotation]）开启时生效，且**不按周排**：练完这一轮的最后一个模板后，
+     * 从那天起往后数 [restDays] 天提醒休息，休满回到第一个模板。
+     * 中间断了几天也不惩罚——超过 [restDays] 直接算「今天可以练」。
+     */
+    val restDays: Int = 0,
 )
 
 /**
