@@ -100,8 +100,9 @@ private const val PRESSED_SCALE = 78f / 56f
  *    同时整条底栏的高光扫过——这是「液态」的来源，也是它和普通滑块最大的差别；
  * 3. **拖动带阻尼**：位置由 [DampedDragAnimation] 的弹簧驱动，药丸会慢手指一点点，
  *    甩到底栏边缘时整条玻璃还会被「拉住」（橡胶回弹）；
- * 4. **被药丸盖住的 tab 会浮起来**：底色那层淡出，药丸里用主色放大 1.2 倍重绘，
- *    像图标被玻璃吸了进去。
+ * 4. **药丸是一块透明玻璃，不是一层内容**：它画在图标**下面**，只带极薄的雾白、
+ *    边缘高光和内阴影，看不到任何重绘的图标或文字。拖动时是「玻璃在图标上滑过去」，
+ *    图标始终留在原位，被压住时轻轻鼓一下。
  *
  * 图标与文字始终全部显示（iOS 的做法），切换时不会有文字突然出现/消失导致的宽度跳变。
  */
@@ -202,12 +203,6 @@ fun LiquidGlassBottomBar(
                 }
             },
         )
-    }
-
-    // 药丸里画哪一格：跟着位置取最近的整数格。
-    // 用 derivedStateOf 收窄成「整数真的变了才重组」，否则拖动时每帧都要重组内容。
-    val pillIndexState = remember(dampedDrag, count) {
-        derivedStateOf { dampedDrag.value.roundToInt().coerceIn(0, count - 1) }
     }
 
     LaunchedEffect(selectedIndex) {
@@ -351,59 +346,6 @@ fun LiquidGlassBottomBar(
                 )
             }
 
-            // ---------- 底层 tab 内容 ----------
-            // 被药丸盖住的那一格会淡出：药丸里会用它自己的主色放大版重绘，
-            // 两层同时显示会糊成一团重影。
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer { translationX = panelOffset }
-                    .onSizeChanged { coords ->
-                        totalWidthPx = coords.width.toFloat()
-                        tabWidthPx = ((totalWidthPx - insetPx * 2) / count).coerceAtLeast(0f)
-                    }
-                    .padding(horizontal = PillInset),
-            ) {
-                tabs.forEachIndexed { index, tab ->
-                    val selected = index == selectedIndex
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                val distance = abs(index - dampedDrag.value)
-                                // 只有被药丸正对的那一格藏起来（药丸里会重绘它），
-                                // 半格以外照常显示。半径取 0.5 格而不是 0.12~0.5：
-                                // 拖到两格中间时如果两边都藏，就会有一瞬间
-                                // 「这一格没了、那一格也没了」的空白。
-                                alpha = (distance / 0.5f).coerceIn(0f, 1f)
-                            }
-                            .clip(RoundedCornerShape(percent = 50))
-                            .selectable(
-                                selected = selected,
-                                role = Role.Tab,
-                                onClick = { if (!selected) onSelect(tab.route) },
-                            ),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = if (selected) accent else idleTint,
-                            modifier = Modifier.size(21.dp),
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = tab.label,
-                            fontSize = 10.sp,
-                            color = if (selected) accent else idleTint,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-
             // ---------- 药丸 ----------
             if (tabWidthPx > 0f) {
                 Box(
@@ -447,70 +389,98 @@ fun LiquidGlassBottomBar(
                                         chromaticAberration = 0.35f,
                                     )
                                 },
-                                highlight = { pillHighlight.copy(alpha = dampedDrag.pressProgress) },
+                                // 高光常驻一点点，按下时再拉满：不加常驻量的话
+                                // 松手后药丸会整个「消失」，只剩图标浮在底栏上
+                                highlight = {
+                                    pillHighlight.copy(
+                                        alpha = 0.45f + 0.55f * dampedDrag.pressProgress,
+                                    )
+                                },
                                 onDrawSurface = {
-                                    // 亮色下压一层奶白把底下的旧图标遮住；
-                                    // 暗色下也要留一点白，否则药丸在深色底栏上几乎看不见
+                                    // 只铺一层很薄的雾白，让玻璃球有存在感。
+                                    // 原来是 0.58 的实白，透不出底下的东西，
+                                    // 拖起来像拖着一块不透明的白板。
                                     drawRect(
-                                        if (isDark) {
-                                            Color.White.copy(alpha = 0.12f)
-                                        } else {
-                                            Color.White.copy(alpha = 0.58f)
-                                        }
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Color.White.copy(
+                                                    alpha = if (isDark) 0.10f else 0.16f,
+                                                ),
+                                                Color.White.copy(
+                                                    alpha = if (isDark) 0.03f else 0.04f,
+                                                ),
+                                            )
+                                        )
                                     )
                                 },
                             )
                             .innerShadow(capsule) {
                                 val press = dampedDrag.pressProgress
-                                // 没按下时整层不画，省一次离屏录制
-                                if (press < 0.01f) {
-                                    null
-                                } else {
-                                    InnerShadow(
-                                        radius = 8.dp * press,
-                                        color = Color.Black.copy(alpha = 0.15f),
-                                        alpha = press,
-                                    )
-                                }
+                                // 常驻一点内阴影撑住球体的厚度，按下时加深
+                                InnerShadow(
+                                    radius = 3.dp + 7.dp * press,
+                                    color = Color.Black.copy(alpha = 0.12f),
+                                    alpha = 0.5f + 0.5f * press,
+                                )
                             },
                     )
 
-                    // 内容层：直接在窗口里画「最近的那一格」。
-                    //
-                    // 之前是把整行 tab 复制进来再反向平移，理论上窗口里露出的
-                    // 正好是自己压住的那格，但每格宽度、Row 的 padding 和像素取整
-                    // 会叠出误差，越靠右的两格越容易整个落到窗口外——
-                    // 选中「统计」「我的」时图标干脆看不见。直接画一格没有这个可能。
-                    Box(
+                    // 这里不再画图标。药丸现在绘制在图标层**下面**，
+                    // 图标始终由底栏那层直接画在最上面：拖动时看到的是
+                    // 「一块透明玻璃在图标上滑过」，而不是「把图标拖着走」。
+                }
+            }
+
+            // ---------- 底层 tab 内容 ----------
+            // 画在药丸之上，所以永远清晰、永远不会被玻璃挡住；
+            // 药丸压过来时图标只是轻轻鼓一下（下面 graphicsLayer 里算的）。
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { translationX = panelOffset }
+                    .onSizeChanged { coords ->
+                        totalWidthPx = coords.width.toFloat()
+                        tabWidthPx = ((totalWidthPx - insetPx * 2) / count).coerceAtLeast(0f)
+                    }
+                    .padding(horizontal = PillInset),
+            ) {
+                tabs.forEachIndexed { index, tab ->
+                    val selected = index == selectedIndex
+                    Column(
                         modifier = Modifier
+                            .weight(1f)
                             .fillMaxSize()
-                            .clip(capsule),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        val pillTab = tabs[pillIndexState.value]
-                        Column(
-                            modifier = Modifier.graphicsLayer {
-                                // 按下时被压住的图标跟着放大，像被玻璃吸进去
-                                val s = 1f + 0.2f * dampedDrag.pressProgress
+                            .graphicsLayer {
+                                // 药丸离得越近，图标鼓得越多，像被玻璃吸住。
+                                // 不用 alpha 淡出：图标在药丸上层，遮不住也没必要藏。
+                                val pull = (1f - abs(index - dampedDrag.value) / 0.6f)
+                                    .coerceIn(0f, 1f)
+                                val s = 1f + 0.18f * pull * dampedDrag.pressProgress
                                 scaleX = s
                                 scaleY = s
-                            },
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Icon(
-                                imageVector = pillTab.selectedIcon,
-                                contentDescription = null,
-                                tint = accent,
-                                modifier = Modifier.size(21.dp),
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = pillTab.label,
-                                fontSize = 10.sp,
-                                color = accent,
-                                maxLines = 1,
-                            )
-                        }
+                            }
+                            .clip(RoundedCornerShape(percent = 50))
+                            .selectable(
+                                selected = selected,
+                                role = Role.Tab,
+                                onClick = { if (!selected) onSelect(tab.route) },
+                            ),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.label,
+                            tint = if (selected) accent else idleTint,
+                            modifier = Modifier.size(21.dp),
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = tab.label,
+                            fontSize = 10.sp,
+                            color = if (selected) accent else idleTint,
+                            maxLines = 1,
+                        )
                     }
                 }
             }
