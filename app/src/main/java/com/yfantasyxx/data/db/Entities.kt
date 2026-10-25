@@ -163,9 +163,17 @@ data class PlanEntity(
             parentColumns = ["id"],
             childColumns = ["planId"],
             onDelete = ForeignKey.CASCADE
+        ),
+        // 模板被删掉时把这一天一起删掉：留着会变成一天「假休息日」，
+        // 比计划少一天更让人困惑
+        ForeignKey(
+            entity = WorkoutTemplate::class,
+            parentColumns = ["id"],
+            childColumns = ["templateId"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("planId")]
+    indices = [Index("planId"), Index("templateId")]
 )
 data class PlanDay(
     @PrimaryKey(autoGenerate = true)

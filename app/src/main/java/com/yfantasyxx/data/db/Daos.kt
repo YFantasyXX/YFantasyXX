@@ -805,12 +805,18 @@ abstract class AppDatabase : RoomDatabase() {
                         `position` INTEGER NOT NULL,
                         `templateId` INTEGER,
                         FOREIGN KEY(`planId`) REFERENCES `training_plans`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`templateId`) REFERENCES `templates`(`id`)
                             ON UPDATE NO ACTION ON DELETE CASCADE
                     )
                     """.trimIndent()
                 )
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_plan_days_planId` ON `plan_days` (`planId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_plan_days_templateId` " +
+                        "ON `plan_days` (`templateId`)"
                 )
                 migrateFolderRotationToPlan(db)
             }
