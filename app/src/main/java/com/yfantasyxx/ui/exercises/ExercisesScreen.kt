@@ -53,6 +53,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     val equipment by vm.selectedEquipment.collectAsState()
     val categories by vm.categories.collectAsState()
     val equipments by vm.equipments.collectAsState()
+    val totalCount by vm.totalCount.collectAsState()
 
     Scaffold(
         topBar = {
@@ -133,11 +134,26 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                 }
             }
 
+            // 库里有几条必须能直接看到：动作库是按名字差集增量补齐的，
+            // 某次补齐没跑成时列表会静静停在旧条数，靠手滑是感觉不出来的
+            val filtering = category != null || equipment != null || keyword.isNotBlank()
+            Text(
+                text = if (filtering) {
+                    "筛选出 ${exercises.size} 个 · 全部 $totalCount"
+                } else {
+                    "共 $totalCount 个动作"
+                },
+                modifier = Modifier.padding(start = 20.dp, top = 10.dp, end = 20.dp),
+                style = MiuixTheme.textStyles.footnote1,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+
             if (exercises.isEmpty()) {
                 EmptyState(text = "没有找到相关动作\n试试其他关键词或分类")
             } else {
                 LazyColumn(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        top = 6.dp,
                         bottom = com.yfantasyxx.ui.LocalBottomBarSpace.current
                     )
                 ) {

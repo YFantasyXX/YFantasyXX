@@ -56,6 +56,15 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         .flatMapLatest { (kw, cat, eq) -> repo.observeExercises(kw, cat, eq) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * 动作库总条数（不受搜索与筛选影响）。
+     *
+     * 和 [exercises] 分开算：列表会给筛选后的结果，用户想看「库里到底有多少条」
+     * 时需要一个不受筛选影响的基准。
+     */
+    val totalCount = repo.observeExerciseCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     val selectedCategory = _category.asStateFlow()
     val selectedEquipment = _equipment.asStateFlow()
 

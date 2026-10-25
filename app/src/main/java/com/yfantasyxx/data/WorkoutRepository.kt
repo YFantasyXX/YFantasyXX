@@ -90,6 +90,9 @@ class WorkoutRepository(private val db: AppDatabase) {
         equipment: String? = null,
     ): Flow<List<Exercise>> = exerciseDao.observeFiltered(keyword.trim(), category, equipment)
 
+    /** 动作库总条数，不受筛选影响；界面用来显示「共 N 个」 */
+    fun observeExerciseCount(): Flow<Int> = exerciseDao.observeCount()
+
     /** 数据库里实际存在的分类 / 器械，供筛选条动态展示 */
     fun observeExerciseCategories(): Flow<List<String>> = exerciseDao.observeCategories()
 
@@ -156,7 +159,16 @@ class WorkoutRepository(private val db: AppDatabase) {
         val missing = ExerciseSeed.exercises.filter { it.name !in existing }
         // 内置动作库现在 775 条，首次启动要一次插完；逐条提交在低端机上要几百毫秒
         if (missing.isNotEmpty()) {
-            db.withTransaction { exerciseDao.insertAll(missing) }
+            runCatching {
+                db.withTransaction { exerciseDao.insertAll(missing) }
+            }.onFailure {
+                // @Insert 默认 ABORT：775 条里有一条撞上约束，整批回滚，
+                // 用户的动作库就永远停在旧条数，而且启动协程没有上游 catch，
+                // 现场一点痕迹都不留。退化成逐条，能进多少进多少。
+                missing.forEach { item ->
+                    runCatching { exerciseDao.insert(item) }
+                }
+            }
         }
         // 只给「次肌群还是空」的老行回填。动作库到 775 条之后，无条件回填等于
         // 每次冷启动跑 775 次空 UPDATE——`backfillSecondaryMuscles` 自带

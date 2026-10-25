@@ -39,6 +39,16 @@ interface ExerciseDao {
     )
     fun observeCategories(): Flow<List<String>>
 
+    /**
+     * 动作库总条数（不受搜索 / 筛选影响）。
+     *
+     * 界面上必须能直接看到这个数：动作库是「按名字差集增量补齐」的，
+     * 一旦某次补齐没跑成，用户的库会停在旧条数而没有任何提示——
+     * 只靠滑动列表是感觉不出来的。
+     */
+    @Query("SELECT COUNT(*) FROM exercises WHERE archived = 0")
+    fun observeCount(): Flow<Int>
+
     /** 数据库中实际存在的器械；传入分类时只返回该分类下的器械 */
     @Query(
         """
