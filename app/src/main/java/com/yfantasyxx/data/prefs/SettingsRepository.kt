@@ -35,6 +35,22 @@ enum class BottomBarStyle(val value: String, val label: String) {
     }
 }
 
+/**
+ * 休息结束的提示音。
+ *
+ * 健身房场景里手机经常是静音/震动，走通知音量基本听不见，
+ * 所以默认用闹钟音量（系统闹钟流不受静音影响，只有勿扰能压住）。
+ */
+enum class AlertSound(val value: String, val label: String, val hint: String) {
+    ALARM("alarm", "闹钟音量", "最响，手机静音也能听见"),
+    NOTIFICATION("notification", "通知音量", "跟普通通知一样，安静环境够用"),
+    SILENT("silent", "仅震动", "不发声，只震动 + 悬浮窗");
+
+    companion object {
+        fun from(v: String?) = entries.firstOrNull { it.value == v } ?: ALARM
+    }
+}
+
 enum class WeightUnit(val label: String, val factor: Float) {
     KG("kg", 1f),
     LB("lb", 2.20462f);
@@ -68,6 +84,10 @@ data class AppSettings(
     val plates: String = "25,20,15,10,5,2.5,1.25",
     /** 每周训练次数目标；0 表示不设目标 */
     val weeklyGoal: Int = 0,
+    /** 休息期间在桌面/其他应用上方显示悬浮窗（需要悬浮窗权限） */
+    val restOverlay: Boolean = true,
+    /** 休息结束时的提示音来源 */
+    val restAlertSound: AlertSound = AlertSound.ALARM,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -89,6 +109,8 @@ class SettingsRepository(private val context: Context) {
         val BAR_WEIGHT = floatPreferencesKey("bar_weight")
         val PLATES = stringPreferencesKey("plates")
         val WEEKLY_GOAL = longPreferencesKey("weekly_goal")
+        val REST_OVERLAY = booleanPreferencesKey("rest_overlay")
+        val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -107,6 +129,8 @@ class SettingsRepository(private val context: Context) {
             barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
             plates = prefs[Keys.PLATES] ?: "25,20,15,10,5,2.5,1.25",
             weeklyGoal = (prefs[Keys.WEEKLY_GOAL] ?: 0L).toInt(),
+            restOverlay = prefs[Keys.REST_OVERLAY] ?: true,
+            restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
         )
     }
 
@@ -160,5 +184,13 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setWeeklyGoal(count: Int) {
         context.dataStore.edit { it[Keys.WEEKLY_GOAL] = count.toLong() }
+    }
+
+    suspend fun setRestOverlay(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.REST_OVERLAY] = enabled }
+    }
+
+    suspend fun setRestAlertSound(sound: AlertSound) {
+        context.dataStore.edit { it[Keys.REST_ALERT_SOUND] = sound.value }
     }
 }

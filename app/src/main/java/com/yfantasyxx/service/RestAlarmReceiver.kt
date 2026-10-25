@@ -23,14 +23,19 @@ class RestAlarmReceiver : BroadcastReceiver() {
         if (snapshot.endTime == 0L) return
         if (System.currentTimeMillis() - snapshot.endTime > 120_000L) return
 
-        RestNotifier.notifyRestFinished(context, snapshot.label)
         RestTimerStore.clear(context)
         RestAlarmScheduler.cancel(context)
-        // 关闭倒计时通知与前台服务
+        // 关掉倒计时通知
         RestNotifier.cancelCountdown(context)
-        runCatching {
-            context.stopService(Intent(context, RestTimerService::class.java))
-        }
+
+        // 交给服务去弹：悬浮窗、FGS 通知、声音都在那边统一处理，
+        // 这样「App 被杀掉」和「App 还在跑」两条路径的表现才一致。
+        // 精确闹钟广播给了临时白名单，后台起前台服务是允许的。
+        val started = runCatching {
+            RestTimerService.showFinished(context, snapshot.label)
+        }.isSuccess
+        // 起不来（厂商限制等）就退回只有通知，至少别什么都不响
+        if (!started) RestNotifier.notifyRestFinished(context, snapshot.label)
     }
 }
 

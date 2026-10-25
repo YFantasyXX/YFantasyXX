@@ -21,6 +21,7 @@ class YFantasyXXApplication : Application() {
         super.onCreate()
         container = AppContainer(this)
         CrashLogger.install(this)
+        com.yfantasyxx.util.AppVisibility.install(this)
         // 首次启动写入内置动作库；清理异常退出留下的重复草稿
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()

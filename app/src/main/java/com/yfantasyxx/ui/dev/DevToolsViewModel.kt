@@ -12,6 +12,7 @@ import com.yfantasyxx.data.TrainingCycle
 import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.service.RestNotifier
+import com.yfantasyxx.service.RestOverlayController
 import com.yfantasyxx.service.RestTimerService
 import com.yfantasyxx.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
@@ -102,9 +103,27 @@ class DevToolsViewModel(
     /** 不等倒计时，直接走「休息结束」那段：通知渠道 + 声音 + 震动一起验 */
     fun fireRestFinished() {
         runCatching {
-            RestNotifier.notifyRestFinished(container.appContext, "测试动作 · 第 3 组")
-            say("已推送「休息结束」通知")
+            // 走服务而不是直接发通知：这样和真实结束时的表现完全一致
+            // （前台通知、悬浮窗、提示音都在服务里）
+            RestTimerService.showFinished(container.appContext, "测试动作 · 第 3 组")
+            say("已进入「休息结束」：通知 + 震动 + 提示音")
         }.onFailure { say("推送失败：${it.message}", error = true) }
+    }
+
+    /** 忽略「App 在前台就不显示」的判断，强制把结束悬浮窗画出来看长相 */
+    fun forceShowOverlay() {
+        if (!RestOverlayController.canShow(container.appContext)) {
+            say("没有悬浮窗权限：去「我的 → 休息提醒」开启", error = true)
+            return
+        }
+        runCatching {
+            RestTimerService.showFinished(
+                container.appContext,
+                "测试动作 · 第 3 组",
+                forceOverlay = true,
+            )
+            say("已强制显示结束悬浮窗，12 秒后自动消失")
+        }.onFailure { say("显示失败：${it.message}", error = true) }
     }
 
     fun testVibrate() {

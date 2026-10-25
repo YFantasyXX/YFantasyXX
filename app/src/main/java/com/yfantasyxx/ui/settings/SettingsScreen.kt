@@ -25,7 +25,9 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Opacity
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material.icons.filled.Timer
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -48,7 +51,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yfantasyxx.data.prefs.AlertSound
 import com.yfantasyxx.data.prefs.BottomBarStyle
 import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
@@ -65,6 +72,7 @@ import com.yfantasyxx.ui.components.SettingsDivider
 import com.yfantasyxx.ui.components.SettingsHint
 import com.yfantasyxx.ui.components.SettingsRow
 import com.yfantasyxx.ui.dev.DevTools
+import com.yfantasyxx.service.RestOverlayController
 import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
 import kotlinx.coroutines.Dispatchers
@@ -85,7 +93,30 @@ import java.util.Date
 import java.util.Locale
 
 /** 设置页里用底部面板选择的三项 */
-private enum class SettingPicker { THEME, UNIT, BOTTOM_BAR }
+private enum class SettingPicker { THEME, UNIT, BOTTOM_BAR, ALERT_SOUND }
+
+/**
+ * 悬浮窗权限状态。
+ *
+ * 去系统设置授权再返回时，`ON_RESUME` 会重新读一次——
+ * 不然关掉设置页回来，行上还写着「未授权」。
+ */
+@Composable
+private fun rememberOverlayPermission(): Boolean {
+    val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
+    var granted by remember { mutableStateOf(RestOverlayController.canShow(context)) }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                granted = RestOverlayController.canShow(context)
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    return granted
+}
 
 @Composable
 fun SettingsScreen(
@@ -110,6 +141,11 @@ fun SettingsScreen(
     var picker by remember { mutableStateOf<SettingPicker?>(null) }
     var showPlans by remember { mutableStateOf(false) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
+    val overlayGranted = rememberOverlayPermission()
+    val requestOverlay = {
+        runCatching { context.startActivity(RestOverlayController.permissionIntent(context)) }
+        Unit
+    }
 
     // CSV 导出（系统文件选择器）
     val exportLauncher = rememberLauncherForActivityResult(
@@ -267,6 +303,57 @@ fun SettingsScreen(
                             unit = " 次",
                         )
                     },
+                )
+            }
+
+            /* ───────── 休息提醒 ───────── */
+            SectionHeader("休息提醒")
+            SettingsCard {
+                SettingsRow(
+                    title = "悬浮窗倒计时",
+                    subtitle = if (!overlayGranted) {
+                        "未授予「显示在其他应用上层」权限 · 点这里去开启"
+                    } else if (settings.restOverlay) {
+                        "切到桌面或其他应用时，右上角显示剩余时间；结束时弹出大卡片"
+                    } else {
+                        "已关闭，只在通知栏提醒"
+                    },
+                    icon = Icons.Filled.PictureInPictureAlt,
+                    trailing = {
+                        Switch(
+                            checked = settings.restOverlay,
+                            onCheckedChange = { on ->
+                                vm.setRestOverlay(on)
+                                // 开开关时顺手把权限要了，省得用户自己去系统设置翻
+                                if (on && !overlayGranted) requestOverlay()
+                            },
+                        )
+                    },
+                    onClick = {
+                        if (!overlayGranted) {
+                            requestOverlay()
+                        } else {
+                            vm.setRestOverlay(!settings.restOverlay)
+                        }
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "结束提示音",
+                    value = settings.restAlertSound.label,
+                    subtitle = settings.restAlertSound.hint,
+                    icon = Icons.Filled.NotificationsActive,
+                    showChevron = true,
+                    onClick = { picker = SettingPicker.ALERT_SOUND },
+                )
+            }
+            if (settings.restOverlay && !overlayGranted) {
+                SettingsHint(
+                    text = "悬浮窗需要系统权限。荣耀/小米等机型如果重启后失效，" +
+                        "去「设置 → 应用 → 特殊权限 → 显示在其他应用上层」重新打开即可。",
+                    startIndent = 20.dp,
+                    top = 8.dp,
+                    bottom = 6.dp,
                 )
             }
 
@@ -538,6 +625,33 @@ fun SettingsScreen(
             ),
             selected = settings.bottomBarStyle,
             onSelect = vm::setBottomBarStyle,
+            onDismiss = { picker = null },
+        )
+
+        SettingPicker.ALERT_SOUND -> OptionPickerSheet(
+            title = "结束提示音",
+            options = listOf(
+                PickerOption(
+                    AlertSound.ALARM,
+                    "闹钟音量",
+                    "走闹钟音量，手机静音也能听见（推荐）",
+                    Icons.Filled.NotificationsActive,
+                ),
+                PickerOption(
+                    AlertSound.NOTIFICATION,
+                    "通知音量",
+                    "跟普通通知一样，安静环境够用",
+                    Icons.Filled.NotificationsActive,
+                ),
+                PickerOption(
+                    AlertSound.SILENT,
+                    "仅震动",
+                    "不发声，只震动 + 悬浮窗",
+                    Icons.Filled.Vibration,
+                ),
+            ),
+            selected = settings.restAlertSound,
+            onSelect = vm::setRestAlertSound,
             onDismiss = { picker = null },
         )
 

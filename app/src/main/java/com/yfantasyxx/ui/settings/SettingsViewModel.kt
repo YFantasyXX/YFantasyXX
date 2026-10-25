@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
 import com.yfantasyxx.data.WorkoutRepository
+import com.yfantasyxx.data.prefs.AlertSound
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.data.prefs.BottomBarStyle
 import com.yfantasyxx.data.prefs.SettingsRepository
@@ -62,6 +63,14 @@ class SettingsViewModel(
 
     fun setWeeklyGoal(count: Int) {
         viewModelScope.launch { settingsRepo.setWeeklyGoal(count.coerceIn(0, 14)) }
+    }
+
+    fun setRestOverlay(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setRestOverlay(enabled) }
+    }
+
+    fun setRestAlertSound(sound: AlertSound) {
+        viewModelScope.launch { settingsRepo.setRestAlertSound(sound) }
     }
 
     fun setBarWeight(kg: Float) {

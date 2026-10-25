@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Timer
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.BuildConfig
+import com.yfantasyxx.service.RestOverlayController
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.InfoRow
@@ -112,6 +114,7 @@ fun DevToolsScreen(onBack: () -> Unit) {
     var showLongText by remember { mutableStateOf(false) }
 
     var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
+    var overlayGranted by remember { mutableStateOf(RestOverlayController.canShow(context)) }
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { notificationsOn = notificationsEnabled(context) }
@@ -241,6 +244,21 @@ fun DevToolsScreen(onBack: () -> Unit) {
                     icon = Icons.Filled.NotificationsActive,
                     showChevron = true,
                     onClick = { vm.fireRestFinished() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "强制显示结束悬浮窗",
+                    subtitle = if (overlayGranted) {
+                        "忽略「App 在前台就不显示」，直接看卡片长什么样（12 秒后消失）"
+                    } else {
+                        "未授予悬浮窗权限 · 先去「我的 → 休息提醒」开启"
+                    },
+                    icon = Icons.Filled.PictureInPictureAlt,
+                    showChevron = true,
+                    onClick = {
+                        overlayGranted = RestOverlayController.canShow(context)
+                        vm.forceShowOverlay()
+                    },
                 )
                 SettingsDivider()
                 SettingsRow(
