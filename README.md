@@ -4,6 +4,8 @@
 
 本地优先：所有数据存在自己的手机里（Room / SQLite），不注册账号、不上传第三方服务器；需要多端备份时，可接入**你自己的 WebDAV 网盘**（坚果云 / Nextcloud / InfiniCLOUD 等）。
 
+> **下载**：最新版见 [Releases](https://github.com/YFantasyXX/YFantasyXX/releases/latest)，直接装 `YFantasyXX-*.apk`。要求 Android 12（API 32）以上。
+
 ## 功能
 
 - **训练记录**：开始空训练或从模板开始，逐个动作记录组数、重量、次数，自动记录训练时长
