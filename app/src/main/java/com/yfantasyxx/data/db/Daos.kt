@@ -323,7 +323,7 @@ interface SessionDao {
      */
     @Query(
         """
-        SELECT e.id AS exerciseId, e.name AS exerciseName,
+        SELECT e.id AS exerciseId, e.name AS exerciseName, e.pattern AS pattern,
                sl.weightKg AS weightKg, sl.reps AS reps
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
@@ -392,7 +392,8 @@ interface SessionDao {
     /**
      * 某动作的 e1RM 原始行，按时间升序。
      *
-     * 不在 SQL 里算 1RM：它是七条公式的加权融合，SQL 表达不出来；
+     * 不在这里做聚合：1RM 要按动作的 rep-max 分档查表换算（见 `LiftPattern`），
+     * 分档不明时还要回落到七公式加权融合，SQL 表达不出来；
      * 也不在这里按组聚合，一次训练里的高低起伏由调用方取最好一组。
      */
     @Query(
@@ -558,7 +559,7 @@ interface BodyMetricDao {
         SetLog::class,
         BodyMetric::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -607,6 +608,37 @@ abstract class AppDatabase : RoomDatabase() {
                 backfillRepRange(
                     db, "session_exercises", "plannedReps", "plannedRepsMin", "plannedRepsMax"
                 )
+            }
+        }
+
+        /**
+         * v12 -> v13：`exercises.pattern` —— rep-max 曲线的分档，见 `LiftPattern`。
+         *
+         * 同一档次数下不同动作离 1RM 的距离不一样（硬拉最远、孤立动作最近），
+         * 之前全库共用一条曲线，硬拉 10RM 会被低估十几个百分点。
+         *
+         * 回填按「动作名关键词 → 分类兜底」推断，和新建自定义动作走同一套规则
+         * （[com.yfantasyxx.data.LiftPattern.infer]），不另写一份。
+         * 同样是先收集再写回：边遍历游标边 UPDATE 同一张表会让游标错位。
+         */
+        val MIGRATION_12_13 = object : androidx.room.migration.Migration(12, 13) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN pattern INTEGER NOT NULL DEFAULT 0")
+
+                val inferred = mutableListOf<Pair<Long, Int>>()
+                db.query("SELECT id, name, category, equipment FROM exercises").use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val pattern = com.yfantasyxx.data.LiftPattern
+                            .infer(cursor.getString(1), cursor.getString(2), cursor.getString(3))
+                        if (pattern != com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+                            inferred += cursor.getLong(0) to pattern.value
+                        }
+                    }
+                }
+                // pattern.value 是枚举里的常量整数，拼进 SQL 不存在注入面
+                inferred.forEach { (id, value) ->
+                    db.execSQL("UPDATE exercises SET pattern = $value WHERE id = $id")
+                }
             }
         }
 

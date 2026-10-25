@@ -1,5 +1,6 @@
 package com.yfantasyxx.data.seed
 
+import com.yfantasyxx.data.LiftPattern
 import com.yfantasyxx.data.db.Equipment
 import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.ExerciseCategory
@@ -34,7 +35,7 @@ object ExerciseSeed {
         ex("哑铃飞鸟", ExerciseCategory.CHEST, Equipment.DUMBBELL, "胸大肌", "三角肌前束"),
         ex("上斜哑铃飞鸟", ExerciseCategory.CHEST, Equipment.DUMBBELL, "上胸", "三角肌前束"),
         ex("地板卧推", ExerciseCategory.CHEST, Equipment.BARBELL, "胸大肌", "肱三头肌"),
-        ex("哑铃上拉", ExerciseCategory.CHEST, Equipment.DUMBBELL, "胸大肌", "背阔肌,肱三头肌"),
+        ex("哑铃上拉", ExerciseCategory.CHEST, Equipment.DUMBBELL, "胸大肌", "背阔肌,肱三头肌", LiftPattern.PULL),
 
         // ---------------- 背 ----------------
         ex("引体向上", ExerciseCategory.BACK, Equipment.BODYWEIGHT, "背阔肌", "肱二头肌,斜方肌"),
@@ -151,18 +152,32 @@ object ExerciseSeed {
         ex("负重行走", ExerciseCategory.FULL_BODY, Equipment.KETTLEBELL, "全身", "斜方肌,前臂"),
     )
 
+    /**
+     * 种子里不逐条手写 rep-max 分档，统一走 [LiftPattern.infer]：
+     * 118 条动作名都带动作特征（「罗马尼亚硬拉」「哈克深蹲」「哑铃侧平举」），
+     * 关键词识别比人手一条更容易保持一致，新建自定义动作走的也是同一套规则。
+     *
+     * [pattern] 只在识别错时用来覆盖——目前只有「哑铃上拉」需要：
+     * 名字里没有线索，按分类兜底会被判成推类，实际是拉类（背阔 + 胸）。
+     */
     private fun ex(
         name: String,
         category: String,
         equipment: String,
         primary: String,
         secondary: String,
+        pattern: LiftPattern = LiftPattern.UNKNOWN,
     ) = Exercise(
         name = name,
         category = category,
         equipment = equipment,
         primaryMuscle = primary,
         secondaryMuscles = secondary,
+        pattern = if (pattern == LiftPattern.UNKNOWN) {
+            LiftPattern.infer(name, category, equipment).value
+        } else {
+            pattern.value
+        },
         isCustom = false,
     )
 }

@@ -99,12 +99,20 @@ class WorkoutRepository(private val db: AppDatabase) {
             category = category,
             equipment = equipment,
             primaryMuscle = muscle.trim(),
+            // 新建时就定档：否则这条动作的 e1RM 会一直走七公式兜底，
+            // 和同一部位的内置动作算出来的口径对不上
+            pattern = LiftPattern.infer(name.trim(), category, equipment).value,
             note = note.trim(),
             isCustom = true,
         )
     )
 
-    suspend fun updateExercise(exercise: Exercise) = exerciseDao.update(exercise)
+    suspend fun updateExercise(exercise: Exercise) {
+        // 名字 / 分类 / 器械改了，分档要跟着重算：把「我的动作 1」改成「杠铃硬拉」，
+        // 曲线应该换成硬拉类，而不是留着建的时候那一档
+        val pattern = LiftPattern.infer(exercise.name, exercise.category, exercise.equipment)
+        exerciseDao.update(exercise.copy(pattern = pattern.value))
+    }
 
     suspend fun deleteCustomExercise(id: Long) = exerciseDao.deleteCustom(id)
 
@@ -500,7 +508,11 @@ class WorkoutRepository(private val db: AppDatabase) {
                 item.volumeWeight = row.weightKg
                 item.volumeReps = row.reps
             }
-            val e1rm = OneRepMax.estimate(row.weightKg, row.reps)
+            val e1rm = OneRepMax.estimate(
+                weightKg = row.weightKg,
+                reps = row.reps,
+                pattern = LiftPattern.fromValue(row.pattern),
+            )
             if (e1rm != null && e1rm > item.estOneRm) {
                 item.estOneRm = e1rm
                 item.bestWeight = row.weightKg
@@ -550,11 +562,13 @@ class WorkoutRepository(private val db: AppDatabase) {
      * 如果按组画，4 组递减会变成一串锯齿，看不出趋势。
      */
     suspend fun e1rmHistory(exerciseId: Long): List<com.yfantasyxx.data.db.E1rmPoint> {
+        // 分档按动作查一次，不要每组去 join exercises
+        val pattern = patternOf(exerciseId)
         val rows = sessionDao.e1rmRowsForExercise(exerciseId)
         return rows.groupBy { it.sessionId }
             .mapNotNull { (sessionId, sets) ->
                 val best = sets.mapNotNull { row ->
-                    OneRepMax.estimate(row.weightKg, row.reps)?.let { row to it }
+                    OneRepMax.estimate(row.weightKg, row.reps, pattern)?.let { row to it }
                 }.maxByOrNull { it.second } ?: return@mapNotNull null
                 com.yfantasyxx.data.db.E1rmPoint(
                     sessionId = sessionId,
@@ -659,12 +673,19 @@ class WorkoutRepository(private val db: AppDatabase) {
      * 算不出 1RM（次数 > 12）的组排在后面，只有全都不算不出来时才轮到它们。
      */
     suspend fun bestSetFor(exerciseId: Long): SetLog? {
+        val pattern = patternOf(exerciseId)
         val sets = sessionDao.workingSetsForExercise(exerciseId)
         return sets.maxWithOrNull(
-            compareBy<SetLog> { OneRepMax.estimate(it.weightKg, it.reps) ?: -1f }
+            compareBy<SetLog> { OneRepMax.estimate(it.weightKg, it.reps, pattern) ?: -1f }
                 .thenBy { it.weightKg * it.reps }
         )
     }
+
+    /** 动作的 rep-max 分档；查不到（或没有该动作）时按通用档处理 */
+    suspend fun patternOf(exerciseId: Long): LiftPattern =
+        exerciseDao.getById(exerciseId)
+            ?.let { LiftPattern.fromValue(it.pattern) }
+            ?: LiftPattern.UNKNOWN
 
     /** 训练动作（可能来自模板）指定的休息时长 */
     suspend fun sessionRestSeconds(sessionExerciseId: Long): Int? =

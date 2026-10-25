@@ -141,7 +141,12 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                 // 最佳记录按估算 1RM 挑，这里把估出来的值一并显示，
                                 // 否则「95 kg × 8 为什么比 100 kg × 1 更好」看不出来
                                 com.yfantasyxx.data.OneRepMax
-                                    .estimate(best.weightKg, best.reps)
+                                    .estimate(
+                                        weightKg = best.weightKg,
+                                        reps = best.reps,
+                                        pattern = com.yfantasyxx.data.LiftPattern
+                                            .fromValue(ex.pattern),
+                                    )
                                     ?.let { InfoRow("估算 1RM", "${it.toInt()} kg") }
                             }
                             Row(
@@ -237,6 +242,19 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                     },
                                 )
                             }
+                            // 换算依据要说出来：同一组重量按不同动作的曲线能差出十几个百分点，
+                            // 不写清楚，用户会以为换了个动作曲线就乱跳
+                            val curve = com.yfantasyxx.data.LiftPattern.fromValue(ex.pattern)
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = "换算依据：" + if (curve == com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+                                    "通用公式（七公式融合）"
+                                } else {
+                                    "${curve.label} rep-max 曲线"
+                                },
+                                style = MiuixTheme.textStyles.footnote1,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
                         }
                     }
                 }

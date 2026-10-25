@@ -117,10 +117,12 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                 }
                 .take(3)
                 .mapNotNull { item ->
+                    val pattern = com.yfantasyxx.data.LiftPattern.fromValue(item.exercise.pattern)
                     val best = item.sets
                         .filter { it.completed && !it.isWarmup }
                         .maxByOrNull {
-                            com.yfantasyxx.data.OneRepMax.estimate(it.weightKg, it.reps) ?: -1f
+                            com.yfantasyxx.data.OneRepMax.estimate(it.weightKg, it.reps, pattern)
+                                ?: -1f
                         } ?: return@mapNotNull null
                     "${item.exercise.name} ${best.weightKg.toInt()} kg × ${best.reps}"
                 },

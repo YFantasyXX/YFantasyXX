@@ -53,6 +53,13 @@ data class Exercise(
      * 否则卧推只算胸、不算三头与前束，胸日看起来练了很多、手臂却永远是 0。
      */
     val secondaryMuscles: String = "",
+    /**
+     * rep-max 曲线分档，见 `LiftPattern`；0 表示通用（回落到七公式融合）。
+     *
+     * 换算是「1RM = 这组重量 / 该次数对应的比例」，比例表按动作类型分档——
+     * 同一次数下硬拉离 1RM 比卧推更远，一条曲线套所有动作会系统性低估硬拉。
+     */
+    val pattern: Int = 0,
     val note: String = "",
     /** 该动作的默认组间休息秒数；null 表示使用全局默认 */
     val restSeconds: Int? = null,
@@ -306,10 +313,12 @@ data class ExercisePr(
     val bestVolume: Float,
 )
 
-/** PR 计算的原始行：只取需要的列，1RM 融合公式在 Kotlin 侧算 */
+/** PR 计算的原始行：只取需要的列，1RM 换算在 Kotlin 侧算 */
 data class PrSetRow(
     val exerciseId: Long,
     val exerciseName: String,
+    /** 该动作的 rep-max 分档，见 `LiftPattern` */
+    val pattern: Int,
     val weightKg: Float,
     val reps: Int,
 )
