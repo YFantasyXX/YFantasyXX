@@ -149,6 +149,8 @@ fun LiquidGlassBottomBar(
     }
 
     var currentIndex by remember { mutableIntStateOf(selectedIndex) }
+    // 按下时的手指位置（相对底栏），轻点时用它算落在哪一格
+    var tapX by remember { mutableFloatStateOf(0f) }
     val tabsState = rememberUpdatedState(tabs)
     val onSelectState = rememberUpdatedState(onSelect)
 
@@ -161,6 +163,7 @@ fun LiquidGlassBottomBar(
             initialScale = 1f,
             pressedScale = PRESSED_SCALE,
             onDragStarted = { touchX ->
+                tapX = touchX
                 // 药丸**中心**对准手指，而不是吸附到最近的格子中心：
                 // 吸附会让药丸相对手指固定偏移最多半格，看起来「总是偏一边」，
                 // 从左往右扫的时候尤其明显。
@@ -171,15 +174,30 @@ fun LiquidGlassBottomBar(
             },
             onDragStopped = { dragged ->
                 val target = targetValue.roundToInt().coerceIn(0, count - 1)
-                if (dragged && currentIndex != target) {
-                    // 拖动换页：切页之后 selectedIndex 变，下面那路 snapshotFlow
-                    // 会把药丸滑到新格子，这里不用再补一次动画
-                    currentIndex = target
-                    onSelectState.value(tabsState.value[target].route)
-                } else if (abs(value - target) > 0.02f) {
-                    // 没换页（纯点击，或者又拖回原处）：自己吸回格子中央。
-                    // 按下时药丸是按手指位置停的，不归位就会一直歪着
-                    animateToValue(target.toFloat())
+                if (dragged) {
+                    // 拖到别的格子：换页
+                    if (currentIndex != target) {
+                        currentIndex = target
+                        onSelectState.value(tabsState.value[target].route)
+                    } else if (abs(value - target) > 0.02f) {
+                        animateToValue(target.toFloat())
+                    }
+                } else {
+                    // 轻点：按按下位置算落在哪一格，直接切过去。
+                    // 不看 selectable 自己的点击——那一路会被手势层吃掉 up，
+                    // 而且点在两格交界时取整会飘。
+                    val tapped = if (tabWidthPx > 0f) {
+                        ((tapX - insetPx) / tabWidthPx).toInt().coerceIn(0, count - 1)
+                    } else {
+                        target
+                    }
+                    if (tapped != currentIndex) {
+                        currentIndex = tapped
+                        onSelectState.value(tabsState.value[tapped].route)
+                    } else if (abs(value - tapped) > 0.02f) {
+                        // 点的是当前页：只把药丸吸回格子中央
+                        animateToValue(tapped.toFloat())
+                    }
                 }
                 scope.launch { rubberOffset.animateTo(0f, spring(1f, 300f, 0.5f)) }
             },

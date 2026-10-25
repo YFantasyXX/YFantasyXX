@@ -110,7 +110,13 @@ internal class DampedDragAnimation(
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Main)
                 val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-                if (change.changedToUpIgnoreConsumed()) break
+                if (change.changedToUpIgnoreConsumed()) {
+                    // 轻点（没超过 touchSlop）：把 up 吃掉，别再让底下的
+                    // selectable 触发一次点击——切页改由 onDragStopped(false)
+                    // 按按下位置自己算，两条路同时响应会导航两次。
+                    if (!dragging) change.consume()
+                    break
+                }
                 if (!dragging && abs(change.position.x - startX) > touchSlop) dragging = true
                 if (dragging) {
                     val delta = change.positionChange()
