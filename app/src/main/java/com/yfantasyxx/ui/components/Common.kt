@@ -14,13 +14,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
@@ -81,18 +84,37 @@ fun SectionHeader(
 fun EmptyState(
     text: String,
     modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = Icons.Outlined.Inbox,
     action: @Composable (() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 40.dp),
+            .padding(vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        if (icon != null) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.surfaceContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = "",
+                    modifier = Modifier.size(23.dp),
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         Text(
             text = text,
             style = MiuixTheme.textStyles.paragraph,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            textAlign = TextAlign.Center,
         )
         if (action != null) {
             Spacer(Modifier.height(12.dp))
@@ -324,55 +346,134 @@ fun FilterChip(
     }
 }
 
+/* ───────────────────────── 设置页通用组件 ───────────────────────── */
+
+/** 设置分组卡片：卡片本身不带内边距，由行自己控制，行与行之间用 [SettingsDivider] 隔开 */
+@Composable
+fun SettingsCard(
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Card(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Column(modifier = Modifier.padding(vertical = 2.dp), content = content)
+    }
+}
+
+/** 行内分隔线，默认从图标右侧开始，视觉上像一条被截断的细线 */
+@Composable
+fun SettingsDivider(startIndent: androidx.compose.ui.unit.Dp = 58.dp) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = startIndent)
+            .height(0.5.dp)
+            .background(MiuixTheme.colorScheme.dividerLine)
+    )
+}
+
+/** 设置行左侧的圆角图标徽章 */
+@Composable
+fun SettingsIconBadge(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: androidx.compose.ui.graphics.Color = MiuixTheme.colorScheme.primary,
+) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(tint.copy(alpha = 0.13f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = "",
+            modifier = Modifier.size(17.dp),
+            tint = tint,
+        )
+    }
+}
+
 /**
- * 分段选择器：圆角胶囊容器 + 选中态浮起卡片。
+ * 设置行。
+ *
+ * 左侧图标 + 标题（可带副标题），右侧依次是当前值、自定义尾部（开关/步进器）、箭头。
+ * 传入 [onClick] 时整行可点，用于打开选择面板或跳转。
  */
 @Composable
-fun SegmentedSelector(
-    options: List<String>,
-    selectedIndex: Int,
-    onSelect: (Int) -> Unit,
+fun SettingsRow(
+    title: String,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    value: String? = null,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    iconTint: androidx.compose.ui.graphics.Color = MiuixTheme.colorScheme.primary,
+    showChevron: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    trailing: @Composable (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(3.dp),
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 16.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        options.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(11.dp))
-                    .then(
-                        if (selected) {
-                            Modifier.background(MiuixTheme.colorScheme.surface)
-                        } else {
-                            Modifier
-                        }
-                    )
-                    .clickable { onSelect(index) }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
+        if (icon != null) {
+            SettingsIconBadge(icon = icon, tint = iconTint)
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MiuixTheme.textStyles.main)
+            if (subtitle != null) {
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = label,
+                    text = subtitle,
                     style = MiuixTheme.textStyles.footnote1,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (selected) {
-                        MiuixTheme.colorScheme.primary
-                    } else {
-                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    },
-                    maxLines = 1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
         }
+        if (value != null) {
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = value,
+                style = MiuixTheme.textStyles.paragraph,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = 1,
+            )
+        }
+        if (trailing != null) {
+            Spacer(Modifier.width(12.dp))
+            trailing()
+        }
+        if (showChevron) {
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "",
+                modifier = Modifier.size(18.dp),
+                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.55f),
+            )
+        }
     }
+}
+
+/** 卡片内的说明文字 */
+@Composable
+fun SettingsHint(
+    text: String,
+    modifier: Modifier = Modifier,
+    top: androidx.compose.ui.unit.Dp = 0.dp,
+    bottom: androidx.compose.ui.unit.Dp = 12.dp,
+    startIndent: androidx.compose.ui.unit.Dp = 16.dp,
+) {
+    Text(
+        text = text,
+        style = MiuixTheme.textStyles.footnote1,
+        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        modifier = modifier.padding(start = startIndent, end = 16.dp, top = top, bottom = bottom),
+    )
 }
 
 /**

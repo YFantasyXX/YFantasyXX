@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -474,12 +475,33 @@ fun TemplatesScreen(
                         style = MiuixTheme.textStyles.footnote1,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = cycle.mapIndexed { i, t -> "${i + 1}. ${t.name}" }
-                            .joinToString("  →  "),
-                        style = MiuixTheme.textStyles.paragraph,
-                    )
+                    Spacer(Modifier.height(6.dp))
+                    // 顺序直接摆成一串编号药丸，比「1. 推 → 2. 拉 → 3. 腿」更好扫
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        itemsIndexed(cycle) { index, template ->
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = "${index + 1}",
+                                    fontSize = 11.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    color = MiuixTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = template.name,
+                                    fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                     Text("每轮结束休息", style = MiuixTheme.textStyles.main)
                     Spacer(Modifier.height(8.dp))
