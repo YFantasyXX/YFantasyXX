@@ -17,8 +17,8 @@ data class BackupState(
     val running: Boolean = false,
     val message: String? = null,
     val isError: Boolean = false,
-    /** 远端备份列表（名称） */
-    val remoteBackups: List<String> = emptyList(),
+    /** 远端备份列表（**最新的在前**） */
+    val remoteBackups: List<RemoteBackupFile> = emptyList(),
     val lastBackupTime: Long? = null,
 )
 
@@ -46,7 +46,8 @@ class BackupManager(
             pruneOldBackups(client)
             _state.value = _state.value.copy(
                 running = false,
-                message = "备份成功：$name",
+                message = "备份成功（" + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+                    .format(Date()) + "）",
                 lastBackupTime = System.currentTimeMillis(),
             )
             name
@@ -59,11 +60,11 @@ class BackupManager(
         }
     }
 
-    /** 列出远端备份 */
+    /** 列出远端备份（按时间倒序，最新的在前） */
     suspend fun refreshRemoteBackups(client: WebDavClient) = withContext(Dispatchers.IO) {
-        val result = client.listBackups(WebDavClient.BACKUP_DIRECTORY)
+        val result = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY)
         _state.value = _state.value.copy(
-            remoteBackups = result.getOrDefault(emptyList()),
+            remoteBackups = sortByTimeDesc(result.getOrDefault(emptyList())),
             message = result.exceptionOrNull()?.let { "获取备份列表失败：${it.message}" },
             isError = result.isFailure,
         )
@@ -126,13 +127,23 @@ class BackupManager(
 
     /** 仅保留最近 [KEEP_COUNT] 个备份 */
     private suspend fun pruneOldBackups(client: WebDavClient) {
-        val list = client.listBackups(WebDavClient.BACKUP_DIRECTORY).getOrDefault(emptyList())
+        val list = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY).getOrDefault(emptyList())
         if (list.size > KEEP_COUNT) {
-            list.sorted().take(list.size - KEEP_COUNT).forEach { old ->
-                client.delete("${WebDavClient.BACKUP_DIRECTORY}/$old")
+            // 丢时间戳解析不出来的（排到最后），保证老的先被删
+            sortByTimeDesc(list).take(list.size - KEEP_COUNT).forEach { old ->
+                client.delete("${WebDavClient.BACKUP_DIRECTORY}/${old.name}")
             }
         }
     }
+
+    /** 按备份时间倒序（最新的在前）；时间解析不出来的排最后 */
+    private fun sortByTimeDesc(list: List<RemoteBackupFile>): List<RemoteBackupFile> =
+        list.sortedWith(
+            // 解析不出时间的用 Long.MIN_VALUE 兜底，倒序时自然沉到最后
+            compareByDescending<RemoteBackupFile> {
+                BackupFileMeta.effectiveTimestamp(it) ?: Long.MIN_VALUE
+            }.thenByDescending { it.name }
+        )
 
     private fun backupFileName(): String {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())

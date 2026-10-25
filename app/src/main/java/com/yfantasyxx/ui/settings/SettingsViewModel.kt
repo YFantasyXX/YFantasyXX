@@ -104,8 +104,12 @@ class SettingsViewModel(
                 backupManager.setError("请先完成 WebDAV 配置")
                 return@launch
             }
-            backupManager.backup(c)
-            settingsRepo.setLastBackupTime(System.currentTimeMillis())
+            val result = backupManager.backup(c)
+            if (result.isSuccess) {
+                settingsRepo.setLastBackupTime(System.currentTimeMillis())
+                // 立刻刷新列表，刚传上去的那份要马上能看见
+                backupManager.refreshRemoteBackups(c)
+            }
         }
     }
 

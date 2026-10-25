@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -525,65 +526,22 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
     }
 
     if (showBackups) {
-        vm.refreshBackups()
-        AppDialog(
-            title = "云端备份",
-            onDismissRequest = { showBackups = false },
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (backupState.running) {
-                    Text("处理中…", style = MiuixTheme.textStyles.paragraph)
+        // 打开时拉一次列表。原来是在组合期直接调 refreshBackups()，
+        // 每次重组都会再发一次 PROPFIND，白白打服务器。
+        LaunchedEffect(Unit) { vm.refreshBackups() }
+        BackupListDialog(
+            state = backupState,
+            onRefresh = { vm.refreshBackups() },
+            onBackupNow = { vm.backupNow() },
+            onRestore = { name ->
+                vm.restoreBackup(name) {
+                    toastMessage = "恢复成功，正在重启应用"
                 }
-                backupState.message?.let { msg ->
-                    Text(
-                        text = msg,
-                        style = MiuixTheme.textStyles.footnote1,
-                        color = if (backupState.isError) {
-                            MiuixTheme.colorScheme.error
-                        } else {
-                            MiuixTheme.colorScheme.primary
-                        },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (backupState.remoteBackups.isEmpty()) {
-                    Text(
-                        text = "暂无云端备份",
-                        style = MiuixTheme.textStyles.paragraph,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                } else {
-                    backupState.remoteBackups.sortedDescending().forEach { name ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = name.removePrefix("yfantasyxx-backup-").removeSuffix(".db"),
-                                style = MiuixTheme.textStyles.paragraph,
-                                modifier = Modifier.weight(1f),
-                            )
-                            ActionText(text = "恢复", onClick = {
-                                vm.restoreBackup(name) {
-                                    toastMessage = "恢复成功，正在刷新数据"
-                                }
-                                showBackups = false
-                            })
-                            ActionText(text = "删除", onClick = { vm.deleteBackup(name) })
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    ActionText(text = "关闭", onClick = { showBackups = false })
-                }
-            }
-        }
+                showBackups = false
+            },
+            onDelete = { name -> vm.deleteBackup(name) },
+            onDismiss = { showBackups = false },
+        )
     }
 
     if (showPlans) {
