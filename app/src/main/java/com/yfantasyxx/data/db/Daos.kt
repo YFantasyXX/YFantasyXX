@@ -156,6 +156,15 @@ interface TemplateDao {
     @Query("UPDATE template_folders SET restDays = :restDays WHERE id = :id")
     suspend fun setFolderRestDays(id: Long, restDays: Int)
 
+    /** 写计划游标：下一个该练的模板 + 本轮完成时刻（不在轮末时传 null） */
+    @Query(
+        """
+        UPDATE template_folders SET cycleNextTemplateId = :nextTemplateId, cycleEndedAt = :cycleEndedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun setPlanProgress(id: Long, nextTemplateId: Long?, cycleEndedAt: Long?)
+
     @Transaction
     @Query("SELECT * FROM templates ORDER BY createdAt DESC")
     fun observeAllWithExercises(): Flow<List<TemplateWithExercises>>
@@ -698,15 +707,22 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * v13 -> v14：训练计划增加「每轮休息天数」。
+         * v13 -> v14：训练计划从「按顺序现推」改成「有游标的循环」。
          *
-         * 默认 0 = 不插休息日，也就是老行为（A→B→C→A 一路循环）。
-         * 已有用户里开过轮换的人不会被塞进休息日，要休息自己设。
+         * - `restDays`：每轮结束休息几天（0 = 老行为，不停歇地循环）
+         * - `cycleNextTemplateId` / `cycleEndedAt`：进度游标。
+         *   老用户升级时都是 null，第一次读计划会按训练历史推一次，进度不会丢。
          */
         val MIGRATION_13_14 = object : androidx.room.migration.Migration(13, 14) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE template_folders ADD COLUMN restDays INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN cycleNextTemplateId INTEGER"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN cycleEndedAt INTEGER"
                 )
             }
         }

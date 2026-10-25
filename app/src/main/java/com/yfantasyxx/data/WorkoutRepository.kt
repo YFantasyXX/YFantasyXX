@@ -506,6 +506,9 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     suspend fun finishSession(id: Long, name: String, note: String) {
         sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
+        // 结束一次训练才推进计划：这才是「这一轮练到哪」的权威时刻，
+        // 中途放弃的草稿不该让计划往前走一天
+        sessionDao.getById(id)?.let { advancePlanAfter(it) }
         // endTime 从 null 变成有值，周容量 / 分类容量的统计口径会跟着变
         invalidateStats()
     }
@@ -533,8 +536,22 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     fun observeHistory(): Flow<List<SessionSummary>> = sessionDao.observeSummaries()
 
+    /**
+     * 删除一条训练记录。
+     *
+     * 如果删掉的是计划里的训练，游标要跟着退回去——否则「删了刚才那次」之后
+     * 计划还停在下一天，等于白练了一次。做法是把游标清空，让读取时按剩下的历史重推。
+     */
     suspend fun deleteSession(id: Long) {
+        val templateId = sessionDao.getById(id)?.templateId
         sessionDao.delete(id)
+        if (templateId != null) {
+            val templates = templateDao.observeAll().first()
+            templateDao.observeFolders().first()
+                .filter { it.rotation }
+                .filter { folder -> templates.any { it.id == templateId && it.folderId == folder.id } }
+                .forEach { folder -> resetPlanProgress(folder.id) }
+        }
         invalidateStats()
     }
 
@@ -737,7 +754,9 @@ class WorkoutRepository(private val db: AppDatabase) {
      * 以前是把所有轮换文件夹摊平成一个长循环，但「每轮休息几天」是文件夹级别的设定，
      * 摊平之后休息日该插在哪就没有意义了。
      *
-     * 顺序只看「上次练到哪」，不看星期几——A/B/C 计划真正要的是这个。
+     * **进度以游标为准**（[TemplateFolder.cycleNextTemplateId]），拿不到游标才按历史推一次。
+     * 这样用户在训练之后改计划——重排顺序、加减模板、改休息天数、关掉再开——
+     * 都不会让「今天该练哪个」跳变，更不会去动已经记下的训练时间。
      */
     suspend fun resolvePlan(
         folders: List<TemplateFolder> = templateDao.observeFolders().first(),
@@ -751,18 +770,86 @@ class WorkoutRepository(private val db: AppDatabase) {
             ?: return null
         val cycle = templates.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
         if (cycle.isEmpty()) return null
-        val last = sessionDao.lastSessionForTemplates(cycle.map { it.id })
-        return TrainingCycle.resolve(
+        val ids = cycle.map { it.id }
+
+        val last = sessionDao.lastSessionForTemplates(ids)
+        val lastIndex = last?.let { l -> ids.indexOf(l.templateId) }?.takeIf { it >= 0 }
+
+        val storedNext = folder.cycleNextTemplateId
+        val nextIndex: Int
+        val cycleEndedAt: Long?
+        if (storedNext != null && ids.contains(storedNext)) {
+            nextIndex = ids.indexOf(storedNext)
+            cycleEndedAt = folder.cycleEndedAt
+        } else {
+            // 没游标：老数据升级上来，或游标指向的模板已被删——按历史补一次
+            nextIndex = TrainingCycle.deriveNextIndex(ids, last?.templateId)
+            // 上一次正好练到轮末时，把休息日接上，别让升级把休息吃掉
+            cycleEndedAt = if (lastIndex != null && lastIndex == ids.lastIndex) {
+                last?.startTime
+            } else {
+                null
+            }
+        }
+
+        return TrainingCycle.state(
             folderId = folder.id,
             name = folder.name,
-            templateIds = cycle.map { it.id },
+            templateIds = ids,
             dayNames = cycle.map { it.name },
             restDays = folder.restDays,
-            lastTemplateId = last?.templateId,
-            lastStartTime = last?.startTime,
+            nextDayIndex = nextIndex,
+            cycleEndedAt = cycleEndedAt,
+            lastDayIndex = lastIndex,
+            lastTrainedAt = last?.startTime,
             now = now,
         )
     }
+
+    /**
+     * 结束训练后推进计划游标。
+     *
+     * 只有「这次练的模板属于某个启用中的计划」才动；顺带把本轮完成时刻记下来，
+     * 休息天数从这一刻起算。写成 id 而不是下标，之后重排也不会错位。
+     */
+    suspend fun advancePlanAfter(session: WorkoutSession) {
+        val templateId = session.templateId ?: return
+        val folders = templateDao.observeFolders().first()
+        if (folders.none { it.rotation }) return
+        val templates = templateDao.observeAll().first()
+        val folder = folders
+            .filter { it.rotation }
+            .sortedBy { it.sortOrder }
+            .firstOrNull { f -> templates.any { it.id == templateId && it.folderId == f.id } }
+            ?: return
+        val cycle = templates.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
+        val index = cycle.indexOfFirst { it.id == templateId }
+        if (index < 0) return
+        val atCycleEnd = index == cycle.lastIndex
+        templateDao.setPlanProgress(
+            id = folder.id,
+            // 练完最后一个 → 回到第一个，并开始计休息
+            nextTemplateId = cycle[if (atCycleEnd) 0 else index + 1].id,
+            cycleEndedAt = if (atCycleEnd) {
+                session.endTime ?: System.currentTimeMillis()
+            } else {
+                null
+            },
+        )
+    }
+
+    /**
+     * 按训练历史重算计划进度（清掉游标，下次读取时重新推导）。
+     *
+     * 用在两种「改过历史」的场合：删掉了训练记录、或在计划里动了模板却想回到按历史算。
+     * 清空而不是直接算好写回：读的时候那条路径已经处理了「老数据 / 缺游标」，
+     * 两处各写一份推导逻辑早晚会分叉。
+     */
+    suspend fun resetPlanProgress(folderId: Long) = templateDao.setPlanProgress(
+        id = folderId,
+        nextTemplateId = null,
+        cycleEndedAt = null,
+    )
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)
 

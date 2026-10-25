@@ -106,9 +106,15 @@ class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
      * 保存训练计划设定：是否作为循环计划 + 每轮休息几天。
      *
      * 一次写完两个字段，避免首页先看到「已开启但还没休息日」的中间态。
+     * 刻意不碰进度游标：改计划不该把「已经练到第几天」重置掉。
      */
     fun savePlanConfig(id: Long, enabled: Boolean, restDays: Int) {
         viewModelScope.launch { repo.savePlanConfig(id, enabled, restDays) }
+    }
+
+    /** 清掉游标，按训练历史重新推导「下一个该练哪个」（改过训练记录时用） */
+    fun resetPlanProgress(id: Long) {
+        viewModelScope.launch { repo.resetPlanProgress(id) }
     }
 
     fun deleteFolder(id: Long) {

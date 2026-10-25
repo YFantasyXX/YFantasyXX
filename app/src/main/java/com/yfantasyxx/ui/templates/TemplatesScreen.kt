@@ -504,7 +504,22 @@ fun TemplatesScreen(
                     )
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "这里的改动不会重置进度：进度记的是「下一个该练哪个」，" +
+                        "重排顺序、加减模板、改休息天数都不影响，已经练过的记录和时间也不会被改动。",
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                ActionText(
+                    text = "按训练历史重算进度",
+                    onClick = {
+                        vm.resetPlanProgress(folder.id)
+                        planFolder = null
+                    },
+                )
+
+                Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
