@@ -170,7 +170,7 @@ fun SettingsScreen(
                 title = "我的",
                 actions = {
                     if (backupState.remoteBackups.isNotEmpty()) {
-                        IconButton(onClick = { vm.refreshBackups() }) {
+                        IconButton(onClick = { vm.refreshBackups(url, user, pass) }) {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
                                 contentDescription = "刷新备份列表",
@@ -662,18 +662,19 @@ fun SettingsScreen(
     if (showBackups) {
         // 打开时拉一次列表。原来是在组合期直接调 refreshBackups()，
         // 每次重组都会再发一次 PROPFIND，白白打服务器。
-        LaunchedEffect(Unit) { vm.refreshBackups() }
+        // 统一用输入框里的配置：列表、备份、恢复、删除必须看的是同一个服务器。
+        LaunchedEffect(Unit) { vm.refreshBackups(url, user, pass) }
         BackupListDialog(
             state = backupState,
-            onRefresh = { vm.refreshBackups() },
-            onBackupNow = { vm.backupNow() },
+            onRefresh = { vm.refreshBackups(url, user, pass) },
+            onBackupNow = { vm.backupNow(url, user, pass) },
             onRestore = { name ->
-                vm.restoreBackup(name) {
+                vm.restoreBackup(name, url, user, pass) {
                     toastMessage = "恢复成功，正在重启应用"
                 }
                 showBackups = false
             },
-            onDelete = { name -> vm.deleteBackup(name) },
+            onDelete = { name -> vm.deleteBackup(name, url, user, pass) },
             onDismiss = { showBackups = false },
         )
     }

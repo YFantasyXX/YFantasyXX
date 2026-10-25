@@ -123,10 +123,13 @@ class SettingsViewModel(
         }
     }
 
+    /** 输入框有内容就按输入框来，否则用已保存的配置 */
+    private fun resolveClient(url: String, user: String, pass: String): WebDavClient? =
+        clientFor(url, user, pass) ?: client(settings.value)
+
     fun backupNow(url: String = "", user: String = "", pass: String = "") {
         viewModelScope.launch {
-            // 输入框有内容就按输入框来，否则用已保存的配置
-            val c = clientFor(url, user, pass) ?: client(settings.value)
+            val c = resolveClient(url, user, pass)
             if (c == null) {
                 backupManager.setError("请先完成 WebDAV 配置")
                 return@launch
@@ -140,16 +143,22 @@ class SettingsViewModel(
         }
     }
 
-    fun refreshBackups() {
+    fun refreshBackups(url: String = "", user: String = "", pass: String = "") {
         viewModelScope.launch {
-            val c = client(settings.value) ?: return@launch
+            val c = resolveClient(url, user, pass) ?: return@launch
             backupManager.refreshRemoteBackups(c)
         }
     }
 
-    fun restoreBackup(fileName: String, onRestored: () -> Unit = {}) {
+    fun restoreBackup(
+        fileName: String,
+        url: String = "",
+        user: String = "",
+        pass: String = "",
+        onRestored: () -> Unit = {},
+    ) {
         viewModelScope.launch {
-            val c = client(settings.value) ?: return@launch
+            val c = resolveClient(url, user, pass) ?: return@launch
             backupManager.restore(c, fileName)
             // 恢复成功后重建数据库实例
             container.rebuildDatabase()
@@ -161,9 +170,14 @@ class SettingsViewModel(
         }
     }
 
-    fun deleteBackup(fileName: String) {
+    fun deleteBackup(
+        fileName: String,
+        url: String = "",
+        user: String = "",
+        pass: String = "",
+    ) {
         viewModelScope.launch {
-            val c = client(settings.value) ?: return@launch
+            val c = resolveClient(url, user, pass) ?: return@launch
             backupManager.deleteRemote(c, fileName)
         }
     }
