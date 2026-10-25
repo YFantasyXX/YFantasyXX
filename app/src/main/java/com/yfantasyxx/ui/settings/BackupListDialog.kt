@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yfantasyxx.sync.BackupFileMeta
@@ -84,6 +85,9 @@ fun BackupListDialog(
     AppDialog(
         title = "云端备份",
         onDismissRequest = onDismiss,
+        // 默认弹窗宽度只有 320dp 左右，去掉内外边距后一行放不下「日期 + 最新」，
+        // 小徽章会被挤出边界裁掉；列表类弹窗统一用全宽
+        fullWidth = true,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 顶部：概览 + 刷新
@@ -281,7 +285,6 @@ private fun BackupRow(
         item.schemaVersion?.let { "v$it" },
         // 0 字节说明上次上传被打断了，这份不能用来恢复
         if (item.size == 0L) "文件为空，可能不可用" else null,
-        if (tooNew) "比当前 App 新，恢复不了" else null,
     ).joinToString(" · ")
 
     Box(
@@ -302,10 +305,18 @@ private fun BackupRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
                         text = item.mainLabel(now),
                         style = MiuixTheme.textStyles.main,
+                        // 让「最新」徽章先量宽度，剩下的才给日期，
+                        // 否则窄屏上徽章会被挤出边界直接裁掉
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     if (isLatest) {
                         Spacer(Modifier.width(8.dp))
@@ -322,6 +333,18 @@ private fun BackupRow(
                         } else {
                             MiuixTheme.colorScheme.onSurfaceVariantSummary
                         },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (tooNew) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "比当前 App 新，无法恢复（会清空数据）",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
