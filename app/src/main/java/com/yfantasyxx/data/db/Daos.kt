@@ -76,6 +76,15 @@ interface ExerciseDao {
     suspend fun allNames(): List<String>
 
     /**
+     * 次肌群还是空的动作名。
+     *
+     * 回填只该对这些行跑：动作库扩到 775 条后，无条件回填等于每次冷启动
+     * 执行 775 次 no-op UPDATE，每条一次事务。
+     */
+    @Query("SELECT name FROM exercises WHERE secondaryMuscles = '' AND isCustom = 0")
+    suspend fun namesWithBlankSecondary(): List<String>
+
+    /**
      * 老版本升级后补次要肌群：只动「内置动作且当前为空」的行，
      * 用户自己改过的一律不覆盖。
      */

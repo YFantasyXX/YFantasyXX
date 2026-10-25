@@ -8,7 +8,7 @@
 
 - **训练记录**：开始空训练或从模板开始，逐个动作记录组数、重量、次数，自动记录训练时长
 - **组间休息计时**：完成一组自动开始倒计时（默认 90s，可调），支持 +30s / 跳过
-- **动作库**：内置 118 个常见动作（胸 / 背 / 腿 / 肩 / 手臂 / 核心 / 有氧 / 全身），带主次肌群；支持搜索、分类筛选、自定义动作
+- **动作库**：内置 775 个动作（胸 / 背 / 腿 / 肩 / 手臂 / 核心 / 有氧 / 全身），带主次肌群；支持搜索、分类筛选、自定义动作
 - **训练模板**：把常练的动作组合存成模板（如"推日""腿日"），一键开练；可设目标次数区间与进阶策略
 - **训练中快捷操作**：
   - **复制上一组**：一键把上组重量次数填进下一组
@@ -94,7 +94,7 @@ app/src/main/java/com/yfantasyxx/
 ├── data/
 │   ├── db/              # Room 实体、DAO、数据库
 │   ├── prefs/           # DataStore 设置 + 密码加密
-│   ├── seed/            # 内置动作库种子数据
+│   ├── seed/            # 内置动作库种子数据（775 条，末段由脚本生成）
 │   └── WorkoutRepository.kt
 ├── sync/
 │   ├── WebDavClient.kt  # 极简 WebDAV 客户端（PROPFIND/MKCOL/PUT/GET/DELETE）
@@ -111,6 +111,27 @@ app/src/main/java/com/yfantasyxx/
 │   └── theme/           # MIUIX 主题
 └── YFantasyXXApplication.kt
 ```
+
+```
+tools/
+└── exercise-import/     # 动作库导入脚本 + 数据来源说明
+```
+
+## 动作数据来源
+
+内置动作库分两部分：
+
+| 来源 | 条数 | 许可 |
+| --- | --- | --- |
+| 手写整理（常用动作，按训练习惯命名与划分肌群） | 118 | 本项目 |
+| [hasaneyldrm/exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset) + [简体中文语言包](https://github.com/marcomarcogd/exercises-dataset-zh-cn) | 657 | MIT |
+
+数据集共 1324 条，其中 704 条有经过审校的简体中文译名，去掉与手写部分重复的之后剩 657 条。
+**只取文字字段（部位 / 器械 / 目标肌 / 协同肌 / 译名），没有使用任何图片或 GIF**——
+那部分媒体的版权归 Gym visual，有独立的使用限制，本项目不涉及。
+
+中文名不做机器翻译补全，所以 id ≥ 1000 的 620 条新动作没有收录。
+生成过程可复现，见 [`tools/exercise-import/`](tools/exercise-import/)。
 
 ## 借鉴与参考
 

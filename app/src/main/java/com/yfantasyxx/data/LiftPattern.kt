@@ -93,7 +93,14 @@ enum class LiftPattern(
         ): LiftPattern {
             // 1. 本来就没有 1RM 概念的动作
             if (category == ExerciseCategory.CARDIO) return UNKNOWN
-            if (name.containsAny("平板", "波比", "起立", "雪橇", "行走", "支撑", "跳绳", "开合跳", "战绳")) {
+            // 这里必须用完整词，不能用「平板」「支撑」「雪橇」这类词根：
+            // 动作库扩充后「雪橇 45° 腿举」被「雪橇」误伤、「单臂侧平举（有支撑）」
+            // 被「支撑」误伤、「平板凳坐姿收膝」被「平板」误伤，全都退回了七公式。
+            if (name.containsAny(
+                    "平板支撑", "侧平板", "波比", "土耳其起立", "推雪橇",
+                    "农夫行走", "负重行走", "怪物行走", "跳绳", "开合跳", "战绳",
+                )
+            ) {
                 return UNKNOWN
             }
 

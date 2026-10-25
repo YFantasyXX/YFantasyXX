@@ -154,13 +154,22 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun seedMissing() {
         val existing = exerciseDao.allNames().toHashSet()
         val missing = ExerciseSeed.exercises.filter { it.name !in existing }
+        // 内置动作库现在 775 条，首次启动要一次插完；逐条提交在低端机上要几百毫秒
         if (missing.isNotEmpty()) {
-            exerciseDao.insertAll(missing)
+            db.withTransaction { exerciseDao.insertAll(missing) }
         }
-        // 老数据的次要肌群回填（迁移只加了空列）
-        ExerciseSeed.exercises.forEach { seed ->
-            if (seed.secondaryMuscles.isNotEmpty() && seed.name in existing) {
-                exerciseDao.backfillSecondaryMuscles(seed.name, seed.secondaryMuscles)
+        // 只给「次肌群还是空」的老行回填。动作库到 775 条之后，无条件回填等于
+        // 每次冷启动跑 775 次空 UPDATE——`backfillSecondaryMuscles` 自带
+        // `secondaryMuscles = ''` 条件，第二遍起全是 no-op，但每条仍是一次事务。
+        val blank = exerciseDao.namesWithBlankSecondary()
+        if (blank.isEmpty()) return
+        val byName = ExerciseSeed.exercises.associateBy { it.name }
+        db.withTransaction {
+            blank.forEach { name ->
+                val seed = byName[name] ?: return@forEach
+                if (seed.secondaryMuscles.isNotEmpty()) {
+                    exerciseDao.backfillSecondaryMuscles(name, seed.secondaryMuscles)
+                }
             }
         }
     }
