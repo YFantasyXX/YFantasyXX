@@ -631,6 +631,29 @@ class WorkoutRepository(private val db: AppDatabase) {
         invalidateStats()
     }
 
+    /**
+     * 只改「完成」这一列。
+     *
+     * 打勾时不能用整行 [updateSet]：界面手里的那行快照可能还没拿到刚填的重量，
+     * 整行写回会把重量/次数覆盖成旧值（「打勾后数值归零」就是这么来的）。
+     */
+    suspend fun setSetCompleted(id: Long, completed: Boolean) {
+        setLogDao.updateCompleted(id, completed)
+        invalidateStats()
+    }
+
+    /** 只改「PR」这一列，原因同上 */
+    suspend fun setSetPr(id: Long, isPr: Boolean) {
+        setLogDao.updatePr(id, isPr)
+        invalidateStats()
+    }
+
+    /** 只改重量和次数，不碰完成 / PR / 热身标记 */
+    suspend fun setSetWeightReps(id: Long, weightKg: Float, reps: Int) {
+        setLogDao.updateWeightReps(id, weightKg, reps)
+        invalidateStats()
+    }
+
     suspend fun deleteSet(id: Long) {
         setLogDao.delete(id)
         invalidateStats()

@@ -581,6 +581,22 @@ interface SetLogDao {
     @Update
     suspend fun update(log: SetLog)
 
+    /**
+     * 只改「是否完成」这一列。
+     *
+     * 界面手里的 [SetLog] 可能是几百毫秒前的快照：刚打完重量还没回包时，
+     * 用整行 @Update 写回会把刚填的重量/次数一起覆盖掉（表现为「打勾后数值归零」）。
+     * 所以打勾、打 PR 这类单列操作一律走列级 UPDATE。
+     */
+    @Query("UPDATE set_logs SET completed = :completed WHERE id = :id")
+    suspend fun updateCompleted(id: Long, completed: Boolean)
+
+    @Query("UPDATE set_logs SET isPr = :isPr WHERE id = :id")
+    suspend fun updatePr(id: Long, isPr: Boolean)
+
+    @Query("UPDATE set_logs SET weightKg = :weightKg, reps = :reps WHERE id = :id")
+    suspend fun updateWeightReps(id: Long, weightKg: Float, reps: Int)
+
     @Query("DELETE FROM set_logs WHERE id = :id")
     suspend fun delete(id: Long)
 

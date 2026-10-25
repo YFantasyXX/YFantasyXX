@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -94,11 +95,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     // 只按 listState 记忆：把 haptics 也写进 key 的话，
     // 一旦组合局部换了实例就会重建状态，拖到一半的 pendingDrop 会被清掉
     val drag = remember(listState) { WorkoutDragState(listState, haptics) }
-    // 动作列表之前还有几个 item（错误提示卡 / 休息倒计时卡）。
+    // 动作列表之前还有几个 item（错误提示卡）。
     // visibleItemsInfo.index 是「整个 LazyColumn 的下标」，减掉它才是动作下标。
     // 若以后在动作列表前面再加 item，这里必须同步 +1。
-    val headerItemCount = (if (error != null) 1 else 0) +
-        (if (restTimer.running) 1 else 0)
+    //
+    // 注意：休息倒计时不再是一个 item（见下面 RestBar），所以这里不算它。
+    val headerItemCount = if (error != null) 1 else 0
     var showExercisePicker by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
@@ -255,7 +257,11 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+                // 底部留出休息条的高度：休息条是浮层，靠 contentPadding 让最后一张卡
+                // 还能滚到它上面去。改 contentPadding 不会推动当前内容，只会加长可滚范围。
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    bottom = 24.dp + if (restTimer.running) 88.dp else 0.dp,
+                ),
             ) {
                 // 操作异常提示（不闪退，显示原因）
                 if (error != null) {
@@ -279,58 +285,6 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 ActionText(text = "知道了", onClick = vm::clearError)
-                            }
-                        }
-                    }
-                }
-
-                if (restTimer.running) {                    item {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text(
-                                    text = restTimer.label ?: "休息中",
-                                    style = MiuixTheme.textStyles.subtitle,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { showRestPicker = true }
-                                        .padding(horizontal = 10.dp, vertical = 2.dp),
-                                ) {
-                                    Text(
-                                        text = "${restTimer.remainingSeconds}s",
-                                        style = MiuixTheme.textStyles.headline1,
-                                        color = MiuixTheme.colorScheme.primary,
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = "调整",
-                                        style = MiuixTheme.textStyles.footnote1,
-                                        color = MiuixTheme.colorScheme.primary,
-                                    )
-                                }
-                                Text(
-                                    text = "已同步到通知栏，退出 App 也会继续计时",
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    ActionText(text = "+30s", onClick = { vm.extendRestTimer(30) })
-                                    ActionText(text = "跳过", onClick = { vm.skipRestTimer() })
-                                }
                             }
                         }
                     }
@@ -417,6 +371,24 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         Text("  添加动作", style = MiuixTheme.textStyles.button)
                     }
                 }
+            }
+
+            // 休息倒计时：浮在底部的常驻条，**不作为列表 item**。
+            //
+            // 原来它是 LazyColumn 的第 0 个 item：一完成组就插进来，整个列表当成
+            // 被推下去一张卡；休息结束再抽走，列表又弹回来。这就是「点完成这一组，
+            // 位置往上/往下跳」的根源（开输入法时可视区更小，跳得更明显）。
+            // 做成浮层以后列表结构完全不变，而且滚到哪个动作都看得见剩余时间。
+            if (restTimer.running) {
+                RestBar(
+                    state = restTimer,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .zIndex(1f),
+                    onAdjust = { showRestPicker = true },
+                    onExtend = { vm.extendRestTimer(30) },
+                    onSkip = { vm.skipRestTimer() },
+                )
             }
         }
 
@@ -522,4 +494,88 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * 休息倒计时条。
+ *
+ * 浮在列表底部、不参与 LazyColumn 布局：完成一组时它出现，
+ * 但列表里没有任何 item 被插入或删除，所以正在看的动作不会跳动。
+ */
+@Composable
+private fun RestBar(
+    state: RestTimerState,
+    modifier: Modifier = Modifier,
+    onAdjust: () -> Unit,
+    onExtend: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val fraction = if (state.totalSeconds > 0) {
+        (state.remainingSeconds.toFloat() / state.totalSeconds).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = formatRestClock(state.remainingSeconds),
+                    fontSize = 22.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onAdjust)
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = state.label ?: "休息中",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "点时间可调整",
+                        fontSize = 11.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+                ActionText(text = "+30s", onClick = onExtend)
+                ActionText(text = "跳过", onClick = onSkip)
+            }
+            // 剩余进度：一条细线贴在卡片底部
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .height(2.dp)
+                        .background(MiuixTheme.colorScheme.primary),
+                )
+            }
+        }
+    }
+}
+
+/** 秒数 → m:ss，宽度固定，倒计时不会左右抖 */
+private fun formatRestClock(seconds: Int): String {
+    val s = seconds.coerceAtLeast(0)
+    return String.format(java.util.Locale.US, "%d:%02d", s / 60, s % 60)
 }

@@ -178,7 +178,8 @@ class WorkoutViewModel(
         viewModelScope.launch {
             runCatching {
                 item.sets.filter { !it.completed }.forEach { set ->
-                    repo.updateSet(set.copy(weightKg = weightKg, reps = reps))
+                    // 只改重量/次数两列：整行写回会把快照里的完成状态一起带回去
+                    repo.setSetWeightReps(set.id, weightKg, reps)
                 }
             }.onFailure { e -> _error.value = "应用进阶建议失败：${e.message.orEmpty()}" }
         }
@@ -304,7 +305,7 @@ class WorkoutViewModel(
                 } else {
                     val index = sets.indexOf(target)
                     val source = sets.take(index).lastOrNull() ?: return@runCatching
-                    repo.updateSet(target.copy(weightKg = source.weightKg, reps = source.reps))
+                    repo.setSetWeightReps(target.id, source.weightKg, source.reps)
                 }
             }.onFailure { e -> _error.value = "复制失败：${e.message.orEmpty()}" }
         }
@@ -356,22 +357,35 @@ class WorkoutViewModel(
         }
     }
 
-    /** 更新一组的重量/次数/RPE（不改变完成状态） */
+    /**
+     * 更新一组的重量/次数/RPE（不改变完成状态）。
+     *
+     * 只写字面量发生变化的列：`set` 是界面手里的快照，如果整行写回，
+     * 快照里过期的 completed / isPr 会把刚打上的勾抹掉。
+     */
     fun updateSet(set: SetLog, weightKg: Float? = null, reps: Int? = null, rpe: Float? = null) {
         viewModelScope.launch {
-            val updated = set.copy(
-                weightKg = weightKg ?: set.weightKg,
-                reps = reps ?: set.reps,
-                rpe = rpe ?: set.rpe,
-            )
-            repo.updateSet(updated)
+            if (rpe != null && rpe != set.rpe) {
+                // RPE 很少改，仍走整行；先取最新的行再改，避免用旧快照覆盖别的列
+                val fresh = runCatching { repo.getSet(set.id) }.getOrNull() ?: set
+                repo.updateSet(fresh.copy(rpe = rpe))
+            }
+            if (weightKg != null || reps != null) {
+                repo.setSetWeightReps(
+                    id = set.id,
+                    weightKg = weightKg ?: set.weightKg,
+                    reps = reps ?: set.reps,
+                )
+            }
         }
     }
 
     fun toggleSetComplete(set: SetLog) {
         viewModelScope.launch {
             val willComplete = !set.completed
-            repo.updateSet(set.copy(completed = willComplete))
+            // 只改完成这一列。整行写回会用这一行的旧快照，
+            // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
+            repo.setSetCompleted(set.id, willComplete)
             if (willComplete) {
                 // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
                 val sessionId = _sessionId.value
@@ -424,7 +438,8 @@ class WorkoutViewModel(
     /** 标记/取消 PR 组（计入 PR 榜，但不作为下次训练参考重量） */
     fun toggleSetPr(set: SetLog) {
         viewModelScope.launch {
-            runCatching { repo.updateSet(set.copy(isPr = !set.isPr)) }
+            // 同样只改 isPr 一列，别把快照里的旧重量写回去
+            runCatching { repo.setSetPr(set.id, !set.isPr) }
                 .onFailure { e -> _error.value = "标记 PR 失败：${e.message.orEmpty()}" }
         }
     }
