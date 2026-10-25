@@ -108,9 +108,20 @@ class WorkoutRepository(private val db: AppDatabase) {
     )
 
     suspend fun updateExercise(exercise: Exercise) {
-        // 名字 / 分类 / 器械改了，分档要跟着重算：把「我的动作 1」改成「杠铃硬拉」，
-        // 曲线应该换成硬拉类，而不是留着建的时候那一档
-        val pattern = LiftPattern.infer(exercise.name, exercise.category, exercise.equipment)
+        // 只有「名字 / 分类 / 器械」真的改了才重算分档：
+        // 把「我的动作 1」改成「杠铃硬拉」，曲线应该换成硬拉类；
+        // 但改个默认休息时长也重算的话，会把种子数据里手工纠正过的档位
+        // （比如「哑铃上拉」被显式标成拉类）冲掉
+        val existing = exerciseDao.getById(exercise.id)
+        val renamed = existing == null ||
+            existing.name != exercise.name ||
+            existing.category != exercise.category ||
+            existing.equipment != exercise.equipment
+        val pattern = if (renamed) {
+            LiftPattern.infer(exercise.name, exercise.category, exercise.equipment)
+        } else {
+            LiftPattern.fromValue(exercise.pattern)
+        }
         exerciseDao.update(exercise.copy(pattern = pattern.value))
     }
 
