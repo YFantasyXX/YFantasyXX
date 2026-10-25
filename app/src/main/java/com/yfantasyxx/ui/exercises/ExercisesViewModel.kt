@@ -10,6 +10,7 @@ import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.ExerciseCategory
 import com.yfantasyxx.data.db.Equipment
 import com.yfantasyxx.data.db.SetLog
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -19,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.asStateFlow
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
 
     private val _keyword = MutableStateFlow("")

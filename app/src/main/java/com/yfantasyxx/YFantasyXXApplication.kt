@@ -56,7 +56,9 @@ class AppContainer(context: Context) {
                 AppDatabase.MIGRATION_12_13,
                 AppDatabase.MIGRATION_13_14,
             )
-            .fallbackToDestructiveMigration()
+            // 迁移链已验证到 v14；这里保留兜底只为「宁可少几列也别打不开」，
+            // 参数 false = 只清 Room 自己管理的表，行为与旧无参版一致
+            .fallbackToDestructiveMigration(false)
             .build()
             .also { database = it }
     }
@@ -81,7 +83,8 @@ class AppContainer(context: Context) {
                 AppDatabase.MIGRATION_12_13,
                 AppDatabase.MIGRATION_13_14,
             )
-            .fallbackToDestructiveMigration()
+            // 与 db() 一致：备份恢复后重建同样保留兜底
+            .fallbackToDestructiveMigration(false)
             .build()
         database!!
     }

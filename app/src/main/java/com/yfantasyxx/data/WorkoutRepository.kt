@@ -810,8 +810,8 @@ class WorkoutRepository(private val db: AppDatabase) {
             // 没游标：老数据升级上来，或游标指向的模板已被删——按历史补一次
             nextIndex = TrainingCycle.deriveNextIndex(ids, last?.templateId)
             // 上一次正好练到轮末时，把休息日接上，别让升级把休息吃掉
-            cycleEndedAt = if (lastIndex != null && lastIndex == ids.lastIndex) {
-                last?.startTime
+            cycleEndedAt = if (last != null && lastIndex == ids.lastIndex) {
+                last.startTime
             } else {
                 null
             }

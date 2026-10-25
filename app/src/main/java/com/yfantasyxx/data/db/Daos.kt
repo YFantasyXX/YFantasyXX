@@ -367,7 +367,7 @@ interface SessionDao {
     /** 某动作最近一次训练的数据（历史参考） */
     @Query(
         """
-        SELECT * FROM set_logs sl
+        SELECT sl.* FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
         WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.isPr = 0
@@ -384,7 +384,7 @@ interface SessionDao {
      */
     @Query(
         """
-        SELECT * FROM set_logs sl
+        SELECT sl.* FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
         WHERE se.exerciseId = :exerciseId AND sl.completed = 1

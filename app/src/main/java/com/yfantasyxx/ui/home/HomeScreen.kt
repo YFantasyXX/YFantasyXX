@@ -56,7 +56,6 @@ import androidx.compose.ui.platform.LocalContext
 import com.yfantasyxx.util.CrashLogger
 import com.yfantasyxx.ui.components.ActionText
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import com.yfantasyxx.data.TrainingPlan
 
@@ -75,7 +74,6 @@ fun HomeScreen(
     var showWeightDialog by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     val context = LocalContext.current
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
 
     Scaffold(
@@ -124,7 +122,15 @@ fun HomeScreen(
                             Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                                 ActionText(text = "复制", onClick = {
-                                    clipboard.setText(AnnotatedString(crashText.orEmpty()))
+                                    // 用系统剪贴板而不是 Compose 的 LocalClipboardManager：
+                                    // 后者已废弃，新 API 是挂起式的，为一个按钮不值得引入协程
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        ?.setPrimaryClip(
+                                            android.content.ClipData.newPlainText(
+                                                "崩溃日志",
+                                                crashText.orEmpty(),
+                                            )
+                                        )
                                 })
                                 Spacer(Modifier.width(8.dp))
                                 ActionText(text = "清除", onClick = {

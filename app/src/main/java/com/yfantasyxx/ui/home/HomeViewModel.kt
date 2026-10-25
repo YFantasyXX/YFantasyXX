@@ -41,6 +41,9 @@ class HomeViewModel(
     private val settingsRepo: SettingsRepository,
 ) : ViewModel() {
 
+    // combine 有 5 个以上源时只能拿到 Array<Any?>，逐个 as 转换无法避免；
+    // 注解放属性上才能覆盖整个 lambda（放单行只对那一行生效）
+    @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<HomeUiState> = combine(
         repo.observeActiveSession(),
         repo.observeHomeTemplates(),
@@ -50,7 +53,6 @@ class HomeViewModel(
         settingsRepo.settings,
         repo.observePlan(),
     ) { values ->
-        @Suppress("UNCHECKED_CAST")
         val active = values[0] as ActiveSessionSummary?
         val templates = values[1] as List<WorkoutTemplate>
         val sessions = values[2] as List<SessionSummary>
