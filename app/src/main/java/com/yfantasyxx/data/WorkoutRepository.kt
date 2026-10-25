@@ -404,7 +404,19 @@ class WorkoutRepository(private val db: AppDatabase) {
         }
     }
 
-    suspend fun addExerciseToSession(sessionId: Long, exerciseId: Long, targetSets: Int = 3): Long {
+    /**
+     * 往一次训练里加动作。
+     *
+     * [completed] 只对「编辑已完成的训练」有意义：那时候补录的动作不是草稿，
+     * 新加的组直接算作已完成，否则会以灰色「未完成」的样子混在历史里，
+     * 既不进容量也不进 PR。
+     */
+    suspend fun addExerciseToSession(
+        sessionId: Long,
+        exerciseId: Long,
+        targetSets: Int = 3,
+        completed: Boolean = false,
+    ): Long {
         val order = sessionExerciseDao.nextSortOrder(sessionId)
         val seId = sessionExerciseDao.insert(
             SessionExercise(sessionId = sessionId, exerciseId = exerciseId, sortOrder = order)
@@ -416,11 +428,13 @@ class WorkoutRepository(private val db: AppDatabase) {
                 SetLog(
                     sessionExerciseId = seId,
                     setNumber = n,
-                    completed = false,
+                    completed = completed,
                     weightKg = lastWeight,
                 )
             }
         )
+        // 未完成的组不进统计，只有补录成已完成的才需要刷新缓存
+        if (completed) invalidateStats()
         return seId
     }
 
@@ -460,16 +474,24 @@ class WorkoutRepository(private val db: AppDatabase) {
         }
     }
 
-    suspend fun addSet(sessionExerciseId: Long, weightKg: Float = 0f, reps: Int = 0): Long {
+    suspend fun addSet(
+        sessionExerciseId: Long,
+        weightKg: Float = 0f,
+        reps: Int = 0,
+        completed: Boolean = false,
+    ): Long {
         val n = setLogDao.maxSetNumber(sessionExerciseId) + 1
-        return setLogDao.insert(
+        val id = setLogDao.insert(
             SetLog(
                 sessionExerciseId = sessionExerciseId,
                 setNumber = n,
                 weightKg = weightKg,
                 reps = reps,
+                completed = completed,
             )
         )
+        if (completed) invalidateStats()
+        return id
     }
 
     suspend fun updateSet(log: SetLog) {
