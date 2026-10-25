@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yfantasyxx.data.prefs.BottomBarStyle
 import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
 import com.yfantasyxx.ui.components.InfoRow
@@ -163,20 +164,42 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         )
                     }
                     Spacer(Modifier.height(16.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("底栏毛玻璃", style = MiuixTheme.textStyles.main)
-                            Text(
-                                text = "模糊底栏下方内容，会增加 GPU 开销",
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    Text("底栏样式", style = MiuixTheme.textStyles.main)
+                    Spacer(Modifier.height(10.dp))
+                    SegmentedSelector(
+                        options = BottomBarStyle.entries.map { it.label },
+                        selectedIndex = BottomBarStyle.entries.indexOf(settings.bottomBarStyle),
+                        onSelect = { index ->
+                            BottomBarStyle.entries.getOrNull(index)?.let(vm::setBottomBarStyle)
+                        },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (settings.bottomBarStyle == BottomBarStyle.LIQUID_GLASS) {
+                            "仿 iOS 液态玻璃：实时模糊下方内容，边缘高光会跟着手机倾斜移动"
+                        } else {
+                            "实心悬浮胶囊，可另外开启毛玻璃"
+                        },
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    if (settings.bottomBarStyle == BottomBarStyle.FLOATING) {
+                        Spacer(Modifier.height(14.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("底栏毛玻璃", style = MiuixTheme.textStyles.main)
+                                Text(
+                                    text = "模糊底栏下方内容，会增加 GPU 开销",
+                                    style = MiuixTheme.textStyles.footnote1,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Switch(
+                                checked = settings.blurBottomBar,
+                                onCheckedChange = { vm.setBlurBottomBar(it) },
                             )
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Switch(
-                            checked = settings.blurBottomBar,
-                            onCheckedChange = { vm.setBlurBottomBar(it) },
-                        )
                     }
                 }
             }

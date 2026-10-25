@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
 import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.prefs.AppSettings
+import com.yfantasyxx.data.prefs.BottomBarStyle
 import com.yfantasyxx.data.prefs.SettingsRepository
 import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
@@ -49,6 +50,10 @@ class SettingsViewModel(
 
     fun setBlurBottomBar(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.setBlurBottomBar(enabled) }
+    }
+
+    fun setBottomBarStyle(style: BottomBarStyle) {
+        viewModelScope.launch { settingsRepo.setBottomBarStyle(style) }
     }
 
     fun setAutoBackup(enabled: Boolean) {

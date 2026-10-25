@@ -35,6 +35,7 @@ import com.yfantasyxx.YFantasyXXApplication
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.yfantasyxx.ui.nav.FloatingBottomBar
 import com.yfantasyxx.ui.nav.FloatingTab
+import com.yfantasyxx.ui.nav.LiquidGlassBottomBar
 import com.yfantasyxx.ui.exercises.ExerciseDetailScreen
 import com.yfantasyxx.ui.exercises.ExercisesScreen
 import com.yfantasyxx.ui.history.HistoryScreen
@@ -93,12 +94,27 @@ private fun YFantasyXXNavHost() {
     val currentRoute = backStackEntry?.destination?.route
 
     val showBottomBar = tabs.any { it.route == currentRoute }
-    // 底栏 64dp + 上下 14dp 边距 + 系统手势条高度
+    // 液态玻璃药丸 64dp + 上下 10dp 留白；HyperOS 胶囊 64dp + 上下 14dp
     val navBarInset = androidx.compose.foundation.layout.WindowInsets.navigationBars
         .asPaddingValues().calculateBottomPadding()
-    val bottomSpace = 92.dp + navBarInset
+    val bottomSpace = when {
+        !showBottomBar -> 0.dp
+        settings.bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS ->
+            84.dp + navBarInset
+        else -> 92.dp + navBarInset
+    }
     // 底栏毛玻璃的效果来源：采集这个内容层
     val backdrop = rememberLayerBackdrop()
+
+    val onTabSelected: (String) -> Unit = { route ->
+        navController.navigate(route) {
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     CompositionLocalProvider(
         LocalBottomBarSpace provides if (showBottomBar) bottomSpace else 0.dp
@@ -188,22 +204,24 @@ private fun YFantasyXXNavHost() {
         }
 
         if (showBottomBar) {
-            FloatingBottomBar(
-                tabs = tabs,
-                selectedRoute = currentRoute,
-                backdrop = backdrop,
-                glass = settings.blurBottomBar,
-                onSelect = { route ->
-                    navController.navigate(route) {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
-                        }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                },
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
+            if (settings.bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS) {
+                LiquidGlassBottomBar(
+                    tabs = tabs,
+                    selectedRoute = currentRoute,
+                    backdrop = backdrop,
+                    onSelect = onTabSelected,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            } else {
+                FloatingBottomBar(
+                    tabs = tabs,
+                    selectedRoute = currentRoute,
+                    backdrop = backdrop,
+                    glass = settings.blurBottomBar,
+                    onSelect = onTabSelected,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
         }
         }
     }

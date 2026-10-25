@@ -20,6 +20,21 @@ enum class ThemeMode(val value: Int) {
     }
 }
 
+/**
+ * 底栏样式。
+ *
+ * - [FLOATING]：HyperOS 风格的实心悬浮胶囊，选中项用主色块标记
+ * - [LIQUID_GLASS]：仿 iOS 的液态玻璃，背景实时模糊 + 边缘高光 + 滑动玻璃药丸
+ */
+enum class BottomBarStyle(val value: String, val label: String) {
+    FLOATING("floating", "悬浮胶囊"),
+    LIQUID_GLASS("liquid", "液态玻璃");
+
+    companion object {
+        fun from(v: String?) = entries.firstOrNull { it.value == v } ?: LIQUID_GLASS
+    }
+}
+
 enum class WeightUnit(val label: String, val factor: Float) {
     KG("kg", 1f),
     LB("lb", 2.20462f);
@@ -41,7 +56,9 @@ data class AppSettings(
     val webdavPassword: String = "",
     val autoBackup: Boolean = false,
     val lastBackupTime: Long? = null,
-    /** 悬浮底栏毛玻璃效果（默认关闭，开启会增加 GPU 开销） */
+    /** 底栏样式：默认仿 iOS 液态玻璃 */
+    val bottomBarStyle: BottomBarStyle = BottomBarStyle.LIQUID_GLASS,
+    /** 悬浮胶囊底栏的毛玻璃效果（液态玻璃样式下恒为开启） */
     val blurBottomBar: Boolean = false,
     /** 点击时的触觉反馈 */
     val tapHaptics: Boolean = true,
@@ -65,6 +82,7 @@ class SettingsRepository(private val context: Context) {
         val WEBDAV_USER = stringPreferencesKey("webdav_user")
         val WEBDAV_PASS_ENC = stringPreferencesKey("webdav_pass_enc")
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
+        val BOTTOM_BAR_STYLE = stringPreferencesKey("bottom_bar_style")
         val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
         val TAP_HAPTICS = booleanPreferencesKey("tap_haptics")
         val LAST_BACKUP = longPreferencesKey("last_backup")
@@ -83,6 +101,7 @@ class SettingsRepository(private val context: Context) {
             webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
             autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
             lastBackupTime = prefs[Keys.LAST_BACKUP],
+            bottomBarStyle = BottomBarStyle.from(prefs[Keys.BOTTOM_BAR_STYLE]),
             blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
             tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
             barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
@@ -121,6 +140,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setBlurBottomBar(enabled: Boolean) {
         context.dataStore.edit { it[Keys.BLUR_BOTTOM_BAR] = enabled }
+    }
+
+    suspend fun setBottomBarStyle(style: BottomBarStyle) {
+        context.dataStore.edit { it[Keys.BOTTOM_BAR_STYLE] = style.value }
     }
 
     suspend fun setLastBackupTime(time: Long) {
