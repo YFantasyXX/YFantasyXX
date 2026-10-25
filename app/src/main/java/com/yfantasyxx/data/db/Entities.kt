@@ -128,6 +128,54 @@ data class TemplateFolder(
 )
 
 /**
+ * 训练计划。
+ *
+ * 一个计划就是一串「天」：[PlanDay] 按 [PlanDay.position] 排成循环，
+ * 每一天要么是一个模板（训练日），要么是 null 模板（休息日）。
+ * 三分化练三休一 = 推 / 拉 / 腿 / 休息 四条，练完休息日再回到推。
+ *
+ * 同时只有一个计划是激活的（[isActive]），首页只提示激活的那个。
+ */
+@Entity(tableName = "training_plans")
+data class PlanEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val isActive: Boolean = false,
+    /** 下一个该做的位置，对应 [PlanDay.position]；进度只存这一个数 */
+    val nextIndex: Int = 0,
+    /**
+     * 当前这一天从哪个本地零点开始。
+     *
+     * 休息日靠它按自然日流过：休息日占满一整天，第二天自动进入下一天。
+     * 训练日则一直停在这里，练完才推进——中间断了几天也不会错位。
+     */
+    val dayStartedAt: Long = 0L,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+/** 计划里的一天；[templateId] 为 null 表示休息日 */
+@Entity(
+    tableName = "plan_days",
+    foreignKeys = [
+        ForeignKey(
+            entity = PlanEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["planId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("planId")]
+)
+data class PlanDay(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val planId: Long,
+    val position: Int,
+    val templateId: Long? = null,
+)
+
+/**
  * 模板内的动作条目
  */
 @Entity(

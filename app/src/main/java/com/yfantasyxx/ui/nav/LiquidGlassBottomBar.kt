@@ -8,6 +8,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,7 +30,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,11 +43,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.blur.Backdrop
@@ -220,6 +226,12 @@ fun LiquidGlassBottomBar(
             // 拉伸时向两侧同时展开，视觉上「从中间抻开」
             val pillX = BarInset + slot * pill.value + 2.dp - extra / 2
             val pillShape = RoundedCornerShape(percent = 50)
+            val scope = rememberCoroutineScope()
+            // 拖动时的落点（松手才真的切页，避免手指还没抬起来页面就跳走）
+            val dragTarget = remember { mutableIntStateOf(selectedIndex) }
+            val latestSelected = rememberUpdatedState(selectedIndex)
+            val slotPx = with(LocalDensity.current) { slot.toPx() }
+            val settle = spring<Float>(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
 
             // 选中药丸：本身就是一小块玻璃，比底栏更亮，带独立投影
             Box(
@@ -262,7 +274,37 @@ fun LiquidGlassBottomBar(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = BarInset),
+                    .padding(horizontal = BarInset)
+                    // 横向拖过底栏就切换：药丸跟手走，松手停在最近的一个 tab
+                    .pointerInput(tabs.size, slotPx) {
+                        fun indexAt(x: Float): Int =
+                            (x / slotPx).toInt().coerceIn(0, tabs.lastIndex)
+
+                        fun fractionAt(x: Float): Float =
+                            (x / slotPx - 0.5f).coerceIn(0f, tabs.lastIndex.toFloat())
+
+                        detectHorizontalDragGestures(
+                            onDragStart = { offset ->
+                                dragTarget.intValue = indexAt(offset.x)
+                                scope.launch { pill.snapTo(fractionAt(offset.x)) }
+                            },
+                            onHorizontalDrag = { change, _ ->
+                                change.consume()
+                                dragTarget.intValue = indexAt(change.position.x)
+                                scope.launch { pill.snapTo(fractionAt(change.position.x)) }
+                            },
+                            onDragEnd = {
+                                val target = dragTarget.intValue
+                                if (target != latestSelected.value) onSelect(tabs[target].route)
+                                scope.launch { pill.animateTo(target.toFloat(), settle) }
+                            },
+                            onDragCancel = {
+                                scope.launch {
+                                    pill.animateTo(latestSelected.value.toFloat(), settle)
+                                }
+                            },
+                        )
+                    },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 tabs.forEachIndexed { index, tab ->

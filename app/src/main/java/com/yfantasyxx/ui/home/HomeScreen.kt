@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -48,6 +49,7 @@ import com.yfantasyxx.ui.components.NumberStepper
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.components.StatCard
 import com.yfantasyxx.ui.components.formatVolume
+import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -56,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.yfantasyxx.util.CrashLogger
 import com.yfantasyxx.ui.components.ActionText
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.text.style.TextOverflow
 import com.yfantasyxx.data.TrainingPlan
 
@@ -72,6 +75,7 @@ fun HomeScreen(
     val state by vm.uiState.collectAsState()
     val latestWeight by vm.latestWeightKg.collectAsState()
     var showWeightDialog by remember { mutableStateOf(false) }
+    var showPlans by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     val context = LocalContext.current
     var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
@@ -285,18 +289,18 @@ fun HomeScreen(
                 }
             }
 
-            // ---- 训练计划：循环制，不看星期几 ----
+            // ---- 训练计划：按计划走，不看星期几 ----
             state.plan?.let { plan ->
                 item {
                     Spacer(Modifier.height(12.dp))
                     PlanCard(
                         plan = plan,
                         onStart = {
-                            plan.nextTemplateId?.let { id ->
+                            plan.upNextTemplateId?.let { id ->
                                 vm.startWorkout(id) { onStartFromTemplate() }
                             }
                         },
-                        onOpenPlan = onOpenTemplates,
+                        onOpenPlan = { showPlans = true },
                     )
                 }
             }
@@ -309,7 +313,7 @@ fun HomeScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
-                        onClick = onOpenTemplates,
+                        onClick = { showPlans = true },
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -326,9 +330,9 @@ fun HomeScreen(
                                     .padding(start = 12.dp)
                                     .weight(1f),
                             ) {
-                                Text("设置训练计划", style = MiuixTheme.textStyles.main)
+                                Text("创建训练计划", style = MiuixTheme.textStyles.main)
                                 Text(
-                                    text = "三分化练三休一：把模板排成循环，首页按计划提示今天练哪",
+                                    text = "把模板排成循环：推 / 拉 / 腿 / 休息，首页按计划提示今天练哪天",
                                     style = MiuixTheme.textStyles.footnote1,
                                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 )
@@ -507,14 +511,17 @@ fun HomeScreen(
             }
         }
     }
+
+    if (showPlans) {
+        TrainingPlanDialog(onDismiss = { showPlans = false })
+    }
 }
 
 /**
- * 训练计划卡片：循环制的「练三休一」。
+ * 训练计划卡片。
  *
- * 强调的是「按计划现在轮到了第几天」，不是「今天星期几」：
- * 休息日由 `TrainingPlan.restRemaining` 推出来，中间断了几天也不会错位，
- * 所以这里没有任何 Calendar / 周几的判断。
+ * 只回答一个问题：「按计划，今天该练哪天」。计划是一串天（模板或休息），
+ * 休息日占满一天自动流过，训练日练完才往后走——所以这里没有任何「今天星期几」的判断。
  */
 @Composable
 private fun PlanCard(
@@ -525,15 +532,14 @@ private fun PlanCard(
     val statusMain = when {
         plan.resting -> "休息日"
         plan.trainedToday -> "今天已经练完"
-        plan.lastDayIndex == null -> "计划还没开始"
         else -> "今天：${plan.nextName}"
     }
     val statusSub = when {
-        plan.resting && plan.restRemaining <= 1 -> "今天休息 · 下次 ${plan.nextName}"
-        plan.resting -> "还要休 ${plan.restRemaining} 天 · 下次 ${plan.nextName}"
-        plan.trainedToday -> "下次：${plan.nextName}"
-        plan.lastDayIndex == null -> "从 ${plan.nextName} 开始"
-        else -> "本轮第 ${plan.nextDayIndex + 1}/${plan.dayCount} 天"
+        plan.resting && plan.restRemaining <= 1 ->
+            "休息一天 · 下次 ${plan.upNextName}"
+        plan.resting -> "连休 ${plan.restRemaining} 天 · 下次 ${plan.upNextName}"
+        plan.trainedToday -> "下次：${plan.upNextName}"
+        else -> "第 ${plan.nextIndex + 1}/${plan.dayCount} 天"
     }
 
     Card(
@@ -558,7 +564,7 @@ private fun PlanCard(
                         .padding(start = 8.dp)
                         .weight(1f),
                 )
-                // 节奏标签兼设置入口：点它去模板页改「每轮休几天」
+                // 节奏标签兼入口：点它去管理 / 切换计划
                 Row(
                     modifier = Modifier
                         .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
@@ -573,7 +579,7 @@ private fun PlanCard(
                     )
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "设置训练计划",
+                        contentDescription = "管理训练计划",
                         tint = MiuixTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp),
                     )
@@ -596,7 +602,7 @@ private fun PlanCard(
                 // 休息日不放大按钮：主按钮会和「休息日」打架，
                 // 但也不该拦着想练的人，所以留一个次要入口
                 if (plan.resting) {
-                    ActionText(text = "提前开练", onClick = onStart)
+                    ActionText(text = "提前练 ${plan.upNextName}", onClick = onStart)
                 } else {
                     Button(onClick = onStart) {
                         Text("开始", style = MiuixTheme.textStyles.button)
@@ -607,45 +613,63 @@ private fun PlanCard(
     }
 }
 
-/** 计划内的训练日横条：高亮下一个该练的，其余中性 */
+/**
+ * 计划里的天：一格一天，休息日和训练日一样占位置。
+ * 高亮今天这一格；天数多到挤不下时改成横向滚动，别把每个格子压成一条线。
+ */
 @Composable
 private fun PlanDayStrip(plan: TrainingPlan) {
-    val shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+    val scrollable = plan.dayCount > 8
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = if (scrollable) {
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        } else {
+            Modifier.fillMaxWidth()
+        },
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        plan.dayNames.forEachIndexed { index, name ->
-            val isNext = index == plan.nextDayIndex && !plan.resting
-            val lastDone = plan.lastDayIndex
-            val isLast = lastDone != null && lastDone == index
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(shape)
-                    .background(
-                        if (isNext) {
-                            MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
-                        } else {
-                            MiuixTheme.colorScheme.surfaceContainer
-                        }
-                    )
-                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = name,
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = when {
-                        isNext -> MiuixTheme.colorScheme.primary
-                        isLast -> MiuixTheme.colorScheme.onSurface
-                        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+        plan.slots.forEachIndexed { index, slot ->
+            DayChip(
+                slot = slot,
+                isToday = index == plan.nextIndex,
+                modifier = if (scrollable) Modifier.width(52.dp) else Modifier.weight(1f),
+            )
         }
+    }
+}
+
+@Composable
+private fun DayChip(
+    slot: com.yfantasyxx.data.PlanDaySlot,
+    isToday: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .background(
+                when {
+                    isToday -> MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+                    slot.isRest -> MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f)
+                    else -> MiuixTheme.colorScheme.surfaceContainer
+                }
+            )
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (slot.isRest) "休" else slot.name,
+            style = MiuixTheme.textStyles.footnote1,
+            color = when {
+                isToday -> MiuixTheme.colorScheme.primary
+                slot.isRest -> MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.6f)
+                else -> MiuixTheme.colorScheme.onSurface
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

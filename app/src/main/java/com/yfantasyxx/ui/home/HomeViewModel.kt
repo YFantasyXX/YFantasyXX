@@ -51,7 +51,7 @@ class HomeViewModel(
         repo.observeSessionCount(weekStart()),
         repo.observeTotalVolume(weekStart()),
         settingsRepo.settings,
-        repo.observePlan(),
+        repo.observeActivePlan(),
     ) { values ->
         val active = values[0] as ActiveSessionSummary?
         val templates = values[1] as List<WorkoutTemplate>

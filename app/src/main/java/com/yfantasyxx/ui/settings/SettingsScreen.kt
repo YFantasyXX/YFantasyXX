@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DarkMode
@@ -61,6 +62,7 @@ import com.yfantasyxx.ui.components.SettingsCard
 import com.yfantasyxx.ui.components.SettingsDivider
 import com.yfantasyxx.ui.components.SettingsHint
 import com.yfantasyxx.ui.components.SettingsRow
+import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -100,6 +102,7 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
     var showBackups by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<SettingPicker?>(null) }
+    var showPlans by remember { mutableStateOf(false) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
 
     // CSV 导出（系统文件选择器）
@@ -217,6 +220,14 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
             /* ───────── 训练 ───────── */
             SectionHeader("训练")
             SettingsCard {
+                SettingsRow(
+                    title = "训练计划",
+                    subtitle = "几天一轮的循环，可以排休息日；同时只开一个",
+                    icon = Icons.Filled.Autorenew,
+                    showChevron = true,
+                    onClick = { showPlans = true },
+                )
+                SettingsDivider()
                 SettingsRow(
                     title = "训练模板",
                     subtitle = "动作模板、循环计划与休息天数",
@@ -573,6 +584,10 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showPlans) {
+        TrainingPlanDialog(onDismiss = { showPlans = false })
     }
 
     toastMessage?.let { msg ->

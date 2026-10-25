@@ -612,6 +612,49 @@ interface BodyMetricDao {
     suspend fun delete(id: Long)
 }
 
+@Dao
+interface PlanDao {
+    @Query("SELECT * FROM training_plans ORDER BY createdAt, id")
+    fun observePlans(): Flow<List<PlanEntity>>
+
+    @Query("SELECT * FROM plan_days ORDER BY planId, position, id")
+    fun observeDays(): Flow<List<PlanDay>>
+
+    @Query("SELECT * FROM training_plans WHERE isActive = 1 LIMIT 1")
+    suspend fun activePlan(): PlanEntity?
+
+    @Query("SELECT * FROM training_plans WHERE id = :id")
+    suspend fun plan(id: Long): PlanEntity?
+
+    @Query("SELECT * FROM plan_days WHERE planId = :planId ORDER BY position, id")
+    suspend fun daysOf(planId: Long): List<PlanDay>
+
+    @Insert
+    suspend fun insertPlan(plan: PlanEntity): Long
+
+    @Query("UPDATE training_plans SET name = :name WHERE id = :id")
+    suspend fun renamePlan(id: Long, name: String)
+
+    @Query("DELETE FROM training_plans WHERE id = :id")
+    suspend fun deletePlan(id: Long)
+
+    /** 只允许一个计划激活：先全关，再开一个 */
+    @Query("UPDATE training_plans SET isActive = 0")
+    suspend fun deactivateAll()
+
+    @Query("UPDATE training_plans SET isActive = 1 WHERE id = :id")
+    suspend fun activate(id: Long)
+
+    @Query("UPDATE training_plans SET nextIndex = :nextIndex, dayStartedAt = :dayStartedAt WHERE id = :id")
+    suspend fun setProgress(id: Long, nextIndex: Int, dayStartedAt: Long)
+
+    @Insert
+    suspend fun insertDay(day: PlanDay): Long
+
+    @Query("DELETE FROM plan_days WHERE planId = :planId")
+    suspend fun deleteDays(planId: Long)
+}
+
 @Database(
     entities = [
         Exercise::class,
@@ -622,8 +665,10 @@ interface BodyMetricDao {
         SessionExercise::class,
         SetLog::class,
         BodyMetric::class,
+        PlanEntity::class,
+        PlanDay::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -633,6 +678,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionExerciseDao(): SessionExerciseDao
     abstract fun setLogDao(): SetLogDao
     abstract fun bodyMetricDao(): BodyMetricDao
+    abstract fun planDao(): PlanDao
 
     companion object {
         const val NAME = "yfantasyxx.db"
@@ -726,6 +772,141 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * v14 -> v15：训练计划独立成表。
+         *
+         * 旧做法把「计划」挂在文件夹上（rotation + restDays + 游标），只能整个文件夹当循环，
+         * 休息日也只能统一加在轮末，看不懂也没法排「推 / 拉 / 休息 / 腿」这种。
+         * 新模型是一个计划 = 一串天，每天一个模板或休息日。
+         *
+         * 老数据搬一次：第一个开了 rotation 的文件夹 → 一个激活的计划，
+         * 模板按原顺序排成训练日，restDays 接在末尾。
+         */
+        val MIGRATION_14_15 = object : androidx.room.migration.Migration(14, 15) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `training_plans` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `isActive` INTEGER NOT NULL,
+                        `nextIndex` INTEGER NOT NULL,
+                        `dayStartedAt` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `plan_days` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `planId` INTEGER NOT NULL,
+                        `position` INTEGER NOT NULL,
+                        `templateId` INTEGER,
+                        FOREIGN KEY(`planId`) REFERENCES `training_plans`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_plan_days_planId` ON `plan_days` (`planId`)"
+                )
+                migrateFolderRotationToPlan(db)
+            }
+        }
+
+        /** 把老的「文件夹轮换」搬成一个真正的计划；没有就什么都不做 */
+        private fun migrateFolderRotationToPlan(
+            db: androidx.sqlite.db.SupportSQLiteDatabase
+        ) {
+            var folderId = -1L
+            var folderName = ""
+            var restDays = 0
+            var nextTemplateId: Long? = null
+            db.query(
+                "SELECT id, name, restDays, cycleNextTemplateId FROM template_folders " +
+                    "WHERE rotation = 1 ORDER BY sortOrder, id LIMIT 1"
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    folderId = cursor.getLong(0)
+                    folderName = cursor.getString(1)
+                    restDays = cursor.getInt(2)
+                    nextTemplateId = if (cursor.isNull(3)) null else cursor.getLong(3)
+                }
+            }
+            if (folderId < 0) return
+
+            val templateIds = mutableListOf<Long>()
+            db.query(
+                "SELECT id FROM templates WHERE folderId = $folderId " +
+                    "ORDER BY sortOrder, createdAt DESC"
+            ).use { cursor ->
+                while (cursor.moveToNext()) templateIds += cursor.getLong(0)
+            }
+            if (templateIds.isEmpty()) return
+
+            val now = System.currentTimeMillis()
+            val startedAt = java.util.Calendar.getInstance().apply {
+                timeInMillis = now
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            // ContentValues.put 是按类型重载的，Any? 传不进去，这里按实际类型分派
+            fun values(vararg pairs: Pair<String, Any?>): android.content.ContentValues {
+                val values = android.content.ContentValues()
+                pairs.forEach { (key, value) ->
+                    when (value) {
+                        null -> values.putNull(key)
+                        is Int -> values.put(key, value)
+                        is Long -> values.put(key, value)
+                        is String -> values.put(key, value)
+                        else -> values.put(key, value.toString())
+                    }
+                }
+                return values
+            }
+
+            val planId = db.insert(
+                "training_plans",
+                android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                values(
+                    "name" to folderName,
+                    "isActive" to 1,
+                    "nextIndex" to templateIds.indexOf(nextTemplateId).coerceAtLeast(0),
+                    "dayStartedAt" to startedAt,
+                    "createdAt" to now,
+                ),
+            )
+
+            var position = 0
+            templateIds.forEach { id ->
+                db.insert(
+                    "plan_days",
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                    values(
+                        "planId" to planId,
+                        "position" to position++,
+                        "templateId" to id,
+                    ),
+                )
+            }
+            repeat(restDays.coerceIn(0, 7)) {
+                db.insert(
+                    "plan_days",
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                    values(
+                        "planId" to planId,
+                        "position" to position++,
+                        "templateId" to null,
+                    ),
+                )
+            }
+        }
+
 
         /** 把旧的自由文本次数解析成 min/max（`8-12` → 8,12；`10` → 10,10） */
         private fun backfillRepRange(

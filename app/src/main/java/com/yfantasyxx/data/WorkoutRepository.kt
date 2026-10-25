@@ -7,6 +7,8 @@ import com.yfantasyxx.data.db.BucketVolume
 import com.yfantasyxx.data.db.CategoryVolume
 import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.ExercisePr
+import com.yfantasyxx.data.db.PlanDay
+import com.yfantasyxx.data.db.PlanEntity
 import com.yfantasyxx.data.db.SessionExercise
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SessionSummary
@@ -38,6 +40,7 @@ class WorkoutRepository(private val db: AppDatabase) {
     private val sessionExerciseDao = db.sessionExerciseDao()
     private val setLogDao = db.setLogDao()
     private val bodyMetricDao = db.bodyMetricDao()
+    private val planDao = db.planDao()
 
     // ---------- 统计数据的失效信号 ----------
 
@@ -53,18 +56,23 @@ class WorkoutRepository(private val db: AppDatabase) {
     fun observeDataVersion(): StateFlow<Int> = dataVersion
 
     /**
-     * 当前训练计划（循环制）的状态；没启用轮换时为 null。
+     * 当前激活的训练计划状态；没开计划时为 null。
      *
-     * 三路合并：数据版本（练完 / 删记录后要重算）、文件夹设定（开关与休息天数）、
-     * 模板列表（改名 / 排序后提示要跟着变）。只挂在数据版本上的话，
-     * 用户在模板页把休息天数从 0 改成 1，首页会一直显示旧节奏直到重启。
+     * 四路合并：数据版本（练完 / 删记录后要重算）、计划本身（游标）、
+     * 计划里的天（增删排序）、模板列表（改名后提示要跟着变）。
      */
-    fun observePlan(): Flow<TrainingPlan?> = combine(
+    fun observeActivePlan(): Flow<TrainingPlan?> = combine(
         dataVersion,
-        templateDao.observeFolders(),
+        planDao.observePlans(),
+        planDao.observeDays(),
         templateDao.observeAll(),
-    ) { _, folders, templates ->
-        resolvePlan(folders, templates)
+    ) { values ->
+        @Suppress("UNCHECKED_CAST")
+        resolveActivePlan(
+            plans = values[1] as List<PlanEntity>,
+            days = values[2] as List<PlanDay>,
+            templates = values[3] as List<WorkoutTemplate>,
+        )
     }
 
     /** PR 列表缓存；[invalidateStats] 时置空 */
@@ -277,19 +285,91 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun setFolderShowOnHome(id: Long, show: Boolean) =
         templateDao.setFolderShowOnHome(id, show)
 
-    suspend fun setFolderRotation(id: Long, rotation: Boolean) =
-        templateDao.setFolderRotation(id, rotation)
+    // ---------- 训练计划 ----------
+
+    fun observePlans(): Flow<List<PlanEntity>> = planDao.observePlans()
+
+    fun observePlanDays(): Flow<List<PlanDay>> = planDao.observeDays()
+
+    /** 新建计划；[activate] 时顺手关掉别的计划（同时只能开一个） */
+    suspend fun createPlan(
+        name: String,
+        days: List<Long?>,
+        activate: Boolean = true,
+    ): Long = db.withTransaction {
+        if (activate) planDao.deactivateAll()
+        val planId = planDao.insertPlan(
+            PlanEntity(
+                name = name.trim().ifBlank { "训练计划" },
+                isActive = activate,
+                nextIndex = 0,
+                dayStartedAt = TrainingCycle.startOfDay(System.currentTimeMillis()),
+            )
+        )
+        days.forEachIndexed { index, templateId ->
+            planDao.insertDay(PlanDay(planId = planId, position = index, templateId = templateId))
+        }
+        planId
+    }
 
     /**
-     * 保存训练计划设定（是否作为计划 + 每轮休息天数）。
+     * 保存计划（改名 + 整体替换每天）。
      *
-     * 两个字段一起写：先勾「启用」再设休息要分两次写入的话，
-     * 首页会先闪一下「没休息日」的旧状态。
+     * 替换的是「天」而不是模板本身，所以改计划不会碰训练记录。
+     * 游标按**今天该练的模板**搬过去：把休息日挪到前面、或者加一天，
+     * 今天该练的东西不会跟着下标漂走。
      */
-    suspend fun savePlanConfig(id: Long, enabled: Boolean, restDays: Int) = db.withTransaction {
-        templateDao.setFolderRotation(id, enabled)
-        templateDao.setFolderRestDays(id, restDays.coerceIn(0, TrainingCycle.MAX_REST_DAYS))
+    suspend fun updatePlan(planId: Long, name: String, days: List<Long?>) = db.withTransaction {
+        val plan = planDao.plan(planId) ?: return@withTransaction
+        val oldDays = planDao.daysOf(planId).sortedBy { it.position }
+        val oldSlots = oldDays.map { PlanDaySlot(it.templateId, "") }
+        val currentIndex = TrainingCycle.currentIndex(plan.nextIndex, plan.dayStartedAt, oldSlots)
+        val todayTemplate = oldDays.getOrNull(currentIndex)?.templateId
+
+        planDao.renamePlan(planId, name.trim().ifBlank { plan.name })
+        planDao.deleteDays(planId)
+        days.forEachIndexed { index, templateId ->
+            planDao.insertDay(PlanDay(planId = planId, position = index, templateId = templateId))
+        }
+
+        val newIndex = if (days.isEmpty()) {
+            0
+        } else if (todayTemplate != null) {
+            days.indexOfFirst { it == todayTemplate }.takeIf { it >= 0 } ?: 0
+        } else {
+            plan.nextIndex.coerceIn(0, days.lastIndex)
+        }
+        planDao.setProgress(planId, newIndex, plan.dayStartedAt)
     }
+
+    suspend fun deletePlan(planId: Long) = planDao.deletePlan(planId)
+
+    /**
+     * 开启 / 关闭计划。
+     *
+     * 同时只能开一个：开新的会把别的关掉。开启时进度从第 1 天重新算——
+     * 「打开一个计划」的语义就是从头开始照着练，而不是接着上次某个半截状态。
+     */
+    suspend fun setActivePlan(planId: Long?) = db.withTransaction {
+        val current = planDao.activePlan()
+        if (current?.id == planId) return@withTransaction
+        planDao.deactivateAll()
+        if (planId != null) {
+            planDao.activate(planId)
+            planDao.setProgress(
+                id = planId,
+                nextIndex = 0,
+                dayStartedAt = TrainingCycle.startOfDay(System.currentTimeMillis()),
+            )
+        }
+    }
+
+    /** 回到第 1 天（按计划重新开始） */
+    suspend fun resetPlanProgress(planId: Long) = planDao.setProgress(
+        id = planId,
+        nextIndex = 0,
+        dayStartedAt = TrainingCycle.startOfDay(System.currentTimeMillis()),
+    )
 
     suspend fun createFolder(name: String): Long =
         templateDao.insertFolder(TemplateFolder(name = name.trim()))
@@ -561,18 +641,25 @@ class WorkoutRepository(private val db: AppDatabase) {
     /**
      * 删除一条训练记录。
      *
-     * 如果删掉的是计划里的训练，游标要跟着退回去——否则「删了刚才那次」之后
-     * 计划还停在下一天，等于白练了一次。做法是把游标清空，让读取时按剩下的历史重推。
+     * 如果删掉的是计划里的训练，游标要退回那一天——否则「删了刚才那次」之后
+     * 计划还停在下一格，等于白练了一次。
      */
     suspend fun deleteSession(id: Long) {
         val templateId = sessionDao.getById(id)?.templateId
         sessionDao.delete(id)
         if (templateId != null) {
-            val templates = templateDao.observeAll().first()
-            templateDao.observeFolders().first()
-                .filter { it.rotation }
-                .filter { folder -> templates.any { it.id == templateId && it.folderId == folder.id } }
-                .forEach { folder -> resetPlanProgress(folder.id) }
+            val plan = planDao.activePlan()
+            if (plan != null) {
+                val days = planDao.daysOf(plan.id).sortedBy { it.position }
+                val index = days.indexOfFirst { it.templateId == templateId }
+                if (index >= 0) {
+                    planDao.setProgress(
+                        id = plan.id,
+                        nextIndex = index,
+                        dayStartedAt = TrainingCycle.startOfDay(System.currentTimeMillis()),
+                    )
+                }
+            }
         }
         invalidateStats()
     }
@@ -770,111 +857,70 @@ class WorkoutRepository(private val db: AppDatabase) {
         if (keyword.isBlank()) emptySet() else sessionDao.sessionIdsMatchingExercise(keyword).toSet()
 
     /**
-     * 计划轮换的当前状态。
+     * 解析当前激活的计划。
      *
-     * 只认一个计划：开了轮换的文件夹里，排在最前面的那个（文件夹内模板按 sortOrder）。
-     * 以前是把所有轮换文件夹摊平成一个长循环，但「每轮休息几天」是文件夹级别的设定，
-     * 摊平之后休息日该插在哪就没有意义了。
-     *
-     * **进度以游标为准**（[TemplateFolder.cycleNextTemplateId]），拿不到游标才按历史推一次。
-     * 这样用户在训练之后改计划——重排顺序、加减模板、改休息天数、关掉再开——
-     * 都不会让「今天该练哪个」跳变，更不会去动已经记下的训练时间。
+     * 传入列表让 Flow 版能一次拿全（避免每条流各查一次库），单次读取时传 null。
      */
-    suspend fun resolvePlan(
-        // 默认值不能直接写成挂起调用（Kotlin 不允许），所以传 null 表示「自己查」
-        folders: List<TemplateFolder>? = null,
+    suspend fun resolveActivePlan(
+        plans: List<PlanEntity>? = null,
+        days: List<PlanDay>? = null,
         templates: List<WorkoutTemplate>? = null,
         now: Long = System.currentTimeMillis(),
     ): TrainingPlan? {
-        val folderList = folders ?: templateDao.observeFolders().first()
+        val plan = (plans ?: planDao.observePlans().first()).firstOrNull { it.isActive } ?: return null
+        val allDays = days ?: planDao.observeDays().first()
+        val myDays = allDays.filter { it.planId == plan.id }
+        if (myDays.isEmpty()) return null
         val templateList = templates ?: templateDao.observeAll().first()
-        val folder = folderList
-            .filter { it.rotation }
-            .sortedBy { it.sortOrder }
-            .firstOrNull { f -> templateList.any { it.folderId == f.id } }
-            ?: return null
-        val cycle = templateList.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
-        if (cycle.isEmpty()) return null
-        val ids = cycle.map { it.id }
-
-        val last = sessionDao.lastSessionForTemplates(ids)
-        val lastIndex = last?.let { l -> ids.indexOf(l.templateId) }?.takeIf { it >= 0 }
-
-        val storedNext = folder.cycleNextTemplateId
-        val nextIndex: Int
-        val cycleEndedAt: Long?
-        if (storedNext != null && ids.contains(storedNext)) {
-            nextIndex = ids.indexOf(storedNext)
-            cycleEndedAt = folder.cycleEndedAt
-        } else {
-            // 没游标：老数据升级上来，或游标指向的模板已被删——按历史补一次
-            nextIndex = TrainingCycle.deriveNextIndex(ids, last?.templateId)
-            // 上一次正好练到轮末时，把休息日接上，别让升级把休息吃掉
-            cycleEndedAt = if (last != null && lastIndex == ids.lastIndex) {
-                last.startTime
-            } else {
-                null
-            }
-        }
-
-        return TrainingCycle.state(
-            folderId = folder.id,
-            name = folder.name,
-            templateIds = ids,
-            dayNames = cycle.map { it.name },
-            restDays = folder.restDays,
-            nextDayIndex = nextIndex,
-            cycleEndedAt = cycleEndedAt,
-            lastDayIndex = lastIndex,
+        val ids = myDays.mapNotNull { it.templateId }
+        val last = if (ids.isEmpty()) null else sessionDao.lastSessionForTemplates(ids)
+        return TrainingCycle.resolve(
+            plan = plan,
+            days = myDays,
+            templateNames = templateList.associate { it.id to it.name },
             lastTrainedAt = last?.startTime,
             now = now,
         )
     }
 
     /**
-     * 结束训练后推进计划游标。
+     * 结束训练后推进计划。
      *
-     * 只有「这次练的模板属于某个启用中的计划」才动；顺带把本轮完成时刻记下来，
-     * 休息天数从这一刻起算。写成 id 而不是下标，之后重排也不会错位。
+     * 只在「这次练的正是今天该练的那个模板」时推进：临时加练别的模板、
+     * 或者计划外的自由训练，都不该让计划往前走一天。
+     * 休息日点「提前练」练了下一个训练日，也算这一天过完了。
      */
     suspend fun advancePlanAfter(session: WorkoutSession) {
         val templateId = session.templateId ?: return
-        val folders = templateDao.observeFolders().first()
-        if (folders.none { it.rotation }) return
-        val templates = templateDao.observeAll().first()
-        val folder = folders
-            .filter { it.rotation }
-            .sortedBy { it.sortOrder }
-            .firstOrNull { f -> templates.any { it.id == templateId && it.folderId == f.id } }
-            ?: return
-        val cycle = templates.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
-        val index = cycle.indexOfFirst { it.id == templateId }
-        if (index < 0) return
-        val atCycleEnd = index == cycle.lastIndex
-        templateDao.setPlanProgress(
-            id = folder.id,
-            // 练完最后一个 → 回到第一个，并开始计休息
-            nextTemplateId = cycle[if (atCycleEnd) 0 else index + 1].id,
-            cycleEndedAt = if (atCycleEnd) {
-                session.endTime ?: System.currentTimeMillis()
-            } else {
-                null
-            },
+        val plan = planDao.activePlan() ?: return
+        val days = planDao.daysOf(plan.id).sortedBy { it.position }
+        if (days.isEmpty()) return
+
+        val slots = days.map { PlanDaySlot(it.templateId, "") }
+        val today = TrainingCycle.currentIndex(plan.nextIndex, plan.dayStartedAt, slots)
+
+        val done = when {
+            days[today].templateId == templateId -> today
+            days[today].templateId == null -> {
+                // 休息日提前开练：找休息结束后的第一个训练日
+                var i = today
+                var guard = 0
+                while (guard++ < days.size && days[i].templateId == null) {
+                    i = (i + 1) % days.size
+                }
+                if (days[i].templateId == templateId) i else -1
+            }
+            else -> -1
+        }
+        if (done < 0) return
+
+        planDao.setProgress(
+            id = plan.id,
+            nextIndex = (done + 1) % days.size,
+            // 下一格从明天算起：今晚再练一次也不会把休息日跳过去
+            dayStartedAt = TrainingCycle.startOfNextDay(System.currentTimeMillis()),
         )
     }
-
-    /**
-     * 按训练历史重算计划进度（清掉游标，下次读取时重新推导）。
-     *
-     * 用在两种「改过历史」的场合：删掉了训练记录、或在计划里动了模板却想回到按历史算。
-     * 清空而不是直接算好写回：读的时候那条路径已经处理了「老数据 / 缺游标」，
-     * 两处各写一份推导逻辑早晚会分叉。
-     */
-    suspend fun resetPlanProgress(folderId: Long) = templateDao.setPlanProgress(
-        id = folderId,
-        nextTemplateId = null,
-        cycleEndedAt = null,
-    )
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)
 

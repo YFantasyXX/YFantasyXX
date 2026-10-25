@@ -33,8 +33,12 @@ import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.textureBlurEffect
 import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import kotlin.math.abs
 
 /** 悬浮底栏的 tab 定义 */
 data class FloatingTab(
@@ -128,15 +132,40 @@ fun FloatingBottomBar(
                 .padding(horizontal = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
+            // 每个 tab 的中心点（相对这一行），拖动时用来找最近的一个
+            val centers = androidx.compose.runtime.remember {
+                androidx.compose.runtime.mutableStateMapOf<Int, Float>()
+            }
+            val latestRoute = androidx.compose.runtime.rememberUpdatedState(selectedRoute)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(tabs.size) {
+                        var lastX = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { lastX = it.x },
+                            onHorizontalDrag = { change, _ ->
+                                change.consume()
+                                lastX = change.position.x
+                            },
+                            onDragEnd = {
+                                val nearest = centers.minByOrNull { abs(it.value - lastX) }
+                                    ?.key ?: return@detectHorizontalDragGestures
+                                val route = tabs.getOrNull(nearest)?.route
+                                if (route != null && route != latestRoute.value) onSelect(route)
+                            },
+                        )
+                    },
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                tabs.forEach { tab ->
+                tabs.forEachIndexed { index, tab ->
                     val selected = tab.route == selectedRoute
                     Row(
                         modifier = Modifier
+                            .onGloballyPositioned { coords ->
+                                centers[index] = coords.boundsInParent().center.x
+                            }
                             .clip(RoundedCornerShape(20.dp))
                             .then(
                                 if (selected) {
