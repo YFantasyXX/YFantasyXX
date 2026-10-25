@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
@@ -63,6 +64,7 @@ import com.yfantasyxx.ui.components.SettingsCard
 import com.yfantasyxx.ui.components.SettingsDivider
 import com.yfantasyxx.ui.components.SettingsHint
 import com.yfantasyxx.ui.components.SettingsRow
+import com.yfantasyxx.ui.dev.DevTools
 import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
 import kotlinx.coroutines.Dispatchers
@@ -86,7 +88,10 @@ import java.util.Locale
 private enum class SettingPicker { THEME, UNIT, BOTTOM_BAR }
 
 @Composable
-fun SettingsScreen(onOpenTemplates: () -> Unit) {
+fun SettingsScreen(
+    onOpenTemplates: () -> Unit,
+    onOpenDevTools: () -> Unit = {},
+) {
     val container = rememberAppContainer()
     val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(container))
     val settings by vm.settings.collectAsState()
@@ -453,6 +458,20 @@ fun SettingsScreen(onOpenTemplates: () -> Unit) {
                         }
                     },
                 )
+            }
+
+            /* ───────── 开发者（只在 lite 版出现） ───────── */
+            if (DevTools.enabled) {
+                SectionHeader("开发者")
+                SettingsCard {
+                    SettingsRow(
+                        title = "测试工具",
+                        subtitle = "倒计时、造数据、计划时间旅行、崩溃日志",
+                        icon = Icons.Filled.BugReport,
+                        showChevron = true,
+                        onClick = onOpenDevTools,
+                    )
+                }
             }
 
             /* ───────── 关于 ───────── */

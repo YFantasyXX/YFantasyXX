@@ -150,11 +150,12 @@ object RestNotifier {
      * 带 2.6 秒去重：一次完整波形约 2.5 秒，避免前台轮询与服务/闹钟
      * 同时触发时后一次把前一次的波形重置掉（表现为只震一下）。
      */
-    fun vibrate(context: Context) {
+    fun vibrate(context: Context, force: Boolean = false) {
         runCatching {
             val prefs = context.getSharedPreferences("rest_vibrate", Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
-            if (now - prefs.getLong("last_at", 0L) < 2_600L) return
+            // force 给测试工具用：连着点几次也能每次都震，不被去重吃掉
+            if (!force && now - prefs.getLong("last_at", 0L) < 2_600L) return
             prefs.edit().putLong("last_at", now).apply()
 
             val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

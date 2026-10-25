@@ -62,6 +62,9 @@ object Routes {
     const val SESSION_DETAIL = "session_detail"
     const val EXERCISE_DETAIL = "exercise_detail"
 
+    /** 只在 lite 版可达：入口由 [com.yfantasyxx.ui.dev.DevTools.enabled] 控制 */
+    const val DEV_TOOLS = "dev_tools"
+
     fun templateEdit(id: Long? = null, folderId: Long? = null) =
         "template_edit?id=$id&folder=$folderId"
     fun sessionDetail(id: Long) = "session_detail/$id"
@@ -167,7 +170,11 @@ private fun YFantasyXXNavHost() {
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onOpenTemplates = { navController.navigate(Routes.TEMPLATES) },
+                    onOpenDevTools = { navController.navigate(Routes.DEV_TOOLS) },
                 )
+            }
+            composable(Routes.DEV_TOOLS) {
+                com.yfantasyxx.ui.dev.DevToolsScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.TEMPLATES) {
                 TemplatesScreen(

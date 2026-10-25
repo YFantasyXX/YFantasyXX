@@ -98,6 +98,14 @@ class WorkoutRepository(private val db: AppDatabase) {
         dataVersion.value += 1
     }
 
+    /**
+     * 通知「数据变了」。
+     *
+     * 正常写入都会自己调 [invalidateStats]；只有 lite 的测试工具会绕过仓库直接写库
+     * （为了伪造历史时间戳），写完之后必须从这里补一次，否则首页和统计不会重新取数。
+     */
+    fun notifyDataChanged() = invalidateStats()
+
     // ---------- 动作库 ----------
 
     fun observeExercises(
