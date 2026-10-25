@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
@@ -135,6 +134,8 @@ fun LiquidGlassBottomBar(
     // 拖到两端之外时整条玻璃被拉动，位移用一个独立的 animatable 累加，松手弹回
     val rubberOffset = remember { Animatable(0f) }
     val rubberBandPx = with(density) { 3.dp.toPx() }
+    // 拖出边界时整条玻璃最多被拉走这么多，再多就假了
+    val rubberLimitPx = with(density) { 24.dp.toPx() }
     val panelOffset by remember(rubberBandPx) {
         derivedStateOf {
             if (totalWidthPx == 0f) {
@@ -159,32 +160,54 @@ fun LiquidGlassBottomBar(
             initialScale = 1f,
             pressedScale = PRESSED_SCALE,
             onDragStarted = { touchX ->
-                // 按在别处：让弹簧先把药丸吸到手指下面（不瞬移），再跟着走
+                // 药丸**中心**对准手指，而不是吸附到最近的格子中心：
+                // 吸附会让药丸相对手指固定偏移最多半格，看起来「总是偏一边」，
+                // 从左往右扫的时候尤其明显。
                 if (tabWidthPx > 0f) {
-                    val index = ((touchX - insetPx) / tabWidthPx)
-                        .roundToInt().coerceIn(0, count - 1)
-                    if (abs(index - value) > 0.01f) updateValue(index.toFloat())
+                    val target = (touchX - insetPx - tabWidthPx / 2f) / tabWidthPx
+                    updateValue(target.coerceIn(0f, (count - 1).toFloat()))
                 }
             },
-            onDragStopped = {
+            onDragStopped = { dragged ->
                 val target = targetValue.roundToInt().coerceIn(0, count - 1)
-                if (currentIndex != target) {
-                    // 交给下面的 snapshotFlow 去 animateToValue，这里只切页
+                if (dragged && currentIndex != target) {
+                    // 拖动换页：切页之后 selectedIndex 变，下面那路 snapshotFlow
+                    // 会把药丸滑到新格子，这里不用再补一次动画
                     currentIndex = target
                     onSelectState.value(tabsState.value[target].route)
-                } else if (abs(value - target) > 0.001f) {
-                    // 拖动后没换页（又拖回来了）：自己吸回格子中央
+                } else if (abs(value - target) > 0.02f) {
+                    // 没换页（纯点击，或者又拖回原处）：自己吸回格子中央。
+                    // 按下时药丸是按手指位置停的，不归位就会一直歪着
                     animateToValue(target.toFloat())
                 }
                 scope.launch { rubberOffset.animateTo(0f, spring(1f, 300f, 0.5f)) }
             },
             onDrag = { dragAmount ->
                 if (tabWidthPx > 0f) {
-                    updateValue(targetValue + dragAmount / tabWidthPx)
-                    scope.launch { rubberOffset.snapTo(rubberOffset.value + dragAmount) }
+                    val raw = targetValue + dragAmount / tabWidthPx
+                    val clamped = raw.coerceIn(0f, (count - 1).toFloat())
+                    updateValue(clamped)
+                    // 只有已经顶到两端、还继续往外拖时，整条玻璃才被「拉住」。
+                    // 之前是无条件累加，于是正常横拖时整条底栏会顺着拖动方向
+                    // 偏出去最多 3dp，药丸跟着一起偏——手感上就是「总偏右」。
+                    val overshoot = raw - clamped
+                    if (overshoot != 0f) {
+                        scope.launch {
+                            rubberOffset.snapTo(
+                                (rubberOffset.value + overshoot * tabWidthPx)
+                                    .coerceIn(-rubberLimitPx, rubberLimitPx)
+                            )
+                        }
+                    }
                 }
             },
         )
+    }
+
+    // 药丸里画哪一格：跟着位置取最近的整数格。
+    // 用 derivedStateOf 收窄成「整数真的变了才重组」，否则拖动时每帧都要重组内容。
+    val pillIndexState = remember(dampedDrag, count) {
+        derivedStateOf { dampedDrag.value.roundToInt().coerceIn(0, count - 1) }
     }
 
     LaunchedEffect(selectedIndex) {
@@ -349,8 +372,11 @@ fun LiquidGlassBottomBar(
                             .fillMaxSize()
                             .graphicsLayer {
                                 val distance = abs(index - dampedDrag.value)
-                                // 0.12 格内完全藏起，0.5 格外完全显示
-                                alpha = ((distance - 0.12f) / 0.38f).coerceIn(0f, 1f)
+                                // 只有被药丸正对的那一格藏起来（药丸里会重绘它），
+                                // 半格以外照常显示。半径取 0.5 格而不是 0.12~0.5：
+                                // 拖到两格中间时如果两边都藏，就会有一瞬间
+                                // 「这一格没了、那一格也没了」的空白。
+                                alpha = (distance / 0.5f).coerceIn(0f, 1f)
                             }
                             .clip(RoundedCornerShape(percent = 50))
                             .selectable(
@@ -449,50 +475,41 @@ fun LiquidGlassBottomBar(
                             },
                     )
 
-                    // 内容层：把整行 tab 原样搬进来再反向平移，
-                    // 于是药丸窗口里露出的永远是自己压住的那一格
+                    // 内容层：直接在窗口里画「最近的那一格」。
+                    //
+                    // 之前是把整行 tab 复制进来再反向平移，理论上窗口里露出的
+                    // 正好是自己压住的那格，但每格宽度、Row 的 padding 和像素取整
+                    // 会叠出误差，越靠右的两格越容易整个落到窗口外——
+                    // 选中「统计」「我的」时图标干脆看不见。直接画一格没有这个可能。
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(capsule),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .requiredWidth(with(density) { (totalWidthPx - insetPx * 2).toDp() })
-                                .height(PillHeight)
-                                .graphicsLayer {
-                                    translationX = -tabWidthPx * dampedDrag.value
-                                }
-                                .padding(horizontal = PillInset),
+                        val pillTab = tabs[pillIndexState.value]
+                        Column(
+                            modifier = Modifier.graphicsLayer {
+                                // 按下时被压住的图标跟着放大，像被玻璃吸进去
+                                val s = 1f + 0.2f * dampedDrag.pressProgress
+                                scaleX = s
+                                scaleY = s
+                            },
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            tabs.forEach { tab ->
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxSize()
-                                        .graphicsLayer {
-                                            val s = 1f + 0.2f * dampedDrag.pressProgress
-                                            scaleX = s
-                                            scaleY = s
-                                        },
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = tab.selectedIcon,
-                                        contentDescription = null,
-                                        tint = accent,
-                                        modifier = Modifier.size(21.dp),
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = tab.label,
-                                        fontSize = 10.sp,
-                                        color = accent,
-                                        maxLines = 1,
-                                    )
-                                }
-                            }
+                            Icon(
+                                imageVector = pillTab.selectedIcon,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(21.dp),
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = pillTab.label,
+                                fontSize = 10.sp,
+                                color = accent,
+                                maxLines = 1,
+                            )
                         }
                     }
                 }

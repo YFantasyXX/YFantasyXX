@@ -52,7 +52,7 @@ internal class DampedDragAnimation(
     private val initialScale: Float,
     private val pressedScale: Float,
     private val onDragStarted: DampedDragAnimation.(touchX: Float) -> Unit,
-    private val onDragStopped: DampedDragAnimation.() -> Unit,
+    private val onDragStopped: DampedDragAnimation.(dragged: Boolean) -> Unit,
     private val onDrag: DampedDragAnimation.(dragAmount: Float) -> Unit,
 ) {
 
@@ -117,7 +117,7 @@ internal class DampedDragAnimation(
                     if (delta.x != 0f) onDrag(delta.x)
                 }
             }
-            onDragStopped()
+            onDragStopped(dragging)
             release()
         }
     }
