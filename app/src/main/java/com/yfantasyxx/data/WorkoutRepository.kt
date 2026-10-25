@@ -781,16 +781,19 @@ class WorkoutRepository(private val db: AppDatabase) {
      * 都不会让「今天该练哪个」跳变，更不会去动已经记下的训练时间。
      */
     suspend fun resolvePlan(
-        folders: List<TemplateFolder> = templateDao.observeFolders().first(),
-        templates: List<WorkoutTemplate> = templateDao.observeAll().first(),
+        // 默认值不能直接写成挂起调用（Kotlin 不允许），所以传 null 表示「自己查」
+        folders: List<TemplateFolder>? = null,
+        templates: List<WorkoutTemplate>? = null,
         now: Long = System.currentTimeMillis(),
     ): TrainingPlan? {
-        val folder = folders
+        val folderList = folders ?: templateDao.observeFolders().first()
+        val templateList = templates ?: templateDao.observeAll().first()
+        val folder = folderList
             .filter { it.rotation }
             .sortedBy { it.sortOrder }
-            .firstOrNull { f -> templates.any { it.folderId == f.id } }
+            .firstOrNull { f -> templateList.any { it.folderId == f.id } }
             ?: return null
-        val cycle = templates.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
+        val cycle = templateList.filter { it.folderId == folder.id }.sortedBy { it.sortOrder }
         if (cycle.isEmpty()) return null
         val ids = cycle.map { it.id }
 
