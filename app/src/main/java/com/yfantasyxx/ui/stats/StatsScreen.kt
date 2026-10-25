@@ -108,6 +108,40 @@ fun StatsScreen() {
                 }
             }
 
+            // 1RM 换算曲线：PR 的数字跟着它变，得让用户看见现在用的是哪条
+            item {
+                SectionHeader("1RM 换算曲线")
+                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        com.yfantasyxx.data.LiftPattern.entries
+                            .filter { it != com.yfantasyxx.data.LiftPattern.UNKNOWN }
+                            .forEachIndexed { index, pattern ->
+                                if (index > 0) Spacer(Modifier.height(10.dp))
+                                CurveRow(
+                                    pattern = pattern,
+                                    calibration = state.curves[pattern.value],
+                                )
+                            }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "同一组重量换条曲线能差十几个百分点：" +
+                                "100 kg × 10 按硬拉类算 175 kg，按孤立类算 143 kg。" +
+                                "×1.00 就是群体均值，大于 1 表示次数一多掉得更快。",
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            // 这句是为了让「我还是一条群体曲线」看起来不像功能坏了
+                            text = "用上你自己的数据需要：同一动作练出两个相差 3 次以上的" +
+                                "次数档，同档攒够 3 个动作。之前都向群体均值收缩。",
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+                }
+            }
+
             // 体重趋势
             item {
                 SectionHeader("体重趋势 (kg)")
@@ -243,6 +277,45 @@ private fun MuscleCell(
             fontSize = 11.sp,
             color = onBackground.copy(alpha = 0.75f),
             maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 一档曲线的一行状态。
+ *
+ * 右侧的 ×γ 是幂变换的指数，不是「掉速百分比」——它直接乘在群体表上，
+ * 所以能验算：把某次数在群体表里的占比取 γ 次方，就是这个次数的新占比。
+ * 写成 ×1.12 而不是 +12%，是为了不和「e1RM 相差 12%」混淆。
+ */
+@Composable
+private fun CurveRow(
+    pattern: com.yfantasyxx.data.LiftPattern,
+    calibration: com.yfantasyxx.data.PatternCalibration?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = pattern.label, style = MiuixTheme.textStyles.paragraph)
+            Text(
+                text = calibration?.let {
+                    "个人校准 · ${it.actionCount} 个动作 / ${it.setCount} 组"
+                } ?: "群体均值 · 样本不够",
+                style = MiuixTheme.textStyles.footnote1,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        Text(
+            text = "×" + "%.2f".format(java.util.Locale.CHINA, calibration?.gamma ?: 1f),
+            style = MiuixTheme.textStyles.main,
+            color = if (calibration != null) {
+                MiuixTheme.colorScheme.primary
+            } else {
+                MiuixTheme.colorScheme.onSurfaceVariantSummary
+            },
         )
     }
 }

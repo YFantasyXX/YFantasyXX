@@ -50,10 +50,20 @@ data class PatternCalibration(
     val isPersonal: Boolean get() = actionCount > 0
 }
 
-/** 给界面用的一句人话：这条曲线是怎么来的 */
+/**
+ * 给界面用的曲线来源。
+ *
+ * 除了实际参与换算的 [curve]，还带出 [pattern] 和 [calibration]：
+ * 界面要画「群体 vs 你的」对比才知道这个数是怎么来的——
+ * 只给一句文字，用户没法判断某个 PR 突然变了是校准生效还是算错。
+ *
+ * [calibration] 为 null 表示这一档还没攒够样本，走的是群体默认表。
+ */
 data class CurveHint(
     val curve: RepMaxCurve,
     val text: String,
+    val pattern: LiftPattern = LiftPattern.UNKNOWN,
+    val calibration: PatternCalibration? = null,
 )
 
 /**

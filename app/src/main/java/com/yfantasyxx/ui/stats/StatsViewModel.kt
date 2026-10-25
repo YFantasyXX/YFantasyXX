@@ -28,6 +28,8 @@ data class StatsUiState(
     val personalRecords: List<ExercisePr> = emptyList(),
     val weightTrend: List<Pair<String, Float>> = emptyList(),
     val muscleLoads: List<com.yfantasyxx.data.db.MuscleLoad> = emptyList(),
+    /** key = LiftPattern.value；只包含真的攒出样本的档 */
+    val curves: Map<Int, com.yfantasyxx.data.PatternCalibration> = emptyMap(),
 )
 
 class StatsViewModel(
@@ -72,6 +74,8 @@ class StatsViewModel(
             // 热力图看 7 天：一个肌群一周练 10-20 组是常见区间，
             // 只看 3 天会看不出「这周还没练过」的空白
             muscleLoads = repo.muscleLoads(System.currentTimeMillis() - 7 * dayMs),
+            // 校准结果也要能看见：PR 数字随曲线变，用户得知道现在用的是哪条
+            curves = repo.calibration(),
         )
     }
 

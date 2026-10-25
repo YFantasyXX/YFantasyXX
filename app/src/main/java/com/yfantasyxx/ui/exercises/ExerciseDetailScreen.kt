@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.width
 import com.yfantasyxx.ui.components.ActionText
 import top.yukonga.miuix.kmp.basic.Button
 import androidx.compose.foundation.layout.imePadding
+import kotlin.math.roundToInt
 
 @Composable
 fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
@@ -249,19 +250,13 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                 )
                             }
                             // 换算依据要说出来：同一组重量按不同动作的曲线能差出十几个百分点，
-                            // 不写清楚，用户会以为换了个动作曲线就乱跳
-                            val curve = com.yfantasyxx.data.LiftPattern.fromValue(ex.pattern)
+                            // 不写清楚，用户会以为换了个动作曲线就乱跳。
+                            // 校准生效后数字会再变一次，所以这里连对比一起给。
                             Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = "换算依据：" + (curveHint?.text ?: if (
-                                    curve == com.yfantasyxx.data.LiftPattern.UNKNOWN
-                                ) {
-                                    "通用公式（七公式融合）"
-                                } else {
-                                    "${curve.label} rep-max 曲线"
-                                }),
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            CurveExplain(
+                                hint = curveHint,
+                                fallbackPattern = com.yfantasyxx.data.LiftPattern
+                                    .fromValue(ex.pattern),
                             )
                         }
                     }
@@ -407,4 +402,109 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
             )
         }
     }
+}
+
+/**
+ * 「这串数字按什么曲线算的」。
+ *
+ * 只写一句「个人校准 3 个动作」看不出影响，所以直接列几个次数档上
+ * 「群体表」和「你的曲线」各占多少 1RM。这层关系是反直觉的：
+ * γ > 1 时同一次数占的比例更小，于是同一组重量估出的 1RM 反而更高——
+ * 不画出来，用户只会看到 PR 莫名其妙变大。
+ */
+@Composable
+private fun CurveExplain(
+    hint: com.yfantasyxx.data.CurveHint?,
+    fallbackPattern: com.yfantasyxx.data.LiftPattern,
+) {
+    val muted = MiuixTheme.colorScheme.onSurfaceVariantSummary
+    val pattern = hint?.pattern ?: fallbackPattern
+    val fallback = if (pattern == com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+        "通用公式（七公式融合）"
+    } else {
+        "${pattern.label} rep-max 曲线"
+    }
+    Text(
+        text = "换算依据：" + (hint?.text ?: fallback),
+        style = MiuixTheme.textStyles.footnote1,
+        color = muted,
+    )
+
+    val calibration = hint?.calibration
+    if (calibration == null) {
+        // 没数据时说清「样本不够」的条件，否则看着像功能没生效。
+        // hint 为 null 只是还没查完，此时不提示，否则首帧会闪过一句误导的话
+        if (hint != null && pattern != com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+            Text(
+                text = "继续记录：这个动作练出两个相差 3 次以上的次数档后，" +
+                    "会自动换成按你的历史校准的曲线",
+                style = MiuixTheme.textStyles.footnote1,
+                color = muted,
+            )
+        }
+        return
+    }
+
+    val steeper = calibration.gamma >= 1f
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text = "你的曲线比群体均值掉得" + (if (steeper) "快" else "慢") +
+            "，同一组重量会估出更" + (if (steeper) "高" else "低") + "的 1RM",
+        style = MiuixTheme.textStyles.footnote1,
+        color = muted,
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "次数",
+            modifier = Modifier.weight(1f),
+            style = MiuixTheme.textStyles.footnote1,
+            color = muted,
+        )
+        Text(
+            text = "群体",
+            modifier = Modifier.weight(1f),
+            style = MiuixTheme.textStyles.footnote1,
+            color = muted,
+        )
+        Text(
+            text = "你的",
+            modifier = Modifier.weight(1f),
+            style = MiuixTheme.textStyles.footnote1,
+            color = muted,
+        )
+    }
+    // 3 / 5 / 8 / 12 覆盖低中高三个区间，也正好是一般人组间安排会碰到的档
+    listOf(3, 5, 8, 12).forEach { reps ->
+        val base = pattern.fractionAt(reps) ?: return@forEach
+        val mine = calibration.fractionAt(reps) ?: return@forEach
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "$reps 次",
+                modifier = Modifier.weight(1f),
+                style = MiuixTheme.textStyles.paragraph,
+            )
+            Text(
+                text = "${(base * 100).roundToInt()}%",
+                modifier = Modifier.weight(1f),
+                style = MiuixTheme.textStyles.paragraph,
+                color = muted,
+            )
+            Text(
+                text = "${(mine * 100).roundToInt()}%",
+                modifier = Modifier.weight(1f),
+                style = MiuixTheme.textStyles.paragraph,
+                color = MiuixTheme.colorScheme.primary,
+            )
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = "百分比 = 做这么多次时能举起的重量占 1RM 的比例",
+        style = MiuixTheme.textStyles.footnote1,
+        color = muted,
+    )
 }

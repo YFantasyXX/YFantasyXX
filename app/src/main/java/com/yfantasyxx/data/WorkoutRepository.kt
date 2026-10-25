@@ -610,24 +610,29 @@ class WorkoutRepository(private val db: AppDatabase) {
     }
 
     /**
-     * 动作详情页用的曲线 + 一句由来。
+     * 动作详情页用的曲线 + 由来。
      *
-     * 校准是后台无声生效的，界面上必须留一个「这个数按什么算的」出口，
-     * 否则同一个动作在旧版本和新版本之间数字变了，用户没法判断是 bug 还是校准。
+     * 校准是后台生效的，界面上必须给出「这个数按什么算的」——
+     * 同一个动作在旧版本和新版本之间数字变了，用户没法判断是 bug 还是校准。
+     * 这里把 [PatternCalibration] 一并带出去，界面要画「群体 vs 你的」对比。
      */
     suspend fun curveHint(exerciseId: Long): CurveHint {
         val pattern = patternOf(exerciseId)
         if (pattern == LiftPattern.UNKNOWN) {
-            return CurveHint(pattern, "通用公式（七公式融合）")
+            return CurveHint(pattern, "通用公式（七公式融合）", pattern, null)
         }
         val calibration = calibration()[pattern.value] ?: return CurveHint(
             pattern,
             "${pattern.label} rep-max 曲线（群体均值）",
+            pattern,
+            null,
         )
         return CurveHint(
-            calibration,
-            "${pattern.label} rep-max 曲线 · 个人校准 " +
+            curve = calibration,
+            text = "${pattern.label} rep-max 曲线 · 个人校准 " +
                 "${calibration.actionCount} 个动作 / ${calibration.setCount} 组",
+            pattern = pattern,
+            calibration = calibration,
         )
     }
 
