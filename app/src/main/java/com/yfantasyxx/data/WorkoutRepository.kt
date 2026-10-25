@@ -63,11 +63,22 @@ class WorkoutRepository(private val db: AppDatabase) {
     @Volatile
     private var prCache: List<ExercisePr>? = null
 
+    /**
+     * rep-max 曲线校准结果（key 是 `LiftPattern.value`）；[invalidateStats] 时置空。
+     *
+     * 算一次要扫全库 set_logs 做 GROUP BY，不能每次算 e1RM 都跑——
+     * 而一次训练里真正会改变校准的时刻只有「结束训练 / 改重量 / 删除」这几次。
+     */
+    @Volatile
+    private var calibrationCache: Map<Int, PatternCalibration>? = null
+
     private val prMutex = Mutex()
+    private val calibrationMutex = Mutex()
 
     /** 写入 set_logs / sessions 之后调用 */
     private fun invalidateStats() {
         prCache = null
+        calibrationCache = null
         dataVersion.value += 1
     }
 
@@ -508,6 +519,8 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     private suspend fun computePersonalRecords(): List<ExercisePr> {
         val rows = sessionDao.workingSetsForPr()
+        // 循环外取一次：这里是全库聚合的热路径，别每组去拿锁
+        val curves = calibration()
         val acc = HashMap<Long, PrAcc>()
         rows.forEach { row ->
             val item = acc.getOrPut(row.exerciseId) {
@@ -519,10 +532,11 @@ class WorkoutRepository(private val db: AppDatabase) {
                 item.volumeWeight = row.weightKg
                 item.volumeReps = row.reps
             }
+            val pattern = LiftPattern.fromValue(row.pattern)
             val e1rm = OneRepMax.estimate(
                 weightKg = row.weightKg,
                 reps = row.reps,
-                pattern = LiftPattern.fromValue(row.pattern),
+                curve = curves[pattern.value] ?: pattern,
             )
             if (e1rm != null && e1rm > item.estOneRm) {
                 item.estOneRm = e1rm
@@ -567,19 +581,61 @@ class WorkoutRepository(private val db: AppDatabase) {
         sessionDao.lastSessionSets(exerciseId)
 
     /**
+     * 各分档的 rep-max 曲线校准结果。
+     *
+     * 只包含真的攒出样本的档；没出现的档由调用方回落到 [LiftPattern] 原始表。
+     * 算一次后缓存，[invalidateStats] 时作废。
+     */
+    suspend fun calibration(): Map<Int, PatternCalibration> {
+        calibrationCache?.let { return it }
+        return calibrationMutex.withLock {
+            calibrationCache ?: RepMaxCalibration.calibrate(sessionDao.repMaxPoints())
+                .also { calibrationCache = it }
+        }
+    }
+
+    /** 某一档的曲线：有个人校准就用校准版，否则用群体默认表 */
+    suspend fun curveFor(pattern: LiftPattern): RepMaxCurve {
+        if (pattern == LiftPattern.UNKNOWN) return pattern
+        return calibration()[pattern.value] ?: pattern
+    }
+
+    /**
+     * 动作详情页用的曲线 + 一句由来。
+     *
+     * 校准是后台无声生效的，界面上必须留一个「这个数按什么算的」出口，
+     * 否则同一个动作在旧版本和新版本之间数字变了，用户没法判断是 bug 还是校准。
+     */
+    suspend fun curveHint(exerciseId: Long): CurveHint {
+        val pattern = patternOf(exerciseId)
+        if (pattern == LiftPattern.UNKNOWN) {
+            return CurveHint(pattern, "通用公式（七公式融合）")
+        }
+        val calibration = calibration()[pattern.value] ?: return CurveHint(
+            pattern,
+            "${pattern.label} rep-max 曲线（群体均值）",
+        )
+        return CurveHint(
+            calibration,
+            "${pattern.label} rep-max 曲线 · 个人校准 " +
+                "${calibration.actionCount} 个动作 / ${calibration.setCount} 组",
+        )
+    }
+
+    /**
      * 某动作的 e1RM 曲线。
      *
      * 一次训练一个点：取该次里估算 1RM 最高的那一组。
      * 如果按组画，4 组递减会变成一串锯齿，看不出趋势。
      */
     suspend fun e1rmHistory(exerciseId: Long): List<com.yfantasyxx.data.db.E1rmPoint> {
-        // 分档按动作查一次，不要每组去 join exercises
-        val pattern = patternOf(exerciseId)
+        // 曲线按动作查一次，不要每组去 join exercises
+        val curve = curveFor(patternOf(exerciseId))
         val rows = sessionDao.e1rmRowsForExercise(exerciseId)
         return rows.groupBy { it.sessionId }
             .mapNotNull { (sessionId, sets) ->
                 val best = sets.mapNotNull { row ->
-                    OneRepMax.estimate(row.weightKg, row.reps, pattern)?.let { row to it }
+                    OneRepMax.estimate(row.weightKg, row.reps, curve)?.let { row to it }
                 }.maxByOrNull { it.second } ?: return@mapNotNull null
                 com.yfantasyxx.data.db.E1rmPoint(
                     sessionId = sessionId,
@@ -684,10 +740,10 @@ class WorkoutRepository(private val db: AppDatabase) {
      * 算不出 1RM（次数 > 12）的组排在后面，只有全都不算不出来时才轮到它们。
      */
     suspend fun bestSetFor(exerciseId: Long): SetLog? {
-        val pattern = patternOf(exerciseId)
+        val curve = curveFor(patternOf(exerciseId))
         val sets = sessionDao.workingSetsForExercise(exerciseId)
         return sets.maxWithOrNull(
-            compareBy<SetLog> { OneRepMax.estimate(it.weightKg, it.reps, pattern) ?: -1f }
+            compareBy<SetLog> { OneRepMax.estimate(it.weightKg, it.reps, curve) ?: -1f }
                 .thenBy { it.weightKg * it.reps }
         )
     }

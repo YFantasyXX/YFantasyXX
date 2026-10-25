@@ -79,6 +79,10 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
     suspend fun getE1rmHistory(exerciseId: Long): List<com.yfantasyxx.data.db.E1rmPoint> =
         repo.e1rmHistory(exerciseId)
 
+    /** 这条曲线是按群体均值还是个人校准算的，以及样本量 */
+    suspend fun getCurveHint(exerciseId: Long): com.yfantasyxx.data.CurveHint =
+        repo.curveHint(exerciseId)
+
     fun updateExercise(exercise: Exercise) {
         viewModelScope.launch { repo.updateExercise(exercise) }
     }

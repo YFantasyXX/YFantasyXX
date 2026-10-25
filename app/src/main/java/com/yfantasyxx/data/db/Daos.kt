@@ -392,8 +392,8 @@ interface SessionDao {
     /**
      * 某动作的 e1RM 原始行，按时间升序。
      *
-     * 不在这里做聚合：1RM 要按动作的 rep-max 分档查表换算（见 `LiftPattern`），
-     * 分档不明时还要回落到七公式加权融合，SQL 表达不出来；
+     * 不在这里做聚合：1RM 要按这条曲线查表换算（见 `RepMaxCurve`），
+     * 曲线不覆盖时还要回落到七公式加权融合，SQL 表达不出来；
      * 也不在这里按组聚合，一次训练里的高低起伏由调用方取最好一组。
      */
     @Query(
@@ -409,6 +409,28 @@ interface SessionDao {
         """
     )
     suspend fun e1rmRowsForExercise(exerciseId: Long): List<E1rmRow>
+
+    /**
+     * 全库「每动作 × 每次数」的最重一组，供 rep-max 曲线校准使用。
+     *
+     * 在 SQL 里就按 (动作, 次数) 聚合，不把全表拉回 Kotlin 再分桶：
+     * 练了两年的人 set_logs 上万行，逐行映射的开销远大于 GROUP BY；
+     * 每动作每次数只出一行，几百行就到顶。
+     */
+    @Query(
+        """
+        SELECT e.id AS exerciseId, e.pattern AS pattern, sl.reps AS reps,
+               MAX(sl.weightKg) AS weightKg, COUNT(*) AS setCount
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE sl.completed = 1 AND sl.isWarmup = 0 AND sl.weightKg > 0
+          AND sl.reps >= 1 AND sl.reps <= 12 AND s.endTime IS NOT NULL
+        GROUP BY e.id, e.pattern, sl.reps
+        """
+    )
+    suspend fun repMaxPoints(): List<RepMaxRow>
 
     /**
      * 最近一次「已完成」训练里某动作的工作组。

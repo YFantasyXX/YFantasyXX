@@ -74,6 +74,9 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
         }
     }
 
+    /** 各档的实际换算曲线，分享卡片挑亮点时用 */
+    suspend fun curves(): Map<Int, com.yfantasyxx.data.PatternCalibration> = repo.calibration()
+
     companion object {
         fun factory(container: AppContainer) = viewModelFactory {
             initializer { SessionDetailViewModel(container.workoutRepository) }
@@ -102,32 +105,37 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     fun shareCard() {
         val s = session ?: return
-        val data = com.yfantasyxx.util.ShareCard.Data(
-            title = s.name.ifBlank { "训练" },
-            date = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.CHINA).format(Date(s.startTime)),
-            durationMinutes = (((s.endTime ?: System.currentTimeMillis()) -
-                (s.activeStartedAt ?: s.startTime)) / 60000).toInt(),
-            exerciseCount = details.count { item -> item.sets.any { it.completed } },
-            setCount = totalSets,
-            volumeKg = totalVolume,
-            // 亮点按每个动作最强的一组取，最多三条
-            highlights = details
-                .sortedByDescending { item ->
-                    item.sets.filter { it.completed }.sumOf { (it.weightKg * it.reps).toDouble() }
-                }
-                .take(3)
-                .mapNotNull { item ->
-                    val pattern = com.yfantasyxx.data.LiftPattern.fromValue(item.exercise.pattern)
-                    val best = item.sets
-                        .filter { it.completed && !it.isWarmup }
-                        .maxByOrNull {
-                            com.yfantasyxx.data.OneRepMax.estimate(it.weightKg, it.reps, pattern)
-                                ?: -1f
-                        } ?: return@mapNotNull null
-                    "${item.exercise.name} ${best.weightKg.toInt()} kg × ${best.reps}"
-                },
-        )
         scope.launch {
+            // 曲线要先拿：亮点按 e1RM 挑，群体表和个人校准可能选出不同的组
+            val curves = runCatching { vm.curves() }.getOrDefault(emptyMap())
+            val data = com.yfantasyxx.util.ShareCard.Data(
+                title = s.name.ifBlank { "训练" },
+                date = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.CHINA).format(Date(s.startTime)),
+                durationMinutes = (((s.endTime ?: System.currentTimeMillis()) -
+                    (s.activeStartedAt ?: s.startTime)) / 60000).toInt(),
+                exerciseCount = details.count { item -> item.sets.any { it.completed } },
+                setCount = totalSets,
+                volumeKg = totalVolume,
+                // 亮点按每个动作最强的一组取，最多三条
+                highlights = details
+                    .sortedByDescending { item ->
+                        item.sets.filter { it.completed }
+                            .sumOf { (it.weightKg * it.reps).toDouble() }
+                    }
+                    .take(3)
+                    .mapNotNull { item ->
+                        val pattern = com.yfantasyxx.data.LiftPattern
+                            .fromValue(item.exercise.pattern)
+                        val curve = curves[pattern.value] ?: pattern
+                        val best = item.sets
+                            .filter { it.completed && !it.isWarmup }
+                            .maxByOrNull {
+                                com.yfantasyxx.data.OneRepMax
+                                    .estimate(it.weightKg, it.reps, curve) ?: -1f
+                            } ?: return@mapNotNull null
+                        "${item.exercise.name} ${best.weightKg.toInt()} kg × ${best.reps}"
+                    },
+            )
             runCatching {
                 val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     com.yfantasyxx.util.ShareCard.write(context, data)

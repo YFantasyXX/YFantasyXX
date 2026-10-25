@@ -7,10 +7,11 @@ import kotlin.math.pow
  * 估算 1RM（单次能举起的最大重量）。
  *
  * 两条路径：
- * 1. **分档优先**——知道动作属于哪一类（[LiftPattern] 不是 UNKNOWN）时查表，
+ * 1. **曲线优先**——知道这条曲线时查表，
  *    `1RM = 这组重量 / 该次数占 1RM 的比例`。这是主路径：
- *    同一次数下硬拉和卧推离 1RM 的距离差得很远，只有查表才分得开；
- * 2. **融合兜底**——分档不明（有氧、负重行走、用户自建的怪名字）时，
+ *    同一次数下硬拉和卧推离 1RM 的距离差得很远，只有查表才分得开。
+ *    曲线有两种：[LiftPattern]（群体均值）和 [PatternCalibration]（个人历史校准）；
+ * 2. **融合兜底**——曲线不覆盖（有氧、负重行走、用户自建的怪名字）时，
  *    七条经验公式按各自固有可靠度加权平均。
  *
  * 为什么兜底不是一条公式：每条经验公式只在低次数区间可信。Brzycki 的分母是
@@ -26,18 +27,18 @@ object OneRepMax {
     const val MAX_RELIABLE_REPS = 12
 
     /**
-     * @param pattern 动作的 rep-max 分档；[LiftPattern.UNKNOWN] 时回落到多公式融合
+     * @param curve 这条曲线给出「做 r 次时占 1RM 的比例」；不覆盖该次数时回落到多公式融合
      * @return 估算 1RM（kg）；重量为 0（自重）、次数非法、或次数 > [MAX_RELIABLE_REPS] 时返回 null
      */
     fun estimate(
         weightKg: Float,
         reps: Int,
-        pattern: LiftPattern = LiftPattern.UNKNOWN,
+        curve: RepMaxCurve = LiftPattern.UNKNOWN,
     ): Float? {
         if (weightKg <= 0f || reps <= 0 || reps > MAX_RELIABLE_REPS) return null
         // 1 次就是真 1RM，不需要估；所有公式在 r=1 时都会给出略大于实际重量的值
         if (reps == 1) return weightKg
-        pattern.fractionAt(reps)?.let { fraction ->
+        curve.fractionAt(reps)?.let { fraction ->
             if (fraction > 0f) return weightKg / fraction
         }
         return fused(weightKg, reps)

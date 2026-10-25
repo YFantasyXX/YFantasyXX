@@ -346,6 +346,22 @@ data class E1rmRow(
 )
 
 /**
+ * 校准 rep-max 曲线的一行：某动作在某个次数下举起过的最重重量。
+ *
+ * 取「最重」而不是「最近」或「平均」：校准要的是「这个次数下的能力上限」，
+ * 状态好的那一次才是有效信息，平均值会把疲劳日也算进去。
+ */
+data class RepMaxRow(
+    val exerciseId: Long,
+    /** 该动作的 [com.yfantasyxx.data.LiftPattern.value]，聚合时按档分组 */
+    val pattern: Int,
+    val reps: Int,
+    val weightKg: Float,
+    /** 该次数下一共练了多少组，用作加权中位数的权重 */
+    val setCount: Int,
+)
+
+/**
  * 肌群负荷的一行原始数据：一个动作在窗口期内练了多少组。
  * 次要肌群在 Kotlin 侧按 0.5 折算。
  */

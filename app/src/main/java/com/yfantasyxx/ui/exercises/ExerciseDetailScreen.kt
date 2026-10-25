@@ -59,6 +59,8 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     var e1rmPoints by remember {
         mutableStateOf<List<com.yfantasyxx.data.db.E1rmPoint>>(emptyList())
     }
+    // 换算曲线的由来：群体均值还是个人校准，两种算出来的数不一样
+    var curveHint by remember { mutableStateOf<com.yfantasyxx.data.CurveHint?>(null) }
     var showRestPicker by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
@@ -71,6 +73,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
         lastSets = vm.getLastPerformance(exerciseId)
         bestSet = vm.getBestSet(exerciseId)
         e1rmPoints = vm.getE1rmHistory(exerciseId)
+        curveHint = vm.getCurveHint(exerciseId)
     }
 
     Scaffold(
@@ -144,8 +147,11 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                     .estimate(
                                         weightKg = best.weightKg,
                                         reps = best.reps,
-                                        pattern = com.yfantasyxx.data.LiftPattern
-                                            .fromValue(ex.pattern),
+                                        // curveHint 还没加载完时先按群体表，
+                                        // 否则第一帧会少这一行
+                                        curve = curveHint?.curve
+                                            ?: com.yfantasyxx.data.LiftPattern
+                                                .fromValue(ex.pattern),
                                     )
                                     ?.let { InfoRow("估算 1RM", "${it.toInt()} kg") }
                             }
@@ -247,11 +253,13 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                             val curve = com.yfantasyxx.data.LiftPattern.fromValue(ex.pattern)
                             Spacer(Modifier.height(12.dp))
                             Text(
-                                text = "换算依据：" + if (curve == com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+                                text = "换算依据：" + (curveHint?.text ?: if (
+                                    curve == com.yfantasyxx.data.LiftPattern.UNKNOWN
+                                ) {
                                     "通用公式（七公式融合）"
                                 } else {
                                     "${curve.label} rep-max 曲线"
-                                },
+                                }),
                                 style = MiuixTheme.textStyles.footnote1,
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             )

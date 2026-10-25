@@ -13,8 +13,10 @@ import com.yfantasyxx.data.db.ExerciseCategory
  *
  * 所以每一档给一张 `次数 → 占 1RM 的比例` 表，1RM = 这组重量 / 比例。
  * 表里的数字是常用 RPE / %1RM 对照表与 Richens & Cleather(2014) 对深蹲、卧推、硬拉
- * rep-max 关系的量级，**是近似的群体均值**，不追求个体精度——
- * 个体差异（有人天生卧推 rep-max 更平）留给后续的「用自己历史数据自校准」。
+ * rep-max 关系的量级，**是近似的群体均值**。
+ *
+ * 个体差异（有人天生卧推 rep-max 更平）由 [RepMaxCalibration] 用同一个人的历史数据
+ * 做幂变换校准，得到 [PatternCalibration]，它是本表的「个人版」。
  *
  * [UNKNOWN] 不查表，回落到七公式融合（见 [OneRepMax]）。有氧、计时类、负重行走
  * 这类动作本身没有有意义的 1RM，也归到 UNKNOWN。
@@ -24,7 +26,7 @@ enum class LiftPattern(
     val label: String,
     /** 下标 = 次数 - 1，值 = 该次数能举起的重量占 1RM 的比例 */
     private val table: FloatArray,
-) {
+) : RepMaxCurve {
     UNKNOWN(0, "通用", floatArrayOf()),
 
     /** 髋主导：硬拉、罗马尼亚硬拉、臀推、山羊挺身、奥举。掉得最快 */
@@ -63,7 +65,7 @@ enum class LiftPattern(
      * [UNKNOWN] 返回 null，调用方据此回落到七公式融合。
      * 表只到 12 次，超出的次数由 [OneRepMax.MAX_RELIABLE_REPS] 在调用方拦掉。
      */
-    fun fractionAt(reps: Int): Float? {
+    override fun fractionAt(reps: Int): Float? {
         if (table.isEmpty() || reps <= 0) return null
         if (reps <= table.size) return table[reps - 1]
         return table.last()
