@@ -371,6 +371,57 @@ class WorkoutRepository(private val db: AppDatabase) {
         dayStartedAt = TrainingCycle.startOfDay(System.currentTimeMillis()),
     )
 
+    /**
+     * 休息日再加一天。
+     *
+     * 休息日默认占满一个自然日自动流过；想多休一天就调这个：
+     * 把这段休息的起点推到明天零点，休息就顺延一天（想休几天点几次）。
+     *
+     * 只动**进度**，不动计划结构（哪几天、什么模板），所以不会把计划排乱。
+     * 不是休息日时什么都不做——训练日本来就停着等你练，不需要加休。
+     */
+    suspend fun extendRestDay(planId: Long) = db.withTransaction {
+        val plan = planDao.plan(planId) ?: return@withTransaction
+        val days = planDao.daysOf(planId).sortedBy { it.position }
+        if (days.isEmpty()) return@withTransaction
+        val slots = days.map { PlanDaySlot(it.templateId, "") }
+        val cur = TrainingCycle.cursor(plan.nextIndex, plan.dayStartedAt, slots)
+        if (slots.getOrNull(cur.index)?.isRest != true) return@withTransaction
+        val now = System.currentTimeMillis()
+        // 从「今天」起算往后推一天：已经过去的时间不管，
+        // 否则连点两次反而会让休息越点越短
+        val base = maxOf(cur.dayStartedAt, TrainingCycle.startOfDay(now))
+        planDao.setProgress(
+            id = planId,
+            nextIndex = plan.nextIndex,
+            dayStartedAt = TrainingCycle.startOfNextDay(base),
+        )
+    }
+
+    /**
+     * 跳过今天这一天：不算完成训练，直接进下一天。
+     *
+     * 漏练**不需要**点任何东西——训练日会一直停在这一天等你，练完才往前。
+     * 这个按钮只给「这次主动不练了」用（比如这周临时有事，放弃这一轮）。
+     */
+    suspend fun skipPlanDay(planId: Long) = db.withTransaction {
+        val plan = planDao.plan(planId) ?: return@withTransaction
+        val days = planDao.daysOf(planId).sortedBy { it.position }
+        if (days.isEmpty()) return@withTransaction
+        val slots = days.map { PlanDaySlot(it.templateId, "") }
+        val cur = TrainingCycle.cursor(plan.nextIndex, plan.dayStartedAt, slots)
+        val next = (cur.index + 1) % days.size
+        val now = System.currentTimeMillis()
+        // 下一格是休息日：休息从今天就开始（今天已经换到它了）。
+        // 下一格是训练日：它不按时间走，起点无所谓。
+        val startedAt = if (slots[next].isRest) {
+            TrainingCycle.startOfDay(now)
+        } else {
+            TrainingCycle.startOfNextDay(now)
+        }
+        planDao.setProgress(id = planId, nextIndex = next, dayStartedAt = startedAt)
+    }
+
     suspend fun createFolder(name: String): Long =
         templateDao.insertFolder(TemplateFolder(name = name.trim()))
 

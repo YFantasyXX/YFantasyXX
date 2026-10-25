@@ -76,6 +76,7 @@ fun HomeScreen(
     val latestWeight by vm.latestWeightKg.collectAsState()
     var showWeightDialog by remember { mutableStateOf(false) }
     var showPlans by remember { mutableStateOf(false) }
+    var showSkipConfirm by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     val context = LocalContext.current
     var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
@@ -301,6 +302,8 @@ fun HomeScreen(
                             }
                         },
                         onOpenPlan = { showPlans = true },
+                        onExtendRest = { vm.extendRestDay(plan.planId) },
+                        onSkipDay = { showSkipConfirm = true },
                     )
                 }
             }
@@ -515,6 +518,38 @@ fun HomeScreen(
     if (showPlans) {
         TrainingPlanDialog(onDismiss = { showPlans = false })
     }
+
+    // 跳过这一天是不可逆的（不进训练记录），所以要确认一次
+    if (showSkipConfirm) {
+        val plan = state.plan
+        AppDialog(
+            title = "跳过这一天？",
+            summary = plan?.let {
+                "会直接进到「${it.slots.getOrNull((it.nextIndex + 1) % it.dayCount)?.name ?: "下一天"}」，" +
+                    "这次不算完成训练。\n想改成「今天不练、明天继续」的话，什么都不用点就行——" +
+                    "训练日会一直停在这一天等你。"
+            },
+            onDismissRequest = { showSkipConfirm = false },
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Button(onClick = { showSkipConfirm = false }) {
+                    Text("取消", style = MiuixTheme.textStyles.button)
+                }
+                Spacer(Modifier.width(12.dp))
+                Button(
+                    onClick = {
+                        showSkipConfirm = false
+                        plan?.let { vm.skipPlanDay(it.planId) }
+                    },
+                ) {
+                    Text("跳过", style = MiuixTheme.textStyles.button)
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -522,12 +557,19 @@ fun HomeScreen(
  *
  * 只回答一个问题：「按计划，今天该练哪天」。计划是一串天（模板或休息），
  * 休息日占满一天自动流过，训练日练完才往后走——所以这里没有任何「今天星期几」的判断。
+ *
+ * 三个进度操作（都只动游标，不动计划结构，所以怎么点都不会把计划排乱）：
+ * - 漏练：什么都不用点，训练日会一直停在这一天等你；
+ * - 休息不够：点「再休一天」，想休几天点几次；
+ * - 主动不练：点「跳过这天」，直接进下一天（有二次确认）。
  */
 @Composable
 private fun PlanCard(
     plan: TrainingPlan,
     onStart: () -> Unit,
     onOpenPlan: () -> Unit,
+    onExtendRest: () -> Unit,
+    onSkipDay: () -> Unit,
 ) {
     val statusMain = when {
         plan.resting -> "休息日"
@@ -537,7 +579,7 @@ private fun PlanCard(
     val statusSub = when {
         plan.resting && plan.restRemaining <= 1 ->
             "休息一天 · 下次 ${plan.upNextName}"
-        plan.resting -> "连休 ${plan.restRemaining} 天 · 下次 ${plan.upNextName}"
+        plan.resting -> "还剩 ${plan.restRemaining} 天 · 下次 ${plan.upNextName}"
         plan.trainedToday -> "下次：${plan.upNextName}"
         else -> "第 ${plan.nextIndex + 1}/${plan.dayCount} 天"
     }
@@ -604,10 +646,34 @@ private fun PlanCard(
                 if (plan.resting) {
                     ActionText(text = "提前练 ${plan.upNextName}", onClick = onStart)
                 } else {
-                    Button(onClick = onStart) {
-                        Text("开始", style = MiuixTheme.textStyles.button)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 已经练完就别再跳了，跳的是下一天，容易误触
+                        if (!plan.trainedToday) {
+                            ActionText(text = "跳过这天", onClick = onSkipDay)
+                            Spacer(Modifier.width(12.dp))
+                        }
+                        Button(onClick = onStart) {
+                            Text("开始", style = MiuixTheme.textStyles.button)
+                        }
                     }
                 }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            // 规则写出来，不然「今天没练明天还是它」这件事没人知道
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (plan.resting) {
+                    ActionText(text = "再休一天", onClick = onExtendRest)
+                }
+                Text(
+                    text = if (plan.resting) {
+                        "休息到今天过完就自动进下一天"
+                    } else {
+                        "没练就一直停在这一天等你，明天还是它"
+                    },
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
             }
         }
     }

@@ -20,7 +20,7 @@ data class PlanDaySlot(val templateId: Long?, val name: String) {
  * 不按周排是有意的：按周排会出现「周三练完 C，周五还没换周却已经回到 A」这种错位。
  *
  * @param nextIndex 今天该看第几个位置（已经跳过了过完的休息日）
- * @param restRemaining 连续休息还剩几天（含今天）；0 表示今天就是训练日
+ * @param restRemaining 休息还剩几天（含今天；手动加休过会大于连续休息格数）；0 表示今天不是休息日
  */
 data class TrainingPlan(
     val planId: Long,
@@ -71,12 +71,48 @@ data class TrainingPlan(
         }
 }
 
+/**
+ * 计划游标算出来的结果。
+ *
+ * @param index 今天该看第几格
+ * @param dayStartedAt 这一格从哪天开始；**只有休息日有意义**（这段休息从哪天起算），
+ *   用来算「还剩几天」。训练日不随时间自己走，这个值对它没有意义。
+ */
+data class CycleCursor(val index: Int, val dayStartedAt: Long)
+
 object TrainingCycle {
 
     /** 编辑计划时的天数上限：一个月内，够排 5 分化 + 休息 */
     const val MAX_DAYS = 21
 
     private const val DAY_MS = 86_400_000L
+
+    /**
+     * 算出今天该看哪一格，同时给出这一格「从哪天开始」。
+     *
+     * 休息日一过就往后走一天，连着几个休息日就连着走；训练日停住。
+     * 手动加休过的休息日，[dayStartedAt] 会被推到未来，所以这段休息还没结束。
+     */
+    fun cursor(
+        nextIndex: Int,
+        dayStartedAt: Long,
+        slots: List<PlanDaySlot>,
+        now: Long = System.currentTimeMillis(),
+    ): CycleCursor {
+        if (slots.isEmpty()) return CycleCursor(0, dayStartedAt)
+        var index = nextIndex.coerceIn(0, slots.lastIndex)
+        var startedAt = if (dayStartedAt > 0L) dayStartedAt else startOfDay(now)
+        // 休息日一过就往后走一天，连着几个休息日就连着走；训练日停住
+        var guard = 0
+        while (guard++ <= slots.size * 2) {
+            if (!slots[index].isRest) break
+            val restEndsAt = startOfNextDay(startedAt)
+            if (now < restEndsAt) break
+            index = (index + 1) % slots.size
+            startedAt = restEndsAt
+        }
+        return CycleCursor(index, startedAt)
+    }
 
     /**
      * 由计划本身的游标算出今天该看哪一天。
@@ -89,21 +125,7 @@ object TrainingCycle {
         dayStartedAt: Long,
         slots: List<PlanDaySlot>,
         now: Long = System.currentTimeMillis(),
-    ): Int {
-        if (slots.isEmpty()) return 0
-        var index = nextIndex.coerceIn(0, slots.lastIndex)
-        var startedAt = if (dayStartedAt > 0L) dayStartedAt else startOfDay(now)
-        // 休息日一过就往后走一天，连着几个休息日就连着走；训练日停住
-        var guard = 0
-        while (guard++ <= slots.size * 2) {
-            if (!slots[index].isRest) break
-            val restEndsAt = startOfNextDay(startedAt)
-            if (now < restEndsAt) break
-            index = (index + 1) % slots.size
-            startedAt = restEndsAt
-        }
-        return index
-    }
+    ): Int = cursor(nextIndex, dayStartedAt, slots, now).index
 
     /** 把存下来的计划 + 天 + 模板名解析成界面要的整套状态 */
     fun resolve(
@@ -121,10 +143,16 @@ object TrainingCycle {
                 name = day.templateId?.let { templateNames[it] } ?: "休息",
             )
         }
-        val index = currentIndex(plan.nextIndex, plan.dayStartedAt, slots, now)
+        val cur = cursor(plan.nextIndex, plan.dayStartedAt, slots, now)
+        val index = cur.index
         var restLeft = 0
         if (slots[index].isRest) {
-            var i = index
+            // 当前这段休息还剩几个自然日。
+            // 手动加休过（dayStartedAt 被推到未来）时会 > 1，
+            // 所以这里算自然日，而不是数连续几个休息日格子。
+            restLeft += daysBetween(now, startOfNextDay(cur.dayStartedAt)).coerceAtLeast(1)
+            // 后面还连着几个休息日
+            var i = (index + 1) % slots.size
             var guard = 0
             while (guard++ < slots.size && slots[i].isRest) {
                 restLeft++

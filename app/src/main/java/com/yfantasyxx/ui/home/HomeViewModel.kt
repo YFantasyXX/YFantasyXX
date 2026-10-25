@@ -96,6 +96,16 @@ class HomeViewModel(
         }
     }
 
+    /** 休息日再多休一天（只改进度，不动计划结构） */
+    fun extendRestDay(planId: Long) {
+        viewModelScope.launch { repo.extendRestDay(planId) }
+    }
+
+    /** 跳过今天这一天，主动放弃这一次训练 */
+    fun skipPlanDay(planId: Long) {
+        viewModelScope.launch { repo.skipPlanDay(planId) }
+    }
+
     private fun weekStart(): Long = Calendar.getInstance().apply {
         firstDayOfWeek = Calendar.MONDAY
         set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
