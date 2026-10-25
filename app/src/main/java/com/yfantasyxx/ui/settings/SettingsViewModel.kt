@@ -159,7 +159,10 @@ class SettingsViewModel(
     ) {
         viewModelScope.launch {
             val c = resolveClient(url, user, pass) ?: return@launch
-            backupManager.restore(c, fileName)
+            val result = backupManager.restore(c, fileName)
+            // 失败（版本不符 / 空库 / 下载失败）时绝不能重建库再杀进程，
+            // 否则用户只看到弹窗被关掉，错误信息一个字都看不到
+            if (result.isFailure) return@launch
             // 恢复成功后重建数据库实例
             container.rebuildDatabase()
             onRestored()

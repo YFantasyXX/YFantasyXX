@@ -669,10 +669,11 @@ fun SettingsScreen(
             onRefresh = { vm.refreshBackups(url, user, pass) },
             onBackupNow = { vm.backupNow(url, user, pass) },
             onRestore = { name ->
+                // 失败时不要关弹窗，否则错误信息一闪而过看不到
                 vm.restoreBackup(name, url, user, pass) {
                     toastMessage = "恢复成功，正在重启应用"
+                    showBackups = false
                 }
-                showBackups = false
             },
             onDelete = { name -> vm.deleteBackup(name, url, user, pass) },
             onDismiss = { showBackups = false },

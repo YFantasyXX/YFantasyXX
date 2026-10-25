@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -21,6 +22,8 @@ data class BackupState(
     /** 远端备份列表（**最新的在前**） */
     val remoteBackups: List<RemoteBackupFile> = emptyList(),
     val lastBackupTime: Long? = null,
+    /** 当前 App 的 schema 版本；用来在列表里标出「这份备份比 App 新，恢复不了」 */
+    val appSchemaVersion: Int = -1,
 )
 
 /**
@@ -42,7 +45,9 @@ class BackupManager(
         runCatching {
             client.ensureDirectory(WebDavClient.BACKUP_DIRECTORY).getOrThrow()
             val bytes = checkpointAndReadDb()
-            val name = backupFileName()
+            // 文件名带上 schema 版本，列表里一眼能看出是哪一版写的
+            val schema = currentSchemaVersion()
+            val name = backupFileName(schema)
             val receipt = client
                 .upload("${WebDavClient.BACKUP_DIRECTORY}/$name", bytes)
                 .getOrThrow()
@@ -50,6 +55,7 @@ class BackupManager(
             val pruneNote = pruneOldBackups(client, name)
             _state.value = _state.value.copy(
                 running = false,
+                appSchemaVersion = schema,
                 message = buildString {
                     append("备份成功（")
                     append(SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date()))
@@ -81,6 +87,7 @@ class BackupManager(
             remoteBackups = sortByTimeDesc(result.getOrDefault(emptyList())),
             message = result.exceptionOrNull()?.let { "获取备份列表失败：${it.message}" },
             isError = result.isFailure,
+            appSchemaVersion = currentSchemaVersion(),
         )
         result
     }
@@ -100,6 +107,27 @@ class BackupManager(
                         "这份备份不是有效的数据库（${formatSize(bytes.size.toLong())}），未执行恢复"
                     )
                 }
+                // 版本对不上必须拦下来：Room 遇到「库比 App 新」会走销毁式兜底，
+                // 表全被清空重建 —— 表现就是「恢复成功但数据是空的」，本地原有数据也一起没了
+                val backupVersion = schemaVersionOf(bytes)
+                val appVersion = currentSchemaVersion()
+                if (backupVersion > 0 && appVersion > 0 && backupVersion > appVersion) {
+                    throw IOException(
+                        "这份备份来自更新的版本（数据库 v$backupVersion，当前 App 是 v$appVersion）。" +
+                            "旧版 App 打不开新库，硬恢复会把数据清空，已拦下。" +
+                            "请先升级 App，或改用同版本客户端备份的文件。"
+                    )
+                }
+                // 空库拦截：lite 和正式版是两个独立 App（包名不同），
+                // 新装的那个备份出来就是空库；恢复回去会把当前数据清空，
+                // 表现就是「恢复成功，但打开是空的」
+                val sessions = countSessions(bytes)
+                if (sessions == 0) {
+                    throw IOException(
+                        "这份备份里没有任何训练记录（是个空库），恢复会把你现在的数据清空，已拦下。" +
+                            "要备份当前数据请先在当前版本里点「立即备份」。"
+                    )
+                }
                 // 关闭当前数据库连接，先删 wal/shm，再覆盖 db 文件
                 dbProvider().close()
                 listOf("${AppDatabase.NAME}-wal", "${AppDatabase.NAME}-shm").forEach { suffix ->
@@ -109,7 +137,14 @@ class BackupManager(
                 dbFile.writeBytes(bytes)
                 _state.value = _state.value.copy(
                     running = false,
-                    message = "恢复成功，请重启应用",
+                    message = buildString {
+                        append("恢复成功")
+                        if (sessions > 0) append("（$sessions 次训练）")
+                        if (backupVersion in 1 until appVersion) {
+                            append("，表结构已从 v$backupVersion 升到 v$appVersion")
+                        }
+                        append("，请重启应用")
+                    },
                 )
             }.onFailure { e ->
                 _state.value = _state.value.copy(
@@ -156,33 +191,66 @@ class BackupManager(
     }
 
     /**
-     * 只保留最近 [KEEP_COUNT] 份备份。
+     * 清理旧备份。
      *
-     * 注意：[keepName] 是刚上传成功的那份，任何情况下都不能被清掉；
-     * 其余按时间从新到旧保留，**超出保留数的从最老的开始删**。
-     * 单份删除失败不影响本次备份，只回一句提示。
+     * 规则（既能留很久，列表又不会长成一坨）：
+     * 1. 刚上传的这份无条件保留，任何情况下都不能被清掉；
+     * 2. 今天的备份全部保留——一天练两次、手动补备份几次都能回退；
+     * 3. 更早的按天去重，每天只留最晚的那一份；
+     * 4. 超过 [KEEP_DAYS] 天的删掉；
+     * 5. 时间解析不出来的（不是本 App 传的）不猜，原样留着。
+     *
+     * 单份删除失败不影响本次备份结果，只附一句提示。
      */
     private suspend fun pruneOldBackups(client: WebDavClient, keepName: String): String? {
         val list = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY).getOrElse {
             return "旧备份未清理（${it.message ?: "获取列表失败"}），不影响本次备份"
         }
-        val others = list
-            .filter { it.name != keepName }
-            .sortedWith(TIME_DESC)
-        // 保留额度里已经有一份是 keepName，其余还能留 KEEP_COUNT - 1 份
-        val stale = others.drop((KEEP_COUNT - 1).coerceAtLeast(0))
+        val todayStart = startOfDay(System.currentTimeMillis())
+        val cutoff = daysBefore(todayStart, KEEP_DAYS)
+        val keep = linkedSetOf(keepName)
+        val keptDays = mutableSetOf<Long>()
+
+        // 从新到旧扫，先遇到的就是这一天最晚的那份
+        for (file in list.sortedWith(TIME_DESC)) {
+            val ts = BackupFileMeta.effectiveTimestamp(file) ?: continue
+            val day = startOfDay(ts)
+            when {
+                day >= todayStart -> keep += file.name
+                day < cutoff -> Unit
+                keptDays.add(day) -> keep += file.name
+            }
+        }
+        list.filter { BackupFileMeta.effectiveTimestamp(it) == null }.forEach { keep += it.name }
+
+        val stale = list.filter { it.name !in keep }
         if (stale.isEmpty()) return null
         var failed = 0
         stale.forEach { old ->
             client.delete("${WebDavClient.BACKUP_DIRECTORY}/${old.name}")
                 .onFailure { failed++ }
         }
-        return if (failed == 0) {
-            null
-        } else {
-            "有 $failed 份旧备份没删掉（不影响本次备份）"
+        return when {
+            failed == 0 -> "已清理 ${stale.size} 份旧备份（每天保留最后一份）"
+            failed == stale.size -> "旧备份没删掉（不影响本次备份）"
+            else -> "有 $failed 份旧备份没删掉（不影响本次备份）"
         }
     }
+
+    /** 当天 0 点 */
+    private fun startOfDay(ts: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = ts
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    /** 按日历往前推 n 天（避开毫秒相加在夏令时上差一小时） */
+    private fun daysBefore(ts: Long, days: Int): Long = Calendar.getInstance().apply {
+        timeInMillis = ts
+        add(Calendar.DAY_OF_YEAR, -days)
+    }.timeInMillis
 
     /** 按备份时间倒序（最新的在前）；时间解析不出来的排最后 */
     private fun sortByTimeDesc(list: List<RemoteBackupFile>): List<RemoteBackupFile> =
@@ -201,13 +269,56 @@ class BackupManager(
         return SQLITE_MAGIC.indices.all { bytes[it] == SQLITE_MAGIC[it] }
     }
 
-    private fun backupFileName(): String {
+    /**
+     * 读备份文件里记录的 schema 版本。
+     *
+     * SQLite 头部偏移 60..63 是 `user_version`（4 字节大端），Room 就用它存版本号，
+     * 所以不用打开数据库就能判断这份备份是哪个版本写出来的。
+     */
+    private fun schemaVersionOf(bytes: ByteArray): Int {
+        if (bytes.size < 64) return -1
+        return ((bytes[60].toInt() and 0xFF) shl 24) or
+            ((bytes[61].toInt() and 0xFF) shl 16) or
+            ((bytes[62].toInt() and 0xFF) shl 8) or
+            (bytes[63].toInt() and 0xFF)
+    }
+
+    /** 当前 App 实际使用的 schema 版本；读不到返回 -1（此时不做版本校验） */
+    private fun currentSchemaVersion(): Int =
+        runCatching { dbProvider().openHelper.readableDatabase.version }.getOrDefault(-1)
+
+    /**
+     * 数一下备份文件里有多少条训练记录。
+     * 打不开 / 表不存在都返回 -1（无法判断），此时不拿它做拦截。
+     */
+    private fun countSessions(bytes: ByteArray): Int {
+        val probe = File(context.cacheDir, "restore-probe.db")
+        return runCatching {
+            probe.writeBytes(bytes)
+            SQLiteDatabase.openDatabase(
+                probe.path,
+                null,
+                SQLiteDatabase.OPEN_READWRITE,
+            ).use { db ->
+                db.rawQuery("SELECT COUNT(*) FROM sessions", null).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getInt(0) else -1
+                }
+            }
+        }.getOrDefault(-1).also { runCatching { probe.delete() } }
+    }
+
+    private fun backupFileName(schemaVersion: Int): String {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        return "${WebDavClient.BACKUP_PREFIX}$stamp.db"
+        val suffix = if (schemaVersion > 0) "-v$schemaVersion" else ""
+        return "${WebDavClient.BACKUP_PREFIX}$stamp$suffix.db"
     }
 
     companion object {
-        const val KEEP_COUNT = 5
+        /**
+         * 按天保留的天数：每天留最后一份，最多回看这么久。
+         * 单份约 1–2 MB，90 天也就一两百 MB。
+         */
+        const val KEEP_DAYS = 90
 
         /** SQLite 文件头：`SQLite format 3\0` */
         private val SQLITE_MAGIC = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)

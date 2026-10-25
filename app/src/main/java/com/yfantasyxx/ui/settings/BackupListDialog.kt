@@ -67,6 +67,8 @@ fun BackupListDialog(
 ) {
     // 待删除确认的文件名
     var pendingDelete by remember { mutableStateOf<String?>(null) }
+    // 待恢复确认的文件名（恢复会覆盖当前数据，必须确认）
+    var pendingRestore by remember { mutableStateOf<String?>(null) }
 
     // 打开时的基准时间：相对时间（3 小时前）按它算，避免每次重组都变
     val now = remember { System.currentTimeMillis() }
@@ -77,6 +79,7 @@ fun BackupListDialog(
     }
     val groups = remember(items, now) { groupItems(items, now) }
     val latestName = items.firstOrNull()?.name
+    val appSchema = state.appSchemaVersion
 
     AppDialog(
         title = "云端备份",
@@ -123,7 +126,7 @@ fun BackupListDialog(
 
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "网盘目录 ${WebDavClient.BACKUP_DIRECTORY}/ · 最多保留 ${BackupManager.KEEP_COUNT} 份",
+                text = "网盘目录 ${WebDavClient.BACKUP_DIRECTORY}/ · 每天留最后一份，最多 ${BackupManager.KEEP_DAYS} 天",
                 style = MiuixTheme.textStyles.footnote1,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.7f),
             )
@@ -158,7 +161,8 @@ fun BackupListDialog(
                                     item = item,
                                     isLatest = item.name == latestName,
                                     now = now,
-                                    onRestore = { onRestore(item.name) },
+                                    appSchema = appSchema,
+                                    onRestore = { pendingRestore = item.name },
                                     onDelete = { pendingDelete = item.name },
                                 )
                                 if (index != group.items.lastIndex) {
@@ -179,6 +183,32 @@ fun BackupListDialog(
             ) {
                 ActionText(text = "立即备份", onClick = onBackupNow)
                 ActionText(text = "关闭", onClick = onDismiss)
+            }
+        }
+    }
+
+    // 恢复会覆盖当前全部数据，确认一次
+    pendingRestore?.let { name ->
+        AppDialog(
+            title = "用这份备份覆盖当前数据？",
+            summary = "「${BackupItem(RemoteBackupFile(name)).mainLabel(now)}」会覆盖你现在所有的训练记录，" +
+                "当前数据不可恢复。\n备份来自更新的 App 版本、或者是空库时，会直接拦下不会写入。",
+            onDismissRequest = { pendingRestore = null },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ActionText(text = "取消", onClick = { pendingRestore = null })
+                Spacer(Modifier.width(12.dp))
+                ActionText(
+                    text = "恢复",
+                    color = MiuixTheme.colorScheme.primary,
+                    onClick = {
+                        pendingRestore = null
+                        onRestore(name)
+                    },
+                )
             }
         }
     }
@@ -238,14 +268,20 @@ private fun BackupRow(
     item: BackupItem,
     isLatest: Boolean,
     now: Long,
+    appSchema: Int,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val tooNew = item.tooNew(appSchema)
+    val suspicious = item.size == 0L || tooNew
     val secondary = listOfNotNull(
         item.relativeLabel(now),
         item.sizeLabel(),
+        // 文件名里带着写这份备份时的 schema 版本，方便判断能不能恢复
+        item.schemaVersion?.let { "v$it" },
         // 0 字节说明上次上传被打断了，这份不能用来恢复
         if (item.size == 0L) "文件为空，可能不可用" else null,
+        if (tooNew) "比当前 App 新，恢复不了" else null,
     ).joinToString(" · ")
 
     Box(
@@ -281,7 +317,7 @@ private fun BackupRow(
                     Text(
                         text = secondary,
                         style = MiuixTheme.textStyles.footnote1,
-                        color = if (item.size == 0L) {
+                        color = if (suspicious) {
                             MiuixTheme.colorScheme.error
                         } else {
                             MiuixTheme.colorScheme.onSurfaceVariantSummary
@@ -335,12 +371,18 @@ private data class BackupItem(
     val name: String,
     val timestamp: Long?,
     val size: Long,
+    val schemaVersion: Int?,
 ) {
     constructor(file: RemoteBackupFile) : this(
         name = file.name,
         timestamp = BackupFileMeta.effectiveTimestamp(file),
         size = file.size,
+        schemaVersion = BackupFileMeta.schemaOf(file.name),
     )
+
+    /** 备份的 schema 比当前 App 高：旧版 Room 会走销毁式迁移把数据清空，必须拦住 */
+    fun tooNew(appSchema: Int): Boolean =
+        schemaVersion != null && appSchema > 0 && schemaVersion > appSchema
 
     /** 主标题：今天 14:03 / 昨天 21:40 / 10月22日 19:03 */
     fun mainLabel(now: Long): String {
