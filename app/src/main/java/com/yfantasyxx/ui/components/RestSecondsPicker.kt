@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Checkbox
-import top.yukonga.miuix.kmp.basic.NumberPicker
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -41,7 +40,9 @@ fun RestSecondsPickerDialog(
     onClear: (() -> Unit)? = null,
 ) {
     val initialStep = (initialSeconds / REST_STEP_SECONDS).coerceIn(1, 20)
-    var step by remember { mutableStateOf(initialStep) }
+    // 值不放在外部状态里：确定时直接从波轮读「眼睛看到的那一格」。
+    // miuix 的 NumberPicker 要等惯性动画结束才回调，手一松就点确定会拿到旧值。
+    val wheel = rememberWheelPickerState(1..20, initialStep)
     var saveAsDefault by remember { mutableStateOf(false) }
 
     AppDialog(
@@ -49,15 +50,13 @@ fun RestSecondsPickerDialog(
         onDismissRequest = onDismiss,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            NumberPicker(
-                value = step,
-                onValueChange = { step = it },
-                range = 1..20,
+            WheelPicker(
+                state = wheel,
+                values = 1..20,
                 label = { "${it * REST_STEP_SECONDS} 秒" },
                 visibleItemCount = 5,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp),
+                itemHeight = 36.dp,
+                modifier = Modifier.fillMaxWidth(),
             )
 
             if (showSaveAsDefault) {
@@ -100,7 +99,7 @@ fun RestSecondsPickerDialog(
                     ActionText(text = "取消", onClick = onDismiss)
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
-                        onConfirm(step * REST_STEP_SECONDS, saveAsDefault)
+                        onConfirm(wheel.currentValue() * REST_STEP_SECONDS, saveAsDefault)
                     }) {
                         Text("确定", style = MiuixTheme.textStyles.button)
                     }
