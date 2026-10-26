@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,12 +62,16 @@ import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.InfoRow
 import com.yfantasyxx.ui.components.NumberStepper
+import com.yfantasyxx.ui.components.REST_STEP_SECONDS
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.components.SettingsCard
 import com.yfantasyxx.ui.components.SettingsDivider
 import com.yfantasyxx.ui.components.SettingsHint
 import com.yfantasyxx.ui.components.SettingsRow
+import com.yfantasyxx.ui.components.WheelPicker
+import com.yfantasyxx.ui.components.rememberWheelPickerState
 import com.yfantasyxx.ui.rememberAppContainer
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -112,6 +117,11 @@ fun DevToolsScreen(onBack: () -> Unit) {
     var pending by remember { mutableStateOf<Pending?>(null) }
     var showCrash by remember { mutableStateOf(false) }
     var showLongText by remember { mutableStateOf(false) }
+
+    // 波轮：默认停在 90 秒那一格；取值按钮记录「点下去那一刻」读到什么
+    val wheel = rememberWheelPickerState(1..20, 6)
+    var wheelRead by remember { mutableIntStateOf(6) }
+    val scope = rememberCoroutineScope()
 
     var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
     var overlayGranted by remember { mutableStateOf(RestOverlayController.canShow(context)) }
@@ -431,6 +441,42 @@ fun DevToolsScreen(onBack: () -> Unit) {
                     onClick = { vm.resetPlanProgress() },
                     showChevron = true,
                 )
+            }
+
+            /* ───────── 波轮 ───────── */
+            SectionHeader("波轮")
+            SettingsCard {
+                SettingsHint(
+                    text = "休息时长用的就是这个波轮。拖到某一格后立刻点「取值」，读到的就是点确定会生效的值——" +
+                        "旧版要等惯性动画跑完才回填，手一松就点会拿到旧值。",
+                    top = 12.dp,
+                )
+                WheelPicker(
+                    state = wheel,
+                    values = 1..20,
+                    label = { "${it * REST_STEP_SECONDS} 秒" },
+                    visibleItemCount = 5,
+                    itemHeight = 36.dp,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    InfoRow("实时读数", "${wheel.currentValue() * REST_STEP_SECONDS} 秒")
+                    InfoRow("上次点「取值」", "${wheelRead * REST_STEP_SECONDS} 秒")
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DevChip("取值", Modifier.weight(1f)) {
+                        wheelRead = wheel.currentValue()
+                    }
+                    DevChip("回到 90 秒", Modifier.weight(1f)) {
+                        scope.launch { wheel.jumpTo(6) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
             }
 
             /* ───────── 数据库 ───────── */

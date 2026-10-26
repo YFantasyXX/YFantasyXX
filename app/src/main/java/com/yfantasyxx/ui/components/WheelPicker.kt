@@ -65,6 +65,14 @@ class WheelPickerState internal constructor(
     fun currentValue(): Int =
         values.first + (index + (dragOffset + anim.value).roundToInt()).coerceIn(0, lastIndex)
 
+    /** 直接跳到某一格（外部重置用），不做动画 */
+    suspend fun jumpTo(value: Int) {
+        anim.stop()
+        anim.snapTo(0f)
+        dragOffset = 0f
+        index = (value - values.first).coerceIn(0, lastIndex)
+    }
+
     internal suspend fun onDragStart() {
         if (anim.isRunning) anim.stop()
         // 把正在跑的惯性位移接过来，接着手指继续拖，不跳
