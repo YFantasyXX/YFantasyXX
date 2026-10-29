@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.Refresh
@@ -87,16 +88,17 @@ private enum class Pending {
     CLEAR_WORKOUTS,
     SEED_BODY,
     REBUILD_DB,
+    FAKE_WORKOUT,
 }
 
 /**
- * 测试工具。只在 lite 版有入口（见 `BuildConfig.FLAVOR`）。
+ * 测试工具。只在 lite 版有入口（见 `DevTools.enabled`）。
  *
  * 这里刻意把「倒计时」放在第一组：它是改完休息计时后最需要反复验的东西，
  * 而且不用真的开始一次训练——训练页要走到「完成一组」才会起计时。
  */
 @Composable
-fun DevToolsScreen(onBack: () -> Unit) {
+fun DevToolsScreen(onBack: () -> Unit, onOpenWorkout: () -> Unit = {}) {
     val container = rememberAppContainer()
     val vm: DevToolsViewModel = viewModel(factory = DevToolsViewModel.factory(container))
     val info by vm.info.collectAsState()
@@ -293,6 +295,25 @@ fun DevToolsScreen(onBack: () -> Unit) {
                     iconTint = MiuixTheme.colorScheme.error,
                     showChevron = true,
                     onClick = { vm.killProcess() },
+                )
+            }
+
+            /* ───────── 假的训练中 ───────── */
+            SectionHeader("假的训练中")
+            SettingsCard {
+                SettingsHint(
+                    text = "造一次进行中的训练（7 个动作 × 3 组）并直接进训练页。" +
+                        "会顺手造一次「上次训练」：每组重量次数都不同、最后一组是更重的 PR，" +
+                        "用来看预填有没有抄错组、有没有把 PR 也抄进去。" +
+                        "进页面时第一个动作已完成 2 组，顶部应显示「7 个动作 · 已完成 2/21 组」。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "生成并进入训练页",
+                    subtitle = "会丢掉当前未完成的草稿",
+                    icon = Icons.Filled.FitnessCenter,
+                    showChevron = true,
+                    onClick = { pending = Pending.FAKE_WORKOUT },
                 )
             }
 
@@ -623,6 +644,12 @@ fun DevToolsScreen(onBack: () -> Unit) {
                 title = "重建数据库实例？"
                 summary = "等价于「恢复备份」之后的那一步。各 Repository 还握着旧实例，建议重建完再重建一次界面。"
             }
+
+            Pending.FAKE_WORKOUT -> {
+                title = "生成一次假训练？"
+                summary = "会先丢掉当前未完成的草稿，再造一次「上次训练」（最后一组是 PR）" +
+                    "和一次进行中的训练，然后直接进训练页。"
+            }
         }
         AppDialog(
             title = title,
@@ -642,6 +669,8 @@ fun DevToolsScreen(onBack: () -> Unit) {
                             Pending.CLEAR_WORKOUTS -> vm.clearWorkouts()
                             Pending.SEED_BODY -> vm.seedBodyMetrics(bodyDays)
                             Pending.REBUILD_DB -> vm.rebuildDatabase()
+                            // 生成完直接进训练页：这一屏的意义就是看真实页面
+                            Pending.FAKE_WORKOUT -> vm.startFakeWorkout(onReady = onOpenWorkout)
                         }
                     },
                 ) {

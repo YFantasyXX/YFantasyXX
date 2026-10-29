@@ -174,7 +174,10 @@ private fun YFantasyXXNavHost() {
                 )
             }
             composable(Routes.DEV_TOOLS) {
-                com.yfantasyxx.ui.dev.DevToolsScreen(onBack = { navController.popBackStack() })
+                com.yfantasyxx.ui.dev.DevToolsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenWorkout = { navController.navigate(Routes.WORKOUT) },
+                )
             }
             composable(Routes.TEMPLATES) {
                 TemplatesScreen(

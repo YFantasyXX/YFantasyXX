@@ -538,20 +538,15 @@ class WorkoutRepository(private val db: AppDatabase) {
                     supersetGroup = item.templateExercise.supersetGroup,
                 )
             )
-            // 重量优先用模板设定，其次沿用该动作上次的表现
-            val weight = item.templateExercise.targetWeightKg
-                ?: lastPerformance(item.exercise.id).firstOrNull()?.weightKg
-                ?: 0f
+            // 重量次数逐组照上次练的（PR 组不算）；模板写了目标重量时以模板为准
             setLogDao.insertAll(
-                (1..item.templateExercise.targetSets).map { n ->
-                    SetLog(
-                        sessionExerciseId = seId,
-                        setNumber = n,
-                        completed = false,
-                        weightKg = weight,
-                        isWarmup = item.templateExercise.isWarmup,
-                    )
-                }
+                referenceSets(
+                    sessionExerciseId = seId,
+                    count = item.templateExercise.targetSets,
+                    reference = lastReferenceSets(item.exercise.id),
+                    weightOverride = item.templateExercise.targetWeightKg,
+                    isWarmup = item.templateExercise.isWarmup,
+                )
             )
         }
     }
@@ -573,17 +568,14 @@ class WorkoutRepository(private val db: AppDatabase) {
         val seId = sessionExerciseDao.insert(
             SessionExercise(sessionId = sessionId, exerciseId = exerciseId, sortOrder = order)
         )
-        // 沿用该动作上次的重量，省得每次从 0 开始调
-        val lastWeight = lastPerformance(exerciseId).firstOrNull()?.weightKg ?: 0f
+        // 沿用该动作上次练的重量与次数（逐组对齐，PR 组不算），省得从 0 开始调
         setLogDao.insertAll(
-            (1..targetSets).map { n ->
-                SetLog(
-                    sessionExerciseId = seId,
-                    setNumber = n,
-                    completed = completed,
-                    weightKg = lastWeight,
-                )
-            }
+            referenceSets(
+                sessionExerciseId = seId,
+                count = targetSets,
+                reference = lastReferenceSets(exerciseId),
+                completed = completed,
+            )
         )
         // 未完成的组不进统计，只有补录成已完成的才需要刷新缓存
         if (completed) invalidateStats()
@@ -1030,6 +1022,47 @@ class WorkoutRepository(private val db: AppDatabase) {
      */
     suspend fun lastPerformance(exerciseId: Long): List<SetLog> =
         sessionDao.lastSessionSets(exerciseId)
+
+    /**
+     * 预填用的「上次参考组」。
+     *
+     * 默认就是 [lastPerformance]（已排除 PR 组）；只有上次一组都没录成普通组
+     * （比如只记了一组 PR 极限组）时，才退回把 PR 组也算上，免得预填成 0。
+     */
+    suspend fun lastReferenceSets(exerciseId: Long): List<SetLog> =
+        sessionDao.lastSessionSets(exerciseId)
+            .ifEmpty { sessionDao.lastSessionSetsWithPr(exerciseId) }
+
+    /**
+     * 按组号把上次的重量次数铺进新加的 [count] 组：
+     * 第 n 组对齐上次第 n 组，上次没有这一组就沿用它之前最后一组。
+     *
+     * 这样练的时候每组都是「上次这一组练了什么」，不用自己回想；
+     * [weightOverride] 非空（模板里写了目标重量）时重量统一用它，次数仍照上次填。
+     */
+    private fun referenceSets(
+        sessionExerciseId: Long,
+        count: Int,
+        reference: List<SetLog>,
+        weightOverride: Float? = null,
+        completed: Boolean = false,
+        isWarmup: Boolean = false,
+    ): List<SetLog> {
+        val sorted = reference.sortedBy { it.setNumber }
+        return (1..count).map { n ->
+            val ref = sorted.firstOrNull { it.setNumber == n }
+                ?: sorted.lastOrNull { it.setNumber < n }
+                ?: sorted.firstOrNull()
+            SetLog(
+                sessionExerciseId = sessionExerciseId,
+                setNumber = n,
+                weightKg = weightOverride ?: ref?.weightKg ?: 0f,
+                reps = ref?.reps ?: 0,
+                completed = completed,
+                isWarmup = isWarmup,
+            )
+        }
+    }
 
     /**
      * 某动作最近 [limit] 次已完成训练的完整记录（新的在前）。

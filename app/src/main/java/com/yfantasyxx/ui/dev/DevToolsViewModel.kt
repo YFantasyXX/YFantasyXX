@@ -48,7 +48,7 @@ data class DevInfo(
  * 测试工具（只在 lite 版出现）。
  *
  * 这里的东西都是「绕过正常流程」的：直接写 SQL 伪造历史、直接改计划游标、
- * 直接抛异常。所以全部集中在 `ui/dev` 下，正式版靠 `BuildConfig.FLAVOR` 把入口藏掉，
+ * 直接抛异常。所以全部集中在 `ui/dev` 下，正式版靠 `BuildConfig.BUILD_TYPE` 把入口藏掉，
  * R8 会把常量判断折成 false 并删掉整段。
  */
 class DevToolsViewModel(
@@ -325,6 +325,112 @@ class DevToolsViewModel(
         }
     }
 
+    // ---------- 假的训练中 ----------
+
+    /**
+     * 造一页「假的训练中」并直接进训练页。
+     *
+     * 不做静态预览页：预填重量次数、顶部组数统计、休息计时、复制上一组
+     * 全都跑在真实 ViewModel + 数据库上，只有进真页面才验得出来。
+     *
+     * 造的数据：
+     * - 一次「上次训练」：7 个动作，每组重量次数都不同，最后一组是明显更重的 PR；
+     * - 一次进行中的训练：同样 7 个动作 × 3 组，第一个动作前 2 组已打勾、计时已走 12 分钟。
+     *
+     * 进去先看两件事：每组预填是不是上次**同一个组号**的重量次数（第 3 组不该是那个 PR），
+     * 顶部是不是「7 个动作 · 已完成 2/21 组」。
+     */
+    fun startFakeWorkout(onReady: () -> Unit = {}) {
+        if (_busy.value) return
+        viewModelScope.launch {
+            _busy.value = true
+            val result = withContext(Dispatchers.IO) { runCatching { buildFakeWorkout() } }
+            _busy.value = false
+            result.onSuccess { detail ->
+                say("假训练已就绪：$detail")
+                onReady()
+            }.onFailure { say("生成假训练失败：${it.message ?: it::class.simpleName}", true) }
+            refreshInfo()
+        }
+    }
+
+    private suspend fun buildFakeWorkout(): String {
+        val pool = repo.observeExercises().first().sortedBy { it.id }
+        if (pool.size < FAKE_EXERCISES) {
+            throw IllegalStateException("动作库只有 ${pool.size} 个动作，先点「补全动作库」")
+        }
+        val chosen = pool.take(FAKE_EXERCISES)
+        val db = container.db()
+
+        // 先丢掉当前草稿，否则进训练页看到的还是你原来那次
+        repo.getActiveSessionId()?.let { repo.discardSession(it) }
+
+        // 1) 上次训练：两小时前刚结束，正好是这 7 个动作的最近一次
+        val end = System.currentTimeMillis() - 2 * 60 * 60_000L
+        val start = end - 55 * 60_000L
+        db.withTransaction {
+            val sqlite = db.openHelper.writableDatabase
+            sqlite.execSQL(
+                "INSERT INTO sessions (name, templateId, startTime, activeStartedAt, endTime, note) " +
+                    "VALUES (?, NULL, ?, ?, ?, ?)",
+                arrayOf<Any?>("假的：上次训练", start, start, end, "测试工具生成"),
+            )
+            val historyId = lastInsertId(sqlite)
+            chosen.forEachIndexed { index, exercise ->
+                sqlite.execSQL(
+                    "INSERT INTO session_exercises (sessionId, exerciseId, sortOrder, restSeconds, " +
+                        "plannedSets, plannedReps, plannedRepsMin, plannedRepsMax, supersetGroup) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                    arrayOf<Any?>(historyId, exercise.id, index, 90, FAKE_SETS, "8-12", 8, 12),
+                )
+                val seId = lastInsertId(sqlite)
+                // 每个动作三组：40×10 / 42.5×9 / 60×2(PR)。PR 明显更重次数更少，
+                // 一眼就能看出预填有没有把它抄进来。
+                val base = 40f + 10f * index
+                for (n in 1..FAKE_SETS) {
+                    val weight = when (n) {
+                        1 -> base
+                        2 -> base + 2.5f
+                        else -> base + 20f
+                    }
+                    val reps = when (n) {
+                        1 -> 10
+                        2 -> 9
+                        else -> 2
+                    }
+                    sqlite.execSQL(
+                        "INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, rpe, " +
+                            "isWarmup, isPr, completed, loggedAt) VALUES (?, ?, ?, ?, NULL, 0, ?, 1, ?)",
+                        arrayOf<Any?>(
+                            seId,
+                            n,
+                            weight,
+                            reps,
+                            if (n == FAKE_SETS) 1 else 0,
+                            start + n * 5 * 60_000L,
+                        ),
+                    )
+                }
+            }
+        }
+
+        // 2) 本次训练：走正式的开始训练 + 加动作，预填逻辑原样跑一遍
+        val sessionId = repo.startSession(name = "假的训练中")
+        chosen.forEach { exercise ->
+            repo.addExerciseToSession(sessionId, exercise.id, targetSets = FAKE_SETS)
+        }
+        // 第一个动作前两组先打勾，顺便把计时器点亮，才能看到「已完成 x/y 组」
+        repo.getSessionDetails(sessionId).orEmpty().firstOrNull()?.let { item ->
+            item.sets.sortedBy { it.setNumber }.take(2).forEach { set ->
+                repo.setSetCompleted(set.id, true)
+            }
+        }
+        repo.markSessionStarted(sessionId, System.currentTimeMillis() - 12 * 60_000L)
+        repo.notifyDataChanged()
+        return "$FAKE_EXERCISES 个动作 × $FAKE_SETS 组，已完成 2 组；" +
+            "上次训练第 $FAKE_SETS 组是 PR（更重、只有 2 次）"
+    }
+
     // ---------- 计划时间旅行 ----------
 
     /** [days] 为正 = 时间前进（休息日会被直接跳过），为负 = 时间倒退 */
@@ -546,6 +652,10 @@ class DevToolsViewModel(
         SimpleDateFormat("M月d日 HH:mm", Locale.CHINA).format(Date(millis))
 
     companion object {
+        /** 假训练的动作数：和首页常见的一天训练量对齐，方便看顶部统计 */
+        private const val FAKE_EXERCISES = 7
+        private const val FAKE_SETS = 3
+
         fun factory(container: AppContainer) = viewModelFactory {
             initializer { DevToolsViewModel(container, container.workoutRepository) }
         }

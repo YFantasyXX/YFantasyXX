@@ -191,16 +191,21 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         }
     }
 
+    // 顶部副标题：动作数旁边直接报「已完成 x/y 组」，
+    // 不用挨个卡片数勾——7 个动作时这个数字比动作数有用得多。
+    val doneSets = displayExercises.sumOf { item -> item.sets.count { it.completed } }
+    val totalSets = displayExercises.sumOf { it.sets.size }
+
     Scaffold(
         topBar = {
             SmallTopAppBar(
                 title = if (elapsed == 0) "待开始" else formatDuration(elapsed),
                 subtitle = if (exercises.isEmpty()) {
                     "添加动作开始训练"
-                } else if (elapsed == 0) {
+                } else if (elapsed == 0 && doneSets == 0) {
                     "完成第一组后开始计时 · ${exercises.size} 个动作"
                 } else {
-                    "${exercises.size} 个动作"
+                    "${exercises.size} 个动作 · 已完成 $doneSets/$totalSets 组"
                 },
                 navigationIcon = {
                     IconButton(onClick = { showDiscardDialog = true }) {

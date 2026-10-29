@@ -466,6 +466,30 @@ interface SessionDao {
     /**
      * 最近一次「已完成」训练里某动作的工作组。
      * 进阶建议只看上一次，看得太多反而会把中断前的旧记录算进来。
+     *
+     * **不含 PR 组**：PR 是冲纪录的极限组（通常更重、只有 1-2 次），
+     * 把它当「上次练了多少」会让下次训练的预填重量次数整组被带偏。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.completed = 1
+          AND sl.isWarmup = 0 AND sl.isPr = 0
+          AND s.startTime = (
+              SELECT MAX(s2.startTime) FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun lastSessionSets(exerciseId: Long): List<SetLog>
+
+    /**
+     * 同 [lastSessionSets]，但允许 PR 组参与。
+     * 只在上次全部是 PR 组（排除后一条不剩）时兜底，避免预填成 0。
      */
     @Query(
         """
@@ -482,7 +506,7 @@ interface SessionDao {
         ORDER BY sl.setNumber
         """
     )
-    suspend fun lastSessionSets(exerciseId: Long): List<SetLog>
+    suspend fun lastSessionSetsWithPr(exerciseId: Long): List<SetLog>
 
     /**
      * 某动作的历史：最近 [limit] 次「已完成」训练里的全部工作组。
