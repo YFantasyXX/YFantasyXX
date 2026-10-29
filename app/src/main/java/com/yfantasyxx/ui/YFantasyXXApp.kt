@@ -173,11 +173,15 @@ private fun YFantasyXXNavHost() {
                     onOpenDevTools = { navController.navigate(Routes.DEV_TOOLS) },
                 )
             }
-            composable(Routes.DEV_TOOLS) {
-                com.yfantasyxx.ui.dev.DevToolsScreen(
-                    onBack = { navController.popBackStack() },
-                    onOpenWorkout = { navController.navigate(Routes.WORKOUT) },
-                )
+            // 路由本身也要关掉：只藏设置里的入口不够，留着这条 composable 就等于
+            // 把整套测试代码（造数据、杀进程、时间旅行）打进正式包，R8 删不掉。
+            if (com.yfantasyxx.ui.dev.DevTools.enabled) {
+                composable(Routes.DEV_TOOLS) {
+                    com.yfantasyxx.ui.dev.DevToolsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenWorkout = { navController.navigate(Routes.WORKOUT) },
+                    )
+                }
             }
             composable(Routes.TEMPLATES) {
                 TemplatesScreen(
