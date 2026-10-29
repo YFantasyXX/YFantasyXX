@@ -1,5 +1,6 @@
 package com.yfantasyxx.data.db
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -450,6 +451,16 @@ data class MuscleSetRow(
     val secondaryMuscles: String,
     val sets: Int,
     val lastTrainedAt: Long,
+)
+
+/**
+ * 动作历史的一行：某次已完成训练里的一组。
+ * 会话 id 与开始时间跟着每组一起查出来，分组时不用再查会话表。
+ */
+data class ExerciseHistoryRow(
+    @Embedded val log: SetLog,
+    val sessionId: Long,
+    val sessionStart: Long,
 )
 
 /** 热力图上的一个肌群 */

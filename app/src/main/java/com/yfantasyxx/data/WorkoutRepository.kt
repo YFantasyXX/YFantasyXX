@@ -30,6 +30,19 @@ import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.data.db.TemplateFolder
 
 /**
+ * 某个动作在某一次训练里的完整表现。
+ * [sets] 已按组号排序，且不含热身组。
+ */
+data class ExerciseHistoryEntry(
+    val sessionId: Long,
+    val startedAt: Long,
+    val sets: List<SetLog>,
+) {
+    /** 这次训练该动作的总容量（重量 × 次数） */
+    val volumeKg: Float = sets.sumOf { (it.weightKg * it.reps).toDouble() }.toFloat()
+}
+
+/**
  * 统一数据仓库：动作库 / 模板 / 训练记录 / 身体数据
  */
 class WorkoutRepository(private val db: AppDatabase) {
@@ -1017,6 +1030,26 @@ class WorkoutRepository(private val db: AppDatabase) {
      */
     suspend fun lastPerformance(exerciseId: Long): List<SetLog> =
         sessionDao.lastSessionSets(exerciseId)
+
+    /**
+     * 某动作最近 [limit] 次已完成训练的完整记录（新的在前）。
+     * 训练中「看历史定重量次数」用，所以连每组的重量次数都要，不做聚合。
+     */
+    suspend fun exerciseHistory(exerciseId: Long, limit: Int = 12): List<ExerciseHistoryEntry> =
+        sessionDao.historySetsFor(exerciseId, limit)
+            .groupBy { it.sessionId }
+            .map { (sessionId, rows) ->
+                ExerciseHistoryEntry(
+                    sessionId = sessionId,
+                    startedAt = rows.first().sessionStart,
+                    sets = rows.map { it.log }.sortedBy { it.setNumber },
+                )
+            }
+            .sortedByDescending { it.startedAt }
+
+    /** 某次训练里某个动作当前最新的组（界面手里的快照可能还没回包） */
+    suspend fun currentSets(sessionExerciseId: Long): List<SetLog> =
+        setLogDao.getForSessionExercise(sessionExerciseId)
 
     // ---------- 身体数据 ----------
 

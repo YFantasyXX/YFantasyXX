@@ -62,6 +62,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val elapsed by vm.elapsedSeconds.collectAsState()
     val restTimer by vm.restTimer.collectAsState()
     val lastPerformance by vm.lastPerformance.collectAsState()
+    val history by vm.history.collectAsState()
     val error by vm.error.collectAsState()
     val currentExerciseId by vm.currentExerciseId.collectAsState()
     val restFinished by vm.restFinished.collectAsState()
@@ -344,6 +345,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         onDeleteSet = vm::deleteSet,
                         onTogglePr = vm::toggleSetPr,
                         onCopyPreviousSet = { vm.copyPreviousSet(item) },
+                        onOpenHistory = { vm.openHistory(item) },
                         onReplaceExercise = { replaceTargetId = id },
                         onToggleSuperset = { vm.toggleSuperset(item, nextId) },
                         onOpenPlateCalculator = {
@@ -459,6 +461,19 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 platesCsv = settings.plates,
                 onDismiss = { plateWeight = null },
                 onSaveSettings = { bar, plates -> vm.savePlateSettings(bar, plates) },
+            )
+        }
+
+        // 动作历史：训练中参考上次的重量次数，也可以直接套用到未完成的组
+        history?.let { st ->
+            ExerciseHistoryDialog(
+                state = st,
+                unitLabel = WeightUnit.KG.label,
+                onApply = { entry ->
+                    vm.applyHistory(st.sessionExerciseId, entry)
+                    vm.closeHistory()
+                },
+                onDismiss = { vm.closeHistory() },
             )
         }
 

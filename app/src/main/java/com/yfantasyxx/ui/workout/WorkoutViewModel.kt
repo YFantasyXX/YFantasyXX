@@ -36,6 +36,20 @@ data class RestTimerState(
     val label: String? = null,
 )
 
+/**
+ * 训练中「看历史」弹窗的状态。
+ *
+ * @param exerciseId 动作库里的 id，用来判断列表回来时弹窗是不是已经换成别的动作
+ * @param sessionExerciseId 本次训练里这个动作的条目 id，套用历史时要写它的组
+ */
+data class HistoryState(
+    val exerciseId: Long,
+    val sessionExerciseId: Long,
+    val exerciseName: String,
+    val loading: Boolean = true,
+    val entries: List<com.yfantasyxx.data.ExerciseHistoryEntry> = emptyList(),
+)
+
 class WorkoutViewModel(
     private val repo: WorkoutRepository,
     private val settingsRepo: SettingsRepository,
@@ -88,6 +102,55 @@ class WorkoutViewModel(
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
     val lastPerformance: StateFlow<Map<Long, List<SetLog>>> = _lastPerformance.asStateFlow()
+
+    /** 动作历史弹窗状态；null 表示没打开 */
+    private val _history = MutableStateFlow<HistoryState?>(null)
+    val history: StateFlow<HistoryState?> = _history.asStateFlow()
+
+    /** 打开某个动作的历史，数据现查现给（只查这一个动作，成本很低） */
+    fun openHistory(item: SessionExerciseWithSets) {
+        val exerciseId = item.sessionExercise.exerciseId
+        _history.value = HistoryState(
+            exerciseId = exerciseId,
+            sessionExerciseId = item.sessionExercise.id,
+            exerciseName = item.exercise.name,
+        )
+        viewModelScope.launch {
+            val entries = runCatching { repo.exerciseHistory(exerciseId) }.getOrDefault(emptyList())
+            // 期间可能已经关掉，或者又点开了别的动作
+            _history.value = _history.value
+                ?.takeIf { it.exerciseId == exerciseId }
+                ?.copy(loading = false, entries = entries)
+        }
+    }
+
+    fun closeHistory() {
+        _history.value = null
+    }
+
+    /**
+     * 把某次历史的重量次数按顺序套到还没完成的组上。
+     * 历史里的组比待练的组少时，多出来的组沿用最后一组。
+     */
+    fun applyHistory(sessionExerciseId: Long, entry: com.yfantasyxx.data.ExerciseHistoryEntry) {
+        val sources = entry.sets
+        if (sources.isEmpty()) return
+        viewModelScope.launch {
+            runCatching {
+                val pending = repo.currentSets(sessionExerciseId)
+                    .filter { !it.completed }
+                    .sortedBy { it.setNumber }
+                if (pending.isEmpty()) {
+                    repo.addSet(sessionExerciseId, sources.last().weightKg, sources.last().reps)
+                    return@runCatching
+                }
+                pending.forEachIndexed { index, set ->
+                    val src = sources.getOrNull(index) ?: sources.last()
+                    repo.setSetWeightReps(set.id, src.weightKg, src.reps)
+                }
+            }.onFailure { e -> _error.value = "套用历史失败：${e.message.orEmpty()}" }
+        }
+    }
 
     /** 操作错误提示（避免异常直接导致闪退） */
     private val _error = MutableStateFlow<String?>(null)
@@ -287,25 +350,43 @@ class WorkoutViewModel(
     }
 
     /**
-     * 复制上一组：把上一组的重量与次数填进第一个未完成的组。
+     * 复制上一组：把「上一组」的重量次数套到下一个还没填的组上。
      *
-     * 全部组都完成了就新建一组并把最后一组复制过去 ——
-     * 「再来一组同样的」是最常见的意图，不该逼用户先点添加再点复制。
-     * 第一组没有上一组可抄，静默不动（提示反而打扰）。
+     * 以前直接拿界面传进来的 [item] 快照算「第一个未完成的组」，有两个坑：
+     * - 连点两下时，第一次的写入还没回包，第二次算出来的目标还是同一组，
+     *   写进去的值也一模一样，看起来就是「点一次之后就没反应」；
+     * - 本次训练一组都还没做时没有来源，函数直接静默返回。
+     *
+     * 现在从库里取最新组，目标只挑「还没填重量次数」的待练组：每点一次就落到下一组，
+     * 待练的组都填过了就照上一组再加一组。来源优先目标前面最后一个有数据的组，
+     * 没有就退到上次训练的同一动作。
      */
     fun copyPreviousSet(item: SessionExerciseWithSets) {
-        val sets = item.sets.sortedBy { it.setNumber }
-        if (sets.isEmpty()) return
-        val target = sets.firstOrNull { !it.completed }
+        val sessionExerciseId = item.sessionExercise.id
+        val exerciseId = item.sessionExercise.exerciseId
         viewModelScope.launch {
             runCatching {
-                if (target == null) {
-                    val last = sets.last()
-                    repo.addSet(item.sessionExercise.id, last.weightKg, last.reps)
+                val sets = repo.currentSets(sessionExerciseId).sortedBy { it.setNumber }
+                val target = sets.firstOrNull {
+                    !it.completed && it.weightKg <= 0f && it.reps <= 0f
+                }
+                val previous = if (target != null) {
+                    // 「上一组」得是目标之前的那一行，不能拿目标自己（可能刚填了数）
+                    sets.lastOrNull {
+                        it.setNumber < target.setNumber && (it.weightKg > 0f || it.reps > 0f)
+                    }
                 } else {
-                    val index = sets.indexOf(target)
-                    val source = sets.take(index).lastOrNull() ?: return@runCatching
+                    sets.lastOrNull { it.weightKg > 0f || it.reps > 0f }
+                }
+                val source = previous ?: repo.lastPerformance(exerciseId).lastOrNull()
+                if (source == null) {
+                    _error.value = "这个动作还没有可以复制的记录"
+                    return@runCatching
+                }
+                if (target != null) {
                     repo.setSetWeightReps(target.id, source.weightKg, source.reps)
+                } else {
+                    repo.addSet(sessionExerciseId, source.weightKg, source.reps)
                 }
             }.onFailure { e -> _error.value = "复制失败：${e.message.orEmpty()}" }
         }

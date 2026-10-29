@@ -484,6 +484,31 @@ interface SessionDao {
     )
     suspend fun lastSessionSets(exerciseId: Long): List<SetLog>
 
+    /**
+     * 某动作的历史：最近 [limit] 次「已完成」训练里的全部工作组。
+     *
+     * 一次查完再用 sessionId 分组，避免「先查会话列表、再逐个查组」的 N+1。
+     * 正在进行的训练 `endTime IS NULL`，天然被排除。
+     */
+    @Query(
+        """
+        SELECT sl.*, se.sessionId AS sessionId, s.startTime AS sessionStart
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.isWarmup = 0
+          AND se.sessionId IN (
+              SELECT s2.id FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+              ORDER BY s2.startTime DESC
+              LIMIT :limit
+          )
+        ORDER BY s.startTime DESC, sl.setNumber
+        """
+    )
+    suspend fun historySetsFor(exerciseId: Long, limit: Int): List<ExerciseHistoryRow>
+
     /** 窗口期内每个动作练了多少组、最后一次是什么时候（热力图用） */
     @Query(
         """

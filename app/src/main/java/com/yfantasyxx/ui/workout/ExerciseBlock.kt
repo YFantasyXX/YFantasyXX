@@ -81,6 +81,8 @@ internal fun ExerciseBlock(
     onDeleteSet: (SetLog) -> Unit,
     onTogglePr: (SetLog) -> Unit,
     onCopyPreviousSet: () -> Unit = {},
+    /** 打开这个动作的历史记录（训练中参考重量次数） */
+    onOpenHistory: () -> Unit = {},
     onReplaceExercise: () -> Unit = {},
     onToggleSuperset: () -> Unit = {},
     onOpenPlateCalculator: () -> Unit = {},
@@ -164,33 +166,52 @@ internal fun ExerciseBlock(
                         }
                     }
                     Spacer(Modifier.height(3.dp))
-                    Text(
-                        text = if (collapsed) {
-                            "${item.sets.size} 组 · 已完成 $completed 组"
-                        } else buildString {
-                            append(item.exercise.category)
-                            if (item.exercise.equipment.isNotEmpty()) {
-                                append(" · ")
-                                append(item.exercise.equipment)
-                            }
-                            // 模板设定的目标次数，如「目标 8-12」
-                            val planned = item.sessionExercise.plannedReps
-                            if (!planned.isNullOrBlank()) {
-                                append(" · 目标 ")
-                                append(planned)
-                            }
-                            if (lastSummary.isNotEmpty()) {
-                                append(" · ")
-                                append(lastSummary)
-                            } else {
-                                append(" · 首次训练")
-                            }
-                        },
-                        style = MiuixTheme.textStyles.footnote1,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
+                    // 副标题后面挂一个「历史」小标签：训练中想知道上次练了多少，
+                    // 不用退出去翻历史页。收起状态下不显示，保持一行的高度。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (collapsed) {
+                                "${item.sets.size} 组 · 已完成 $completed 组"
+                            } else buildString {
+                                append(item.exercise.category)
+                                if (item.exercise.equipment.isNotEmpty()) {
+                                    append(" · ")
+                                    append(item.exercise.equipment)
+                                }
+                                // 模板设定的目标次数，如「目标 8-12」
+                                val planned = item.sessionExercise.plannedReps
+                                if (!planned.isNullOrBlank()) {
+                                    append(" · 目标 ")
+                                    append(planned)
+                                }
+                                if (lastSummary.isNotEmpty()) {
+                                    append(" · ")
+                                    append(lastSummary)
+                                } else {
+                                    append(" · 首次训练")
+                                }
+                            },
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (!collapsed) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "历史",
+                                fontSize = 11.sp,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                                    .clickable(onClick = onOpenHistory)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 val allDone = item.sets.isNotEmpty() && completed == item.sets.size
