@@ -36,8 +36,14 @@ internal fun FinishDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, String) -> Unit,
 ) {
-    var name by remember { mutableStateOf(defaultName) }
-    var note by remember { mutableStateOf("") }
+    // 用 rememberSaveable：旋转 / 进程回收后训练名和备注不会丢。
+    // 默认名是异步读出来的，所以先留空，等它到了再填——不能直接 remember { defaultName }，
+    // 否则弹窗早于默认名加载完成时组合，就会永远停在空名字上
+    var name by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var note by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    androidx.compose.runtime.LaunchedEffect(defaultName) {
+        if (name.isBlank()) name = defaultName
+    }
     AppDialog(
         title = "完成训练",
         onDismissRequest = onDismiss,

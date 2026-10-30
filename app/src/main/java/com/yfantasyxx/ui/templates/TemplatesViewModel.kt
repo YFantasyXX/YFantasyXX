@@ -110,8 +110,10 @@ class TemplatesViewModel(private val repo: WorkoutRepository) : ViewModel() {
     fun moveToFolder(template: WorkoutTemplate, folderId: Long?) {
         if (template.folderId == folderId) return
         viewModelScope.launch {
-            val count = _groups.value.firstOrNull { it.folderId == folderId }?.templates?.size ?: 0
-            repo.moveTemplate(template.id, folderId, count)
+            // 不能在 _groups 里找「未分组」的条数：未分组为空时这个分组压根不在列表里，
+            // 会算成 0，模板反而排到最前面。直接问库里的 MAX(sortOrder)
+            val order = repo.nextTemplateOrder(folderId)
+            repo.moveTemplate(template.id, folderId, order)
         }
     }
 

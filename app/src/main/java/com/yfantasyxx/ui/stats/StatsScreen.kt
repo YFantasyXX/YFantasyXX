@@ -323,10 +323,12 @@ private fun CurveRow(
 private val categoryColors = listOf(    androidx.compose.ui.graphics.Color(0xFF3482FF),
     androidx.compose.ui.graphics.Color(0xFF34C759),
     androidx.compose.ui.graphics.Color(0xFFFF9500),
-    androidx.compose.ui.graphics.Color(0xAF52DE),
+    // 这七位必须写全 0xFF 前缀：六位字面量是 Int，会命中 Color(Int) 重载，
+    // 高 8 位按 alpha 解释 → 整块颜色全透明，第 4/6/7 个部位等于看不见
+    androidx.compose.ui.graphics.Color(0xFFAF52DE),
     androidx.compose.ui.graphics.Color(0xFFFF3B30),
-    androidx.compose.ui.graphics.Color(0x00C7BE),
-    androidx.compose.ui.graphics.Color(0x8E8E93),
+    androidx.compose.ui.graphics.Color(0xFF00C7BE),
+    androidx.compose.ui.graphics.Color(0xFF8E8E93),
 )
 
 private fun categoryColor(index: Int) = categoryColors[index % categoryColors.size]

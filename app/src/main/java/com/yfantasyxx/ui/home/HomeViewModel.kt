@@ -13,9 +13,11 @@ import com.yfantasyxx.data.db.WorkoutTemplate
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.data.prefs.SettingsRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -41,46 +43,70 @@ class HomeViewModel(
     private val settingsRepo: SettingsRepository,
 ) : ViewModel() {
 
+    /**
+     * 本周起点。
+     *
+     * 必须是个流而不是构造时算一次的值：App 常驻后台跨过周日后，
+     * 固定下来的 since 仍是上一周，本周次数/容量会把上周一起算进去。
+     * 界面回到首页时调用 [refreshWeekWindow] 重新取一次。
+     */
+    private val weekAnchor = MutableStateFlow(weekStart())
+
+    fun refreshWeekWindow() {
+        weekAnchor.value = weekStart()
+    }
+
     // combine 有 5 个以上源时只能拿到 Array<Any?>，逐个 as 转换无法避免；
     // 注解放属性上才能覆盖整个 lambda（放单行只对那一行生效）
     @Suppress("UNCHECKED_CAST")
-    val uiState: StateFlow<HomeUiState> = combine(
-        repo.observeActiveSession(),
-        repo.observeHomeTemplates(),
-        repo.observeHistory(),
-        repo.observeSessionCount(weekStart()),
-        repo.observeTotalVolume(weekStart()),
-        settingsRepo.settings,
-        repo.observeActivePlan(),
-    ) { values ->
-        val active = values[0] as ActiveSessionSummary?
-        val templates = values[1] as List<WorkoutTemplate>
-        val sessions = values[2] as List<SessionSummary>
-        val weekCount = values[3] as Int
-        val weekVolume = values[4] as Float
-        val settings = values[5] as AppSettings
-        val plan = values[6] as TrainingPlan?
-        HomeUiState(
-            activeSession = active,
-            templates = templates,
-            recentSessions = sessions.take(5),
-            weekSessionCount = weekCount,
-            weekVolume = weekVolume,
-            streakWeeks = computeStreak(sessions),
-            settings = settings,
-            weightUnitLabel = settings.weightUnit.label,
-            latestWeightKg = null,
-            plan = plan,
-        )
+    val uiState: StateFlow<HomeUiState> = weekAnchor.flatMapLatest { since ->
+        combine(
+            repo.observeActiveSession(),
+            repo.observeHomeTemplates(),
+            repo.observeHistory(),
+            repo.observeSessionCount(since),
+            repo.observeTotalVolume(since),
+            settingsRepo.settings,
+            repo.observeActivePlan(),
+        ) { values ->
+            val active = values[0] as ActiveSessionSummary?
+            val templates = values[1] as List<WorkoutTemplate>
+            val sessions = values[2] as List<SessionSummary>
+            val weekCount = values[3] as Int
+            val weekVolume = values[4] as Float
+            val settings = values[5] as AppSettings
+            val plan = values[6] as TrainingPlan?
+            HomeUiState(
+                activeSession = active,
+                templates = templates,
+                recentSessions = sessions.take(5),
+                weekSessionCount = weekCount,
+                weekVolume = weekVolume,
+                streakWeeks = computeStreak(sessions),
+                settings = settings,
+                weightUnitLabel = settings.weightUnit.label,
+                latestWeightKg = null,
+                plan = plan,
+            )
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 
     val latestWeightKg: StateFlow<Float?> = repo.observeLatestWeight()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** 连点「开始训练」会压两层训练页、各自跑一套计时器，所以只放行一次 */
+    private var starting = false
+
     fun startWorkout(templateId: Long?, onReady: (Long) -> Unit) {
+        if (starting) return
+        starting = true
         viewModelScope.launch {
-            val id = repo.startSession(templateId = templateId)
-            onReady(id)
+            runCatching { repo.startSession(templateId = templateId) }
+                .onSuccess { id ->
+                    onReady(id)
+                    starting = false
+                }
+                .onFailure { starting = false }
         }
     }
 

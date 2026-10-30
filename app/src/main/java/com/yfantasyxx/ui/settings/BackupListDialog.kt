@@ -71,14 +71,15 @@ fun BackupListDialog(
     // 待恢复确认的文件名（恢复会覆盖当前数据，必须确认）
     var pendingRestore by remember { mutableStateOf<String?>(null) }
 
-    // 打开时的基准时间：相对时间（3 小时前）按它算，避免每次重组都变
+    // 相对时间（3 小时前）用打开那一刻做基准，避免每次重组都变；
+    // 但「今天/昨天」的分组必须用实时时间：跨过零点后新备份不能被归到昨天
     val now = remember { System.currentTimeMillis() }
     val items = remember(state.remoteBackups) {
         state.remoteBackups
             .map { BackupItem(it) }
             .sortedByDescending { it.timestamp ?: Long.MIN_VALUE }
     }
-    val groups = remember(items, now) { groupItems(items, now) }
+    val groups = remember(items) { groupItems(items, System.currentTimeMillis()) }
     val latestName = items.firstOrNull()?.name
     val appSchema = state.appSchemaVersion
 

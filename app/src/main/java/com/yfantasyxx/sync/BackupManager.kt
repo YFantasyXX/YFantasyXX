@@ -7,8 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -28,20 +31,36 @@ data class BackupState(
 
 /**
  * 备份管理器：将 Room 数据库整库备份到 WebDAV，或从 WebDAV 恢复。
+ *
+ * @param onDatabaseInvalidated 恢复失败时通知容器「当前库实例不可用」，
+ *   让它重建一个能打开的实例；不传则不做补偿。
  */
 class BackupManager(
     private val context: Context,
     private val dbProvider: () -> AppDatabase,
+    private val onDatabaseInvalidated: () -> Unit = {},
 ) {
     private val _state = MutableStateFlow(BackupState())
     val state: StateFlow<BackupState> = _state.asStateFlow()
+
+    /**
+     * 备份 / 恢复互斥。
+     *
+     * 两条协程同时 checkpoint + 读文件时，拷到的可能是「写了一半」的库；
+     * 备份进行中恢复更糟：close() 正好插在 readBytes() 中间。
+     */
+    private val gate = Mutex()
 
     private val dbFile: File
         get() = context.getDatabasePath(AppDatabase.NAME)
 
     /** 立即备份到 WebDAV */
     suspend fun backup(client: WebDavClient): Result<String> = withContext(Dispatchers.IO) {
-        _state.value = _state.value.copy(running = true, message = null, isError = false)
+        if (!gate.tryLock()) {
+            return@withContext Result.failure(IOException("已有备份或恢复任务在进行，请稍候"))
+        }
+        try {
+        _state.update { it.copy(running = true, message = null, isError = false) }
         runCatching {
             client.ensureDirectory(WebDavClient.BACKUP_DIRECTORY).getOrThrow()
             val bytes = checkpointAndReadDb()
@@ -78,6 +97,9 @@ class BackupManager(
                 isError = true,
             )
         }
+        } finally {
+            gate.unlock()
+        }
     }
 
     /** 列出远端备份（按时间倒序，最新的在前） */
@@ -95,10 +117,20 @@ class BackupManager(
     /**
      * 从 WebDAV 恢复指定备份。
      * 恢复成功后需要重启应用进程才能让 Room 读到新文件。
+     *
+     * 写盘顺序是「临时文件 + fsync → 备份旧库 → 关库 → 替换」：
+     * 以前是「先关库再 writeBytes」，只要写文件这一步失败（空间不足、
+     * 权限、断电），App 就永远拿着一个已关闭的数据库，进任何页面都崩，
+     * 连「再恢复一次」都做不到。
      */
     suspend fun restore(client: WebDavClient, fileName: String): Result<Unit> =
         withContext(Dispatchers.IO) {
+            if (!gate.tryLock()) {
+                return@withContext Result.failure(IOException("已有备份或恢复任务在进行，请稍候"))
+            }
+            try {
             _state.value = _state.value.copy(running = true, message = null, isError = false)
+            var dbClosed = false
             runCatching {
                 val bytes = client.download("${WebDavClient.BACKUP_DIRECTORY}/$fileName").getOrThrow()
                 // 覆盖本地库前先验一下，避免把 HTML 错误页 / 半个文件写进去导致应用起不来
@@ -128,13 +160,37 @@ class BackupManager(
                             "要备份当前数据请先在当前版本里点「立即备份」。"
                     )
                 }
-                // 关闭当前数据库连接，先删 wal/shm，再覆盖 db 文件
-                dbProvider().close()
-                listOf("${AppDatabase.NAME}-wal", "${AppDatabase.NAME}-shm").forEach { suffix ->
-                    File(dbFile.parentFile, suffix).let { if (it.exists()) it.delete() }
-                }
+
                 dbFile.parentFile?.mkdirs()
-                dbFile.writeBytes(bytes)
+                // 1) 先写临时文件并 fsync：这一步失败时本地库一个字节都没动
+                val tmp = File(dbFile.parentFile, "${AppDatabase.NAME}.restore-tmp")
+                try {
+                    FileOutputStream(tmp).use { out ->
+                        out.write(bytes)
+                        out.flush()
+                        out.fd.sync()
+                    }
+                } catch (t: Throwable) {
+                    runCatching { tmp.delete() }
+                    throw IOException("写入临时文件失败（可能是空间不足），未改动现有数据", t)
+                }
+
+                // 2) 关库、备份旧库、替换。任何一步失败都要能回到可用状态
+                val backup = File(dbFile.parentFile, "${AppDatabase.NAME}.bak")
+                dbProvider().close()
+                dbClosed = true
+                try {
+                    if (dbFile.exists()) dbFile.copyTo(backup, overwrite = true)
+                    deleteSidecars()
+                    if (!tmp.renameTo(dbFile)) throw IOException("替换数据库文件失败")
+                } catch (t: Throwable) {
+                    runCatching { tmp.delete() }
+                    if (!dbFile.exists() && backup.exists()) {
+                        runCatching { backup.copyTo(dbFile, overwrite = true) }
+                    }
+                    throw t
+                }
+
                 _state.value = _state.value.copy(
                     running = false,
                     message = buildString {
@@ -147,11 +203,17 @@ class BackupManager(
                     },
                 )
             }.onFailure { e ->
+                // 关过库就必须给容器一个能用的实例，否则后续每个 DAO 调用都会
+                // 抛 already-closed，用户连设置页都进不去
+                if (dbClosed) runCatching { onDatabaseInvalidated() }
                 _state.value = _state.value.copy(
                     running = false,
                     message = "恢复失败：${e.message ?: "未知错误"}",
                     isError = true,
                 )
+            }
+            } finally {
+                gate.unlock()
             }
         }
 
@@ -170,9 +232,42 @@ class BackupManager(
         _state.value = _state.value.copy(message = null, isError = false)
     }
 
-    /** WAL checkpoint + 读取 db 文件，保证备份文件自包含 */
+    /** 删除主库旁边的 -wal / -shm / -journal：留着会让新库读到旧的未提交帧 */
+    private fun deleteSidecars() {
+        listOf("-wal", "-shm", "-journal").forEach { suffix ->
+            File(dbFile.parentFile, "${AppDatabase.NAME}$suffix")
+                .let { if (it.exists()) it.delete() }
+        }
+    }
+
+    /**
+     * 取一份能自包含还原的数据库快照。
+     *
+     * 首选 `VACUUM INTO`：它在事务内把当前库写成一个新文件，天然一致。
+     * 之前是「checkpoint 完再 readBytes()」——checkpoint 返回 busy=0 只能证明
+     * **那一刻**写回了，紧接着读文件的几百毫秒里 Room 完全可能开始新事务、
+     * 触发下一次 checkpoint，拷到的就是半新半旧的库。
+     *
+     * 老系统不支持 VACUUM INTO 时退回原来的 checkpoint + 整文件读取。
+     */
     private fun checkpointAndReadDb(): ByteArray {
         val db = dbProvider()
+        val snapshotFile = File(context.cacheDir, "backup-snapshot.db")
+        val viaVacuum = runCatching {
+            if (snapshotFile.exists() && !snapshotFile.delete()) {
+                throw IOException("旧的快照文件删不掉")
+            }
+            db.openHelper.writableDatabase.execSQL(
+                "VACUUM INTO '${snapshotFile.absolutePath.replace("'", "''")}'"
+            )
+            if (!snapshotFile.exists() || snapshotFile.length() <= 0L) {
+                throw IOException("快照文件为空")
+            }
+            snapshotFile.readBytes()
+        }.getOrNull()
+        runCatching { snapshotFile.delete() }
+        if (viaVacuum != null && looksLikeSqlite(viaVacuum)) return viaVacuum
+
         val helper = db.openHelper
         // Room 2.7+: openHelper.writableDatabase
         val sqlite = helper.writableDatabase
@@ -293,24 +388,35 @@ class BackupManager(
      */
     private fun countSessions(bytes: ByteArray): Int {
         val probe = File(context.cacheDir, "restore-probe.db")
+        // 探针库只读打开：读一次就扔，别给它留下 -wal/-journal
+        listOf("", "-wal", "-shm", "-journal").forEach {
+            runCatching { File(probe.path + it).delete() }
+        }
         return runCatching {
             probe.writeBytes(bytes)
             SQLiteDatabase.openDatabase(
                 probe.path,
                 null,
-                SQLiteDatabase.OPEN_READWRITE,
+                SQLiteDatabase.OPEN_READONLY,
             ).use { db ->
                 db.rawQuery("SELECT COUNT(*) FROM sessions", null).use { cursor ->
                     if (cursor.moveToFirst()) cursor.getInt(0) else -1
                 }
             }
-        }.getOrDefault(-1).also { runCatching { probe.delete() } }
+        }.getOrDefault(-1).also {
+            listOf("", "-wal", "-shm", "-journal").forEach { suffix ->
+                runCatching { File(probe.path + suffix).delete() }
+            }
+        }
     }
 
     private fun backupFileName(schemaVersion: Int): String {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        // 加毫秒：同一秒内点两次「立即备份」（或自动备份撞上手动备份）时，
+        // 文件名相同会被 PUT 静默覆盖，用户以为存了两份其实只有一份
+        val millis = String.format(Locale.US, "%03d", System.currentTimeMillis() % 1000)
         val suffix = if (schemaVersion > 0) "-v$schemaVersion" else ""
-        return "${WebDavClient.BACKUP_PREFIX}$stamp$suffix.db"
+        return "${WebDavClient.BACKUP_PREFIX}$stamp-$millis$suffix.db"
     }
 
     companion object {

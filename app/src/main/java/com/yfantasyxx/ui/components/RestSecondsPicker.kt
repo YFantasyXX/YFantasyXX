@@ -39,7 +39,8 @@ fun RestSecondsPickerDialog(
     /** 传入则显示「跟随全局」，用于清除动作的自定义时长 */
     onClear: (() -> Unit)? = null,
 ) {
-    val initialStep = (initialSeconds / REST_STEP_SECONDS).coerceIn(1, 20)
+    // 四舍五入到最近一档：100 秒落 105 而不是 90（整数除法会直接截断）
+    val initialStep = ((initialSeconds + REST_STEP_SECONDS / 2) / REST_STEP_SECONDS).coerceIn(1, 20)
     // 值不放在外部状态里：确定时直接从波轮读「眼睛看到的那一格」。
     // miuix 的 NumberPicker 要等惯性动画结束才回调，手一松就点确定会拿到旧值。
     val wheel = rememberWheelPickerState(1..20, initialStep)
@@ -99,7 +100,15 @@ fun RestSecondsPickerDialog(
                     ActionText(text = "取消", onClick = onDismiss)
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
-                        onConfirm(wheel.currentValue() * REST_STEP_SECONDS, saveAsDefault)
+                        val stepNow = wheel.currentValue()
+                        // 没动过波轮就原样返回：波轮只有 15 秒一档、最多 300 秒，
+                        // 老数据里的 100 秒 / 600 秒不该因为「打开看一眼再确定」被改写
+                        val seconds = if (stepNow == initialStep) {
+                            initialSeconds
+                        } else {
+                            stepNow * REST_STEP_SECONDS
+                        }
+                        onConfirm(seconds, saveAsDefault)
                     }) {
                         Text("确定", style = MiuixTheme.textStyles.button)
                     }

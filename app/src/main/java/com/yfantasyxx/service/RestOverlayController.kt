@@ -51,6 +51,9 @@ class RestOverlayController(private val context: Context) {
         /** 结束卡片停留时长：够长能注意到，又不至于一直赖在屏幕上 */
         private const val DONE_DISMISS_MS = 12_000L
 
+        /** 悬浮窗权限重新检查间隔 */
+        private const val PERMISSION_RECHECK_MS = 5_000L
+
         private const val COUNTDOWN_DP = 58f
         private const val DONE_WIDTH_DP = 236f
         private const val DONE_HEIGHT_DP = 108f
@@ -76,12 +79,23 @@ class RestOverlayController(private val context: Context) {
     private val handler = Handler(Looper.getMainLooper())
 
     /**
-     * 权限在控制器创建时确定一次。
+     * 权限缓存：5 秒内不重复问系统。
      *
-     * 每次 tick 都去问 `Settings.canDrawOverlays` 是一次跨进程调用，
-     * 一秒一次太浪费；权限通常不会在一轮休息的 90 秒里变化。
+     * 每次 tick 都问一次 `canDrawOverlays` 太浪费，但只问一次也不行：
+     * 用户可能在休息期间去系统设置里撤销/授予权限，缓存成永久值会让
+     * 「中途授权」不生效、「中途撤销」后每秒都试着 addView 失败。
      */
-    private val permitted: Boolean = canShow(context)
+    private var permitted: Boolean = canShow(context)
+    private var permittedCheckedAt: Long = System.currentTimeMillis()
+
+    private fun stillPermitted(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - permittedCheckedAt >= PERMISSION_RECHECK_MS) {
+            permitted = canShow(context)
+            permittedCheckedAt = now
+        }
+        return permitted
+    }
 
     private var view: OverlayView? = null
     private var params: WindowManager.LayoutParams? = null
@@ -91,7 +105,7 @@ class RestOverlayController(private val context: Context) {
 
     /** 显示/刷新倒计时气泡。返回是否真的显示出来了 */
     fun showCountdown(endTime: Long, totalSeconds: Int, label: String?): Boolean {
-        if (!permitted) return false
+        if (!stillPermitted()) return false
         val v = ensureView() ?: return false
         cancelDismiss()
         v.mode = MODE_COUNTDOWN
@@ -105,7 +119,7 @@ class RestOverlayController(private val context: Context) {
 
     /** 结束卡片。返回是否真的显示出来了 */
     fun showFinished(label: String?): Boolean {
-        if (!permitted) return false
+        if (!stillPermitted()) return false
         val v = ensureView() ?: return false
         v.mode = MODE_DONE
         v.label = label
@@ -164,7 +178,13 @@ class RestOverlayController(private val context: Context) {
             x = prefs.getInt(KEY_X, screenWidth - dp(COUNTDOWN_DP) - dp(12f))
             y = prefs.getInt(KEY_Y, dp(72f))
         }
-        if (runCatching { wm.addView(v, lp) }.isFailure) return null
+        if (runCatching { wm.addView(v, lp) }.isFailure) {
+            // 权限被撤销/被 ROM 拦下：把缓存置为 false 并记下时间，
+            // 下次重试推到 5 秒后，否则 tick 每秒都会新建一个 View 再抛一次异常
+            permitted = false
+            permittedCheckedAt = System.currentTimeMillis()
+            return null
+        }
         view = v
         params = lp
         v.startTicker()

@@ -318,7 +318,9 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
         when {
             // 首帧还没读到：先什么都不画，免得闪一下「记录已被删除」
             !loaded -> Unit
-            details.isEmpty() -> EmptyState(text = "记录不存在或已被删除", action = {
+            // 用 session 判断「记录是否存在」：details 为空也可能是
+            // 用户把动作全删光了，那时候记录还在，不能显示成「已被删除」
+            session == null -> EmptyState(text = "记录不存在或已被删除", action = {
                 ActionText(text = "返回", onClick = onBack)
             })
             else -> LazyColumn(

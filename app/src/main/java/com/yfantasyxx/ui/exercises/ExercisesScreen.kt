@@ -48,7 +48,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     val vm: ExercisesViewModel = viewModel(factory = ExercisesViewModel.factory(container))
     val exercises by vm.exercises.collectAsState()
     var showAdd by remember { mutableStateOf(false) }
-    var keyword by remember { mutableStateOf("") }
+    val keyword by vm.keyword.collectAsState()
     val category by vm.selectedCategory.collectAsState()
     val equipment by vm.selectedEquipment.collectAsState()
     val categories by vm.categories.collectAsState()
@@ -75,10 +75,7 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
             // 搜索框
             TextField(
                 value = keyword,
-                onValueChange = {
-                    keyword = it
-                    vm.setKeyword(it)
-                },
+                onValueChange = { vm.setKeyword(it) },
                 label = "搜索动作名称或部位",
                 singleLine = true,
                 leadingIcon = {

@@ -3,7 +3,6 @@ package com.yfantasyxx.data
 import com.yfantasyxx.data.db.ActiveSessionSummary
 import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.data.db.BodyMetric
-import com.yfantasyxx.data.db.BucketVolume
 import com.yfantasyxx.data.db.CategoryVolume
 import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.ExercisePr
@@ -11,6 +10,7 @@ import com.yfantasyxx.data.db.PlanDay
 import com.yfantasyxx.data.db.PlanEntity
 import com.yfantasyxx.data.db.SessionExercise
 import com.yfantasyxx.data.db.SessionExerciseWithSets
+import com.yfantasyxx.data.db.SessionVolumeRow
 import com.yfantasyxx.data.db.SessionSummary
 import com.yfantasyxx.data.db.SetLog
 import com.yfantasyxx.data.db.TemplateExercise
@@ -45,15 +45,18 @@ data class ExerciseHistoryEntry(
 /**
  * 统一数据仓库：动作库 / 模板 / 训练记录 / 身体数据
  */
-class WorkoutRepository(private val db: AppDatabase) {
+class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
 
-    private val exerciseDao = db.exerciseDao()
-    private val templateDao = db.templateDao()
-    private val sessionDao = db.sessionDao()
-    private val sessionExerciseDao = db.sessionExerciseDao()
-    private val setLogDao = db.setLogDao()
-    private val bodyMetricDao = db.bodyMetricDao()
-    private val planDao = db.planDao()
+    /** 每次按当前库取实例：恢复备份会重建 AppDatabase，缓存 DAO 会指向已关闭的库 */
+    private val db: AppDatabase get() = dbProvider()
+
+    private val exerciseDao get() = db.exerciseDao()
+    private val templateDao get() = db.templateDao()
+    private val sessionDao get() = db.sessionDao()
+    private val sessionExerciseDao get() = db.sessionExerciseDao()
+    private val setLogDao get() = db.setLogDao()
+    private val bodyMetricDao get() = db.bodyMetricDao()
+    private val planDao get() = db.planDao()
 
     // ---------- 统计数据的失效信号 ----------
 
@@ -176,7 +179,22 @@ class WorkoutRepository(private val db: AppDatabase) {
         exerciseDao.update(exercise.copy(pattern = pattern.value))
     }
 
-    suspend fun deleteCustomExercise(id: Long) = exerciseDao.deleteCustom(id)
+    /**
+     * 删除自定义动作。
+     *
+     * 练过（有 set_logs）的动作只归档，不真删：硬删会顺着外键 CASCADE
+     * 把历史训练里的这个动作和它的每一组一起抹掉，容量/PR/曲线全变。
+     * 返回 true 表示「练过，已归档」，界面可以据此换个说法。
+     */
+    suspend fun deleteCustomExercise(id: Long): Boolean = db.withTransaction {
+        if (exerciseDao.setCountOfExercise(id) > 0) {
+            exerciseDao.archiveCustom(id)
+            true
+        } else {
+            exerciseDao.deleteCustom(id)
+            false
+        }
+    }
 
     /** 首次启动写入种子数据；老版本升级补齐新增的内置动作 */
     suspend fun seedIfEmpty() = seedMissing()
@@ -458,10 +476,21 @@ class WorkoutRepository(private val db: AppDatabase) {
     suspend fun moveTemplate(templateId: Long, folderId: Long?, order: Int) =
         templateDao.updateTemplatePlacement(templateId, folderId, order)
 
-    /** 批量重排某分组内的模板顺序 */
+    /** 某分组末尾的下一个 sortOrder（分组不存在 / 为空时是 0） */
+    suspend fun nextTemplateOrder(folderId: Long?): Int =
+        templateDao.nextSortOrder(folderId)
+
+    /**
+     * 批量重排某分组内的模板顺序。
+     *
+     * 必须包在一个事务里：N 条独立 UPDATE 会让 Room 发出 N 次失效通知，
+     * 拖动过程中界面会收到「写了一半」的中间顺序，卡片来回跳。
+     */
     suspend fun reorderTemplates(folderId: Long?, orderedIds: List<Long>) {
-        orderedIds.forEachIndexed { index, id ->
-            templateDao.updateTemplatePlacement(id, folderId, index)
+        db.withTransaction {
+            orderedIds.forEachIndexed { index, id ->
+                templateDao.updateTemplatePlacement(id, folderId, index)
+            }
         }
     }
 
@@ -623,19 +652,17 @@ class WorkoutRepository(private val db: AppDatabase) {
         weightKg: Float = 0f,
         reps: Int = 0,
         completed: Boolean = false,
-    ): Long {
-        val n = setLogDao.maxSetNumber(sessionExerciseId) + 1
-        val id = setLogDao.insert(
-            SetLog(
-                sessionExerciseId = sessionExerciseId,
-                setNumber = n,
-                weightKg = weightKg,
-                reps = reps,
-                completed = completed,
-            )
+    ) {
+        // 组号由 SQL 在插入时算（appendSet），避免 MAX+1 与 INSERT 之间
+        // 被另一次点击插进同号组
+        setLogDao.appendSet(
+            sessionExerciseId = sessionExerciseId,
+            weightKg = weightKg,
+            reps = reps,
+            completed = completed,
+            loggedAt = System.currentTimeMillis(),
         )
         if (completed) invalidateStats()
-        return id
     }
 
     suspend fun updateSet(log: SetLog) {
@@ -753,8 +780,9 @@ class WorkoutRepository(private val db: AppDatabase) {
 
     // ---------- 统计 ----------
 
-    suspend fun volumeByWeek(since: Long, weekMs: Long = 7L * 24 * 3600 * 1000): List<BucketVolume> =
-        sessionDao.volumeByWeek(since, weekMs)
+    /** 近 N 天每场训练的容量（未分桶，按周归桶交给界面用本地日历做） */
+    suspend fun sessionVolumes(since: Long): List<SessionVolumeRow> =
+        sessionDao.sessionVolumeRows(since)
 
     suspend fun volumeByCategory(since: Long): List<CategoryVolume> =
         sessionDao.volumeByCategory(since)

@@ -28,6 +28,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
 /**
@@ -146,8 +147,13 @@ internal class DampedDragAnimation(
             // 先等位置弹簧走完再缩小，否则药丸会在半路「瘪」下去
             if (value != targetValue) {
                 val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
-                snapshotFlow { valueAnimation.value }
-                    .first { abs(it - valueAnimation.targetValue) < threshold }
+                // 加超时兜底：目标动画可能被 animateToValue 的 mutate 取消掉，
+                // 那时 value 不再变化，这个 first 会一直挂到页面销毁，
+                // 同时缩放/阴影永远不收回
+                withTimeoutOrNull(1_200) {
+                    snapshotFlow { valueAnimation.value }
+                        .first { abs(it - valueAnimation.targetValue) < threshold }
+                }
             }
             launch { pressProgressAnimation.animateTo(0f, pressAnimationSpec) }
             launch { scaleXAnimation.animateTo(initialScale, scaleXAnimationSpec) }

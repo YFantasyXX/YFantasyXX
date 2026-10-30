@@ -37,7 +37,6 @@ class StatsViewModel(
     settingsRepo: SettingsRepository,
 ) : ViewModel() {
 
-    private val weekMs = 7L * 24 * 3600 * 1000
     private val dayMs = 24L * 3600 * 1000
     private val dateFormat = SimpleDateFormat("M/d", Locale.CHINA)
 
@@ -79,12 +78,14 @@ class StatsViewModel(
         )
     }
 
-    /** 近 8 周训练容量 */
+    /**
+     * 近 8 周训练容量。
+     *
+     * SQL 只回「每场训练的开始时间 + 容量」，周归属在这里按**本地日历**算：
+     * 以前 SQL 用 `(startTime / weekMs) * weekMs` 分桶，桶边界在 UTC 周四，
+     * 与界面用的「本地周一」永远对不上，整张图因此一直是空的。
+     */
     private suspend fun buildWeekBuckets(): List<Pair<String, Float>> {
-        val since = System.currentTimeMillis() - 8 * weekMs
-        val raw = repo.volumeByWeek(since)
-        val byBucket = raw.associate { it.bucket to it.volume }
-
         val cal = Calendar.getInstance().apply {
             firstDayOfWeek = Calendar.MONDAY
             set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
@@ -94,8 +95,30 @@ class StatsViewModel(
             set(Calendar.MILLISECOND, 0)
         }
         val thisMonday = cal.timeInMillis
+        // 用日历往前推，不用「减 7×24h」：夏令时地区减毫秒会落到周日 23:00，
+        // 那一周的柱子又变成 0
+        fun mondayBefore(weeks: Int): Long = Calendar.getInstance().apply {
+            timeInMillis = thisMonday
+            add(Calendar.DAY_OF_YEAR, -7 * weeks)
+        }.timeInMillis
+
+        // 多取一周，避免最早那一周正好落在边界上被漏掉
+        val raw = repo.sessionVolumes(mondayBefore(9))
+        val byBucket = HashMap<Long, Float>()
+        raw.forEach { row ->
+            val monday = Calendar.getInstance().apply {
+                firstDayOfWeek = Calendar.MONDAY
+                timeInMillis = row.startTime
+                set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            byBucket[monday] = (byBucket[monday] ?: 0f) + row.volume
+        }
         return (0 until 8).map { i ->
-            val ts = thisMonday - (7 - i) * weekMs
+            val ts = mondayBefore(7 - i)
             dateFormat.format(Date(ts)) to (byBucket[ts] ?: 0f)
         }
     }

@@ -700,13 +700,18 @@ fun SettingsScreen(
     }
 }
 
-/** 实时读取屏幕当前刷新率（滚动/静止时可能不同） */
+/**
+ * 屏幕当前刷新率。
+ *
+ * 以前是 `while(true) { … delay(800) }` 轮询：只要页面还在组合，就永远每 800ms
+ * 读一次 display 并写一次状态，白白产生重组；改成读一次 + 监听显示变化。
+ */
 @Composable
 private fun rememberDisplayRefreshRate(): Float {
     val context = LocalContext.current
     var rate by remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        while (true) {
+    androidx.compose.runtime.DisposableEffect(context) {
+        fun read() {
             runCatching {
                 val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     context.display
@@ -717,8 +722,16 @@ private fun rememberDisplayRefreshRate(): Float {
                 }
                 rate = display?.refreshRate ?: 0f
             }
-            delay(800)
         }
+        read()
+        val dm = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+        val listener = object : android.hardware.display.DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+            override fun onDisplayChanged(displayId: Int) = read()
+        }
+        dm?.registerDisplayListener(listener, null)
+        onDispose { dm?.unregisterDisplayListener(listener) }
     }
     return rate
 }

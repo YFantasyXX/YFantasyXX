@@ -3,7 +3,7 @@ package com.yfantasyxx.sync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.Credentials
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -50,15 +50,36 @@ class WebDavClient(
     username: String,
     password: String,
 ) {
+    /** 只对本服务器发凭据：重定向到第三方主机时绝不能把 Basic Auth 带过去 */
+    private val authHost: String? = runCatching {
+        baseUrl.toHttpUrlOrNull()?.host
+    }.getOrNull()
+
+    /**
+     * Basic 凭据，显式 UTF-8。
+     *
+     * OkHttp 的 `Credentials.basic()` 默认 ISO-8859-1，用户名/密码里有中文
+     * 会被替换成 `?`，结果永远是 401，而且提示只会说「请检查用户名和密码」。
+     */
+    private val authHeader: String = run {
+        val raw = "$username:$password".toByteArray(Charsets.UTF_8)
+        "Basic " + android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val request = chain.request().newBuilder()
-                .header("Authorization", Credentials.basic(username, password))
-                .build()
-            chain.proceed(request)
+            val request = chain.request()
+            // 重定向后 host 会变；只有同一主机才加 Authorization
+            if (authHost != null && request.url.host == authHost) {
+                chain.proceed(
+                    request.newBuilder().header("Authorization", authHeader).build()
+                )
+            } else {
+                chain.proceed(request)
+            }
         }
         .build()
 
@@ -95,8 +116,10 @@ class WebDavClient(
                     .method("MKCOL", EMPTY_BODY)
                     .build()
                 client.newCall(request).execute().use { response ->
-                    // 405 = 已存在，正常
-                    if (response.code != 201 && response.code != 405) {
+                    // 201 = 新建；405 = 已存在；200/204 = 部分服务器对已存在目录的直接回应
+                    if (response.code != 201 && response.code != 405 &&
+                        response.code != 200 && response.code != 204
+                    ) {
                         throw IOException("创建目录失败(${response.code})：${response.message}")
                     }
                 }

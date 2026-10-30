@@ -211,12 +211,12 @@ fun LiquidGlassBottomBar(
                     // 偏出去最多 3dp，药丸跟着一起偏——手感上就是「总偏右」。
                     val overshoot = raw - clamped
                     if (overshoot != 0f) {
-                        scope.launch {
-                            rubberOffset.snapTo(
-                                (rubberOffset.value + overshoot * tabWidthPx)
-                                    .coerceIn(-rubberLimitPx, rubberLimitPx)
-                            )
-                        }
+                        // 先把目标算出来再 launch：以前把加法写在协程里，
+                        // 快速连续拖动时每个协程读到的都是「已经被改过」的值，
+                        // 回弹位移会叠加，一次猛拖能偏出很远
+                        val next = (rubberOffset.value + overshoot * tabWidthPx)
+                            .coerceIn(-rubberLimitPx, rubberLimitPx)
+                        scope.launch { rubberOffset.snapTo(next) }
                     }
                 }
             },

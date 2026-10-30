@@ -124,8 +124,25 @@ class SettingsViewModel(
     }
 
     /** 输入框有内容就按输入框来，否则用已保存的配置 */
-    private fun resolveClient(url: String, user: String, pass: String): WebDavClient? =
-        clientFor(url, user, pass) ?: client(settings.value)
+    /**
+     * 输入框优先，缺失的字段才回退到已保存配置。
+     *
+     * 以前是「url 或 user 有一个为空就整体回退」：用户把用户名清空、
+     * 只改了地址时，备份会静默发到**旧服务器**，还以为传到了新地址。
+     * 另外地址换了就绝不沿用旧密码——那是把凭据发给另一台机器。
+     */
+    private fun resolveClient(url: String, user: String, pass: String): WebDavClient? {
+        val saved = settings.value
+        val inputUrl = url.trim()
+        val sameServer = inputUrl.isBlank() || inputUrl == saved.webdavUrl.trim()
+        val finalUrl = inputUrl.ifBlank { saved.webdavUrl.trim() }
+        val finalUser = user.trim().ifBlank {
+            if (sameServer) saved.webdavUsername.trim() else ""
+        }
+        val finalPass = pass.ifEmpty { if (sameServer) saved.webdavPassword else "" }
+        if (finalUrl.isBlank() || finalUser.isBlank()) return null
+        return WebDavClient(finalUrl, finalUser, finalPass)
+    }
 
     fun backupNow(url: String = "", user: String = "", pass: String = "") {
         viewModelScope.launch {
@@ -163,11 +180,13 @@ class SettingsViewModel(
             // 失败（版本不符 / 空库 / 下载失败）时绝不能重建库再杀进程，
             // 否则用户只看到弹窗被关掉，错误信息一个字都看不到
             if (result.isFailure) return@launch
-            // 恢复成功后重建数据库实例
-            container.rebuildDatabase()
+            // 恢复成功后重建数据库实例。
+            // WorkoutRepository 现在按 provider 取库，重建之后所有 DAO 都指向新文件；
+            // 这一步失败也不能崩，下面照样重启进程
+            runCatching { container.rebuildDatabase() }
             onRestored()
-            // 各 Repository 仍持有旧数据库实例，无法通过 Flow 刷新，
-            // 直接重启进程让所有数据源重新加载（消息已提示"恢复成功"）
+            // 各界面已有的 Flow 仍挂在旧实例上，没法热切换，
+            // 留一点时间让提示显示出来，然后直接重启进程
             delay(700)
             android.os.Process.killProcess(android.os.Process.myPid())
         }

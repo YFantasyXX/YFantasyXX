@@ -55,6 +55,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.WindowInsets
 import top.yukonga.miuix.kmp.basic.Surface
+import java.util.Locale
 
 /** 页面分组标题 */
 @Composable
@@ -565,9 +566,11 @@ fun StatCard(
 
 /** 格式化容量显示，如 12.5k */
 fun formatVolume(kg: Float): String = when {
-    kg >= 100000 -> String.format("%.1fw", kg / 10000)
-    kg >= 10000 -> String.format("%.1fw", kg / 1000)
-    kg >= 1000 -> String.format("%.1fk", kg / 1000)
+    kg >= 100000 -> String.format(Locale.CHINA, "%.1fw", kg / 10000)
+    // 一万到十万也是「万」，除的必须是 10000：以前这里写的 1000，
+    // 50000 kg 会显示成 50.0w（等于说成 50 万），跨过 10 万又突然变小
+    kg >= 10000 -> String.format(Locale.CHINA, "%.1fw", kg / 10000)
+    kg >= 1000 -> String.format(Locale.CHINA, "%.1fk", kg / 1000)
     else -> kg.toInt().toString()
 }
 

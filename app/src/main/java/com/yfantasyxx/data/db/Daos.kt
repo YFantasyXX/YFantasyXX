@@ -78,6 +78,26 @@ interface ExerciseDao {
     @Query("DELETE FROM exercises WHERE id = :id AND isCustom = 1")
     suspend fun deleteCustom(id: Long)
 
+    /**
+     * 归档（软删除）自定义动作。
+     *
+     * 硬删会顺着 session_exercises / set_logs 的 CASCADE 把历史训练记录一起带走，
+     * 容量、PR、e1RM 曲线全跟着变——用户以为只是删了个动作条目。
+     * 练过的动作只能归档：动作库里不再出现，历史记录原样保留。
+     */
+    @Query("UPDATE exercises SET archived = 1 WHERE id = :id AND isCustom = 1")
+    suspend fun archiveCustom(id: Long)
+
+    /** 这个动作在历史里有多少组记录（决定「真删」还是「归档」） */
+    @Query(
+        """
+        SELECT COUNT(*) FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        WHERE se.exerciseId = :exerciseId
+        """
+    )
+    suspend fun setCountOfExercise(exerciseId: Long): Int
+
     @Query("SELECT * FROM exercises WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<Long>): List<Exercise>
 
@@ -132,6 +152,10 @@ interface TemplateDao {
 
     @Query("UPDATE templates SET folderId = :folderId, sortOrder = :order WHERE id = :id")
     suspend fun updateTemplatePlacement(id: Long, folderId: Long?, order: Int)
+
+    /** 该分组末尾的下一个 sortOrder；空分组返回 0 */
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM templates WHERE folderId IS :folderId")
+    suspend fun nextSortOrder(folderId: Long?): Int
 
     /** 首页只显示：未分组模板 + 勾选了「显示在首页」的文件夹内模板 */
     @Query(
@@ -316,19 +340,26 @@ interface SessionDao {
 
     // ---- 统计 ----
 
-    /** 近 N 天每周训练容量（毫秒时间戳起） */
+    /**
+     * 近 N 天每场训练的容量（不做分桶）。
+     *
+     * 以前是在 SQL 里 `(startTime / weekMs) * weekMs` 分桶，桶边界是
+     * 1970-01-01（周四）起每 7 天，而界面按「本地时区周一」去查，
+     * 两边永远对不上 —— 「近 8 周容量」因此长期是空图。
+     * 分桶改由 Kotlin 按本地日历做，SQL 只回原始行。
+     */
     @Query(
         """
-        SELECT (s.startTime / :weekMs) * :weekMs AS bucket, SUM(sl.weightKg * sl.reps) AS volume
+        SELECT s.startTime AS startTime, SUM(sl.weightKg * sl.reps) AS volume
         FROM sessions s
         INNER JOIN session_exercises se ON se.sessionId = s.id
         INNER JOIN set_logs sl ON sl.sessionExerciseId = se.id
         WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
           AND s.startTime >= :since
-        GROUP BY bucket ORDER BY bucket
+        GROUP BY s.id ORDER BY s.startTime
         """
     )
-    suspend fun volumeByWeek(since: Long, weekMs: Long): List<BucketVolume>
+    suspend fun sessionVolumeRows(since: Long): List<SessionVolumeRow>
 
     /** 近 N 天各分类容量 */
     @Query(
@@ -576,6 +607,12 @@ data class BucketVolume(
     val volume: Float,
 )
 
+/** 一场训练的开始时间与总容量（周容量在 Kotlin 侧按本地周一归桶） */
+data class SessionVolumeRow(
+    val startTime: Long,
+    val volume: Float,
+)
+
 @Dao
 interface SessionExerciseDao {
     @Insert
@@ -657,6 +694,30 @@ interface SetLogDao {
 
     @Query("SELECT COALESCE(MAX(setNumber), 0) FROM set_logs WHERE sessionExerciseId = :sessionExerciseId")
     suspend fun maxSetNumber(sessionExerciseId: Long): Int
+
+    /**
+     * 追加一组，组号由 SQL 在同一条语句里算出来。
+     *
+     * `MAX(setNumber)+1` 再 `INSERT` 是两次调用、中间有挂起点：
+     * 连点两下会各自读到同一个 max，插出两条同号组，后面的
+     * 「复制上一组」「套用历史」按组号对齐就会错位。
+     */
+    @Query(
+        """
+        INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, completed, isWarmup, isPr, loggedAt)
+        SELECT :sessionExerciseId,
+               COALESCE(MAX(setNumber), 0) + 1,
+               :weightKg, :reps, :completed, 0, 0, :loggedAt
+        FROM set_logs WHERE sessionExerciseId = :sessionExerciseId
+        """
+    )
+    suspend fun appendSet(
+        sessionExerciseId: Long,
+        weightKg: Float,
+        reps: Int,
+        completed: Boolean,
+        loggedAt: Long,
+    )
 }
 
 @Dao

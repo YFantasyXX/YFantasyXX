@@ -45,10 +45,18 @@ data class PlateSolution(
  */
 object PlateMath {
 
+    /** 最小的合理杠铃片（kg）。比它还小的配置一律当输入错误丢掉 */
+    private const val MIN_PLATE_KG = 0.25f
+
+    /** 单侧同档最多挂几片：物理上 20 片 25 kg 已经是 500 kg/侧，够用了 */
+    private const val MAX_PLATES_PER_SIDE = 20
+
     /** 解析「25,20,15」这类配置，去重降序 */
     fun parsePlates(csv: String): List<Float> = csv.split(',', '，', ' ')
         .mapNotNull { it.trim().toFloatOrNull() }
-        .filter { it > 0f }
+        // 下限不能省：0.001 这种值会命中下面 solve 的 while，一路减到 3 万片；
+        // 比 float 精度还小的值（1e-9）减完 rest 不变，直接死循环在主线程上
+        .filter { it >= MIN_PLATE_KG && it <= 100f }
         .distinct()
         .sortedDescending()
 
@@ -61,9 +69,12 @@ object PlateMath {
         var rest = perSideTarget
         plates.sortedDescending().forEach { plate ->
             // 用 while 是允许同一档挂多片（现实里你有多对 25）
-            while (rest + 1e-4f >= plate) {
+            // 但要有上限：真挂 20 片 25 kg 已经是 500 kg/侧，再循环就没有意义了
+            var count = 0
+            while (rest + 1e-4f >= plate && count < MAX_PLATES_PER_SIDE) {
                 picked += plate
                 rest -= plate
+                count++
             }
         }
         val actual = barKg + picked.sum() * 2f

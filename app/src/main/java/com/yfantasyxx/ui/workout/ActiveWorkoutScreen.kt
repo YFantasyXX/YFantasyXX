@@ -20,7 +20,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -89,8 +88,6 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     }
     // 每个动作的收纳状态（收起组数，方便拖动排序）
     val collapsedIds = remember { mutableStateMapOf<Long, Boolean>() }
-    // 拖动期间要拿到最新的动作顺序（而不是手势启动那一刻的快照）
-    val latestExercises by rememberUpdatedState(exercises)
     // 列表状态：拖动时用它读各 item 的真实布局位置（官方数据源，比自记坐标可靠）
     val listState = rememberLazyListState()
     // 只按 listState 记忆：把 haptics 也写进 key 的话，
@@ -130,19 +127,23 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         //    这三件事分开到两帧，中间那帧就是「新布局 + 旧位移」或者
         //    「旧布局 + 新位移」，卡片会猛地跳一格。
         val moved = plan.to != plan.from
+        // 本次落位后要提交给 ViewModel 的 id 顺序
+        var droppedIds: List<Long>? = null
         if (moved) {
-            val ids = latestExercises.map { it.sessionExercise.id }.toMutableList()
-            ids.add(plan.to, ids.removeAt(plan.from))
-            localOrderIds = ids
+            // 基准必须是「显示顺序」：上一次落库可能还没回声，
+            // 此时库里的顺序和屏幕上看到的并不一样，用库顺序做基准会换错位置
+            val ids = displayExercises.map { it.sessionExercise.id }.toMutableList()
+            if (plan.from in ids.indices && plan.to in ids.indices) {
+                ids.add(plan.to, ids.removeAt(plan.from))
+                localOrderIds = ids
+                droppedIds = ids
+            }
         }
         drag.endPhase()
         drag.offsetY = 0f
 
         // 3) 落库（异步，界面已用临时顺序顶上了）
-        if (moved) {
-            vm.moveExerciseLocal(plan.from, plan.to)
-            vm.persistExerciseOrder()
-        }
+        droppedIds?.let { vm.applyExerciseOrder(it) }
 
         // 4) 拎起态（放大 / 阴影 / 描边）晚两帧再撤。
         //    换序后 item 的组合会重建（key 换了槽位），如果同一帧就把
@@ -189,6 +190,14 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         if (ids == exercises.map { it.sessionExercise.id }) {
             localOrderIds = null
         }
+    }
+
+    // 兜底：落库失败时数据库顺序永远不会追上，临时顺序不能一直挂着，
+    // 否则屏幕顺序与库里的顺序永久分叉，越拖越乱
+    LaunchedEffect(localOrderIds) {
+        val ids = localOrderIds ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(2500)
+        if (localOrderIds == ids) localOrderIds = null
     }
 
     // 顶部副标题：动作数旁边直接报「已完成 x/y 组」，

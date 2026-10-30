@@ -173,7 +173,16 @@ fun HistoryScreen(onOpenSession: (Long) -> Unit) {
                         sessionsByDate = sessionsByDate,
                         selectedDate = selectedDate,
                         onSelectDate = { selectedDate = it },
-                        onMonthChange = { month = it },
+                        onMonthChange = { next ->
+                            month = next
+                            // 选中日跟着落到目标月，否则日历翻到 11 月、
+                            // 下面还在显示「10月30日」的记录
+                            selectedDate = when {
+                                YearMonth.from(selectedDate) == next -> selectedDate
+                                next == YearMonth.now() -> LocalDate.now()
+                                else -> next.atDay(1)
+                            }
+                        },
                     )
 
                     Spacer(Modifier.height(16.dp))

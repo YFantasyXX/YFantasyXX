@@ -40,59 +40,54 @@ class AppContainer(context: Context) {
     private var database: AppDatabase? = null
 
     fun db(): AppDatabase = database ?: synchronized(this) {
-        database ?: androidx.room.Room
-            .databaseBuilder(appContext, AppDatabase::class.java, AppDatabase.NAME)
-            .addMigrations(
-                AppDatabase.MIGRATION_1_2,
-                AppDatabase.MIGRATION_2_3,
-                AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6,
-                AppDatabase.MIGRATION_6_7,
-                AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9,
-                AppDatabase.MIGRATION_9_10,
-                AppDatabase.MIGRATION_10_11,
-                AppDatabase.MIGRATION_11_12,
-                AppDatabase.MIGRATION_12_13,
-                AppDatabase.MIGRATION_13_14,
-                AppDatabase.MIGRATION_14_15,
-            )
-            // 迁移链已验证到 v15；这里保留兜底只为「宁可少几列也别打不开」，
-            // 参数 false = 只清 Room 自己管理的表，行为与旧无参版一致
-            .fallbackToDestructiveMigration(false)
-            .build()
-            .also { database = it }
+        database ?: createDatabase().also { database = it }
     }
+
+    /** 建库：迁移链集中在一处，db() 与 rebuildDatabase() 才不会走偏 */
+    private fun createDatabase(): AppDatabase = androidx.room.Room
+        .databaseBuilder(appContext, AppDatabase::class.java, AppDatabase.NAME)
+        .addMigrations(
+            AppDatabase.MIGRATION_1_2,
+            AppDatabase.MIGRATION_2_3,
+            AppDatabase.MIGRATION_3_4,
+            AppDatabase.MIGRATION_4_5,
+            AppDatabase.MIGRATION_5_6,
+            AppDatabase.MIGRATION_6_7,
+            AppDatabase.MIGRATION_7_8,
+            AppDatabase.MIGRATION_8_9,
+            AppDatabase.MIGRATION_9_10,
+            AppDatabase.MIGRATION_10_11,
+            AppDatabase.MIGRATION_11_12,
+            AppDatabase.MIGRATION_12_13,
+            AppDatabase.MIGRATION_13_14,
+            AppDatabase.MIGRATION_14_15,
+        )
+        // 迁移链已验证到 v15；这里保留兜底只为「宁可少几列也别打不开」，
+        // 参数 false = 只清 Room 自己管理的表，行为与旧无参版一致
+        .fallbackToDestructiveMigration(false)
+        .build()
 
     /** 恢复备份后需要重建数据库实例 */
     fun rebuildDatabase(): AppDatabase = synchronized(this) {
         database?.close()
-        database = androidx.room.Room
-            .databaseBuilder(appContext, AppDatabase::class.java, AppDatabase.NAME)
-            .addMigrations(
-                AppDatabase.MIGRATION_1_2,
-                AppDatabase.MIGRATION_2_3,
-                AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6,
-                AppDatabase.MIGRATION_6_7,
-                AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9,
-                AppDatabase.MIGRATION_9_10,
-                AppDatabase.MIGRATION_10_11,
-                AppDatabase.MIGRATION_11_12,
-                AppDatabase.MIGRATION_12_13,
-                AppDatabase.MIGRATION_13_14,
-                AppDatabase.MIGRATION_14_15,
-            )
-            // 与 db() 一致：备份恢复后重建同样保留兜底
-            .fallbackToDestructiveMigration(false)
-            .build()
-        database!!
+        createDatabase().also { database = it }
     }
 
-    val workoutRepository: WorkoutRepository by lazy { WorkoutRepository(db()) }
+    /**
+     * 仓库不再持有 DAO 实例，而是每次按当前库取。
+     *
+     * 恢复备份会 close() 旧库并重建，如果 DAO 是构造时缓存的字段，
+     * 之后所有写入都会打在已关闭的库上（`attempt to re-open an already-closed object`）。
+     */
+    val workoutRepository: WorkoutRepository by lazy { WorkoutRepository { db() } }
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(appContext) }
-    val backupManager: BackupManager by lazy { BackupManager(appContext) { db() } }
+    val backupManager: BackupManager by lazy {
+        BackupManager(
+            context = appContext,
+            dbProvider = { db() },
+            // 恢复失败时旧库已经 close 过，必须在这里换一个能打开的实例，
+            // 否则后面每个 DAO 调用都会抛 already-closed
+            onDatabaseInvalidated = { rebuildDatabase() },
+        )
+    }
 }

@@ -17,11 +17,18 @@ class RestAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val snapshot = RestTimerStore.snapshot(context)
-        // 还在计时中说明是提前唤醒，忽略
-        if (snapshot.running) return
-        // 没有计时记录 / 已经过去太久，说明是残留闹钟，忽略
         if (snapshot.endTime == 0L) return
-        if (System.currentTimeMillis() - snapshot.endTime > 120_000L) return
+        val now = System.currentTimeMillis()
+        // 提前唤醒（四舍五入到整秒时可能早 1 秒）：把闹钟重设一次，
+        // 不能直接 return —— 那样这一轮提醒就彻底没了
+        if (now < snapshot.endTime) {
+            RestAlarmScheduler.schedule(context, snapshot.endTime)
+            return
+        }
+        // 只有「晚到半天以上」才当成残留闹钟。
+        // 以前卡的是 2 分钟：没有精确闹钟权限时走的是 setAndAllowWhileIdle，
+        // Doze 下晚几分钟是常态，于是提醒被整条丢掉，用户什么都没听到
+        if (now - snapshot.endTime > 12 * 60 * 60 * 1000L) return
 
         RestTimerStore.clear(context)
         RestAlarmScheduler.cancel(context)

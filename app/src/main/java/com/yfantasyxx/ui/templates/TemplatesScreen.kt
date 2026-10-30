@@ -808,8 +808,12 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
 
     if (showPicker) {
         var keyword by remember { mutableStateOf("") }
-        val list by container.workoutRepository.observeExercises(keyword, null)
-            .collectAsState(initial = emptyList())
+        // 必须 remember：Room 的 observeXxx() 每次调用都生成新的 Flow，
+        // 直接写进 collectAsState 会让每次重组都重新注册观察者、重跑查询
+        val exerciseFlow = remember(keyword) {
+            container.workoutRepository.observeExercises(keyword, null)
+        }
+        val list by exerciseFlow.collectAsState(initial = emptyList())
         AppDialog(
             title = "选择动作",
             fullWidth = true,

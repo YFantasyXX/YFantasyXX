@@ -5,12 +5,17 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
 enum class ThemeMode(val value: Int) {
     SYSTEM(0), LIGHT(1), DARK(2);
@@ -113,26 +118,34 @@ class SettingsRepository(private val context: Context) {
         val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
     }
 
-    val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
-        AppSettings(
-            themeMode = ThemeMode.from(prefs[Keys.THEME_MODE]?.toIntOrNull() ?: 0),
-            weightUnit = WeightUnit.from(prefs[Keys.WEIGHT_UNIT]),
-            restSeconds = (prefs[Keys.REST_SECONDS] ?: 90L).toInt(),
-            webdavUrl = prefs[Keys.WEBDAV_URL] ?: "",
-            webdavUsername = prefs[Keys.WEBDAV_USER] ?: "",
-            webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
-            autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
-            lastBackupTime = prefs[Keys.LAST_BACKUP],
-            bottomBarStyle = BottomBarStyle.from(prefs[Keys.BOTTOM_BAR_STYLE]),
-            blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
-            tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
-            barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
-            plates = prefs[Keys.PLATES] ?: "25,20,15,10,5,2.5,1.25",
-            weeklyGoal = (prefs[Keys.WEEKLY_GOAL] ?: 0L).toInt(),
-            restOverlay = prefs[Keys.REST_OVERLAY] ?: true,
-            restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
-        )
-    }
+    val settings: Flow<AppSettings> = context.dataStore.data
+        // 配置文件损坏 / 磁盘满时 DataStore 会抛 IOException，
+        // 不接住就会一路传到 stateIn 的协程 → 每次启动都崩，用户连设置页都进不去
+        .catch { e ->
+            if (e is IOException) emit(emptyPreferences()) else throw e
+        }
+        .map { prefs ->
+            AppSettings(
+                themeMode = ThemeMode.from(prefs[Keys.THEME_MODE]?.toIntOrNull() ?: 0),
+                weightUnit = WeightUnit.from(prefs[Keys.WEIGHT_UNIT]),
+                restSeconds = (prefs[Keys.REST_SECONDS] ?: 90L).toInt(),
+                webdavUrl = prefs[Keys.WEBDAV_URL] ?: "",
+                webdavUsername = prefs[Keys.WEBDAV_USER] ?: "",
+                webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
+                autoBackup = prefs[Keys.AUTO_BACKUP] ?: false,
+                lastBackupTime = prefs[Keys.LAST_BACKUP],
+                bottomBarStyle = BottomBarStyle.from(prefs[Keys.BOTTOM_BAR_STYLE]),
+                blurBottomBar = prefs[Keys.BLUR_BOTTOM_BAR] ?: false,
+                tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
+                barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
+                plates = prefs[Keys.PLATES] ?: "25,20,15,10,5,2.5,1.25",
+                weeklyGoal = (prefs[Keys.WEEKLY_GOAL] ?: 0L).toInt(),
+                restOverlay = prefs[Keys.REST_OVERLAY] ?: true,
+                restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
+            )
+        }
+        // 解密 WebDAV 密码要走 Keystore（跨进程），不能在主线程做
+        .flowOn(Dispatchers.IO)
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[Keys.THEME_MODE] = mode.value.toString() }

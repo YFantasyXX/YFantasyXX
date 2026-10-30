@@ -78,6 +78,16 @@ class RestTimerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 服务被 OEM 清掉后又被通知上的「+30s / 跳过」拉起：内存里的字段全没了，
+        // 先从 SharedPreferences 回填，否则加时会被当成「没有计时」直接跳过
+        if (endTime == 0L) {
+            val snap = RestTimerStore.snapshot(this)
+            if (snap.endTime > 0L) {
+                endTime = snap.endTime
+                totalSeconds = snap.totalSeconds.coerceAtLeast(1)
+                label = snap.label
+            }
+        }
         when (intent?.action) {
             ACTION_START -> {
                 finished = false
@@ -137,21 +147,28 @@ class RestTimerService : Service() {
 
             // 闹钟到点把服务拉起来：App 可能早被杀了，这里只负责「提醒」这一件事
             ACTION_FINISHED -> {
-                if (finished) return START_NOT_STICKY
-                finished = true
-                handler.removeCallbacks(finishRunnable)
-                handler.removeCallbacks(tickRunnable)
-                label = intent.getStringExtra(EXTRA_LABEL)
+                val doneLabel = intent.getStringExtra(EXTRA_LABEL) ?: label
                 val forceOverlay = intent.getBooleanExtra(EXTRA_FORCE_OVERLAY, false)
                 RestNotifier.ensureChannels(this)
-                RestNotifier.cancelCountdown(this)
-                // 必须先进前台，否则后台广播里起的服务会被系统立刻掐掉
+                // 无条件先进前台：调用方走的是 startForegroundService，
+                // 5 秒内不调 startForeground 系统就抛 RemoteServiceException（后台闪退）。
+                // 以前 finished == true 时直接 return，正好漏掉这一步
                 runCatching {
                     startForeground(
                         RestNotifier.NOTIF_DONE,
-                        RestNotifier.buildFinished(this, label),
+                        RestNotifier.buildFinished(this, doneLabel),
                     )
                 }
+                if (finished) {
+                    // 已经提醒过一轮，这次只是补一个前台身份，撑一会儿就退
+                    scheduleEnd(FINISHED_LINGER_MS)
+                    return START_NOT_STICKY
+                }
+                finished = true
+                handler.removeCallbacks(finishRunnable)
+                handler.removeCallbacks(tickRunnable)
+                label = doneLabel
+                RestNotifier.cancelCountdown(this)
                 RestNotifier.vibrate(this)
                 // 万一设置读不出来也要停掉，不能一直挂在前台
                 scheduleEnd(FINISHED_LINGER_MS + 3_000L)
@@ -192,8 +209,13 @@ class RestTimerService : Service() {
     private fun showFinishedOverlay(force: Boolean = false) {
         if (!force) {
             if (!overlayEnabled) return
-            // 人就在 App 里，结束提示交给 App 自己的休息条
-            if (AppVisibility.foreground) return
+            // 人就在 App 里，结束提示交给 App 自己的休息条。
+            // 但计时气泡要先撤掉：用户恰好在最后一秒切回 App 时，
+            // 「0:00」气泡会一直盖在界面上直到 12 秒后服务收尾
+            if (AppVisibility.foreground) {
+                overlay?.hide()
+                return
+            }
         }
         val controller = overlay ?: RestOverlayController(this).also { overlay = it }
         controller.showFinished(label)
@@ -285,6 +307,8 @@ class RestTimerService : Service() {
         handler.removeCallbacks(finishRunnable)
         handler.removeCallbacks(tickRunnable)
         handler.removeCallbacks(endRunnable)
+        // 服务停了声音必须停：Ringtone 是静态对象，不主动停会继续响到 8 秒结束
+        runCatching { RestNotifier.stopAlertSound() }
         overlay?.hide()
         scope.cancel()
         super.onDestroy()

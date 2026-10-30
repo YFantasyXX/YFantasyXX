@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,7 +80,15 @@ fun HomeScreen(
     var showSkipConfirm by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     val context = LocalContext.current
-    var crashText by remember { mutableStateOf(CrashLogger.readLast(context)) }
+    // 读崩溃日志要碰磁盘，不能放在组合期（每次首次组合都在主线程读一次文件）
+    var crashText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        // 回到首页时顺便刷新「本周」窗口：App 常驻跨周后 since 会停在上一周
+        vm.refreshWeekWindow()
+        crashText = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            CrashLogger.readLast(context)
+        }
+    }
 
     Scaffold(
         topBar = { SmallTopAppBar(title = "YFantasyXX") },
@@ -461,7 +470,17 @@ fun HomeScreen(
     }
 
     if (showWeightDialog) {
-        var weightValue by remember { mutableStateOf(weightInput.toFloatOrNull() ?: 60f) }
+        // 输入框的 value 必须是「用户敲进去的原文」。
+        // 以前是按数字反推显示值，输到 "62." 时 toFloatOrNull() 得到 62.0，
+        // 小数点立刻被抹掉，再按 5 就变成 625 —— 一次误输就把当天体重存成 625 kg
+        fun fmtWeight(v: Float): String =
+            if (v == v.toInt().toFloat()) v.toInt().toString()
+            else String.format(java.util.Locale.CHINA, "%.1f", v)
+
+        var weightText by remember {
+            mutableStateOf(weightInput.toFloatOrNull()?.let { fmtWeight(it) } ?: "60")
+        }
+        val weightValue = weightText.toFloatOrNull()?.takeIf { it > 0f }
         AppDialog(
             title = "记录今日体重",
             onDismissRequest = { showWeightDialog = false },
@@ -474,20 +493,19 @@ fun HomeScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 NumberStepper(
-                    value = weightValue,
-                    onValueChange = { weightValue = it },
+                    value = weightValue ?: 0f,
+                    onValueChange = { weightText = fmtWeight(it) },
                     step = 0.5f,
                     unit = " ${state.weightUnitLabel}",
                 )
                 Spacer(Modifier.height(8.dp))
                 TextField(
-                    value = if (weightValue == weightValue.toInt().toFloat()) {
-                        weightValue.toInt().toString()
-                    } else {
-                        String.format("%.1f", weightValue)
-                    },
+                    value = weightText,
                     onValueChange = { v ->
-                        v.toFloatOrNull()?.let { weightValue = it }
+                        // 只收「3 位整数 + 最多 1 位小数」，挡住 62.5.3 这种
+                        if (v.isEmpty() || v.matches(Regex("^\\d{0,3}(\\.\\d?)?$"))) {
+                            weightText = v
+                        }
                     },
                     label = "体重",
                     singleLine = true,
@@ -502,9 +520,11 @@ fun HomeScreen(
                     }
                     Spacer(Modifier.height(0.dp))
                     Button(onClick = {
+                        // 空着 / 0 / 非法输入都不写库，避免把当天记录覆盖成 0
+                        val entered = weightValue ?: return@Button
                         val kg = com.yfantasyxx.data.prefs.WeightUnit
                             .from(state.settings.weightUnit.label)
-                            .toKg(weightValue)
+                            .toKg(entered)
                         vm.recordWeight(kg)
                         showWeightDialog = false
                     }) {

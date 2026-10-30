@@ -27,6 +27,14 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
     private val _category = MutableStateFlow<String?>(null)
     private val _equipment = MutableStateFlow<String?>(null)
 
+    /**
+     * 关键词以 ViewModel 为唯一来源。
+     *
+     * 界面里另存一份 remember 的话，从动作详情返回时组合被重建、输入框清空，
+     * 但 ViewModel 仍在用旧词过滤 —— 列表被筛着、搜索框却是空的，看起来像坏了。
+     */
+    val keyword = _keyword.asStateFlow()
+
     /** 分类：预设顺序优先，再补充数据库中出现的自定义分类 */
     val categories = repo.observeExerciseCategories()
         .map { dbList ->
@@ -98,8 +106,12 @@ class ExercisesViewModel(private val repo: WorkoutRepository) : ViewModel() {
         viewModelScope.launch { repo.updateExercise(exercise) }
     }
 
-    fun deleteExercise(id: Long) {
-        viewModelScope.launch { repo.deleteCustomExercise(id) }
+    fun deleteExercise(id: Long, onDone: (archived: Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            // 练过的动作只会被归档（历史记录保留），没练过的才真删
+            val archived = runCatching { repo.deleteCustomExercise(id) }.getOrDefault(false)
+            onDone(archived)
+        }
     }
 
     companion object {

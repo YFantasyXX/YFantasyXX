@@ -110,16 +110,19 @@ class WorkoutViewModel(
     /** 打开某个动作的历史，数据现查现给（只查这一个动作，成本很低） */
     fun openHistory(item: SessionExerciseWithSets) {
         val exerciseId = item.sessionExercise.exerciseId
+        val sessionExerciseId = item.sessionExercise.id
         _history.value = HistoryState(
             exerciseId = exerciseId,
-            sessionExerciseId = item.sessionExercise.id,
+            sessionExerciseId = sessionExerciseId,
             exerciseName = item.exercise.name,
         )
         viewModelScope.launch {
             val entries = runCatching { repo.exerciseHistory(exerciseId) }.getOrDefault(emptyList())
-            // 期间可能已经关掉，或者又点开了别的动作
+            // 期间可能已经关掉，或者又点开了别的动作。
+            // 判重要用 sessionExerciseId：同一训练里可以重复加同一个动作，
+            // 只比 exerciseId 的话，A 的回包会写到 B 的弹窗上，「套用」就套错行
             _history.value = _history.value
-                ?.takeIf { it.exerciseId == exerciseId }
+                ?.takeIf { it.sessionExerciseId == sessionExerciseId }
                 ?.copy(loading = false, entries = entries)
         }
     }
@@ -196,14 +199,27 @@ class WorkoutViewModel(
         refreshDefaultName()
         loadProgressionModes()
         localOrderLock = false
+        // 新训练重新放行「完成」：finishing 是防重复提交的闸门，
+        // 不能跨 session 一直卡着
+        finishing = false
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
-                // 拖动排序中：Flow 里可能是旧顺序，忽略它以本地顺序为准
-                if (localOrderLock) return@collectLatest
-                _exercises.value = list
+                // 拖动排序中：只忽略「顺序」，不能整条丢掉 ——
+                // 这次发射里还带着刚打的勾、刚填的重量、新加的组，
+                // 整条丢弃会让界面停在旧数据上，而且没有补发
+                val ordered = if (localOrderLock) {
+                    val byId = list.associateBy { it.sessionExercise.id }
+                    val localIds = _exercises.value.map { it.sessionExercise.id }
+                    val localSet = localIds.toSet()
+                    localIds.mapNotNull { byId[it] } +
+                        list.filter { it.sessionExercise.id !in localSet }
+                } else {
+                    list
+                }
+                _exercises.value = ordered
                 // 仅在动作增减时刷新"上次表现"参考（组数据变化不需要重查）
-                val ids = list.map { it.sessionExercise.exerciseId }
+                val ids = ordered.map { it.sessionExercise.exerciseId }
                 if (ids != loadedPerformanceIds) {
                     loadedPerformanceIds = ids
                     _lastPerformance.value = ids.associateWith { exerciseId ->
@@ -293,12 +309,24 @@ class WorkoutViewModel(
      * 拖动过程中每次换位都写库会产生并发事务，旧顺序可能最后落地，
      * Room Flow 再发射就把界面拉回，因此改为「松手一次性持久化」。
      */
-    fun moveExerciseLocal(from: Int, to: Int) {
-        val items = _exercises.value.toMutableList()
-        if (from !in items.indices || to !in items.indices || from == to) return
-        items.add(to, items.removeAt(from))
-        _exercises.value = items
+    /**
+     * 按界面拖出来的顺序重排并落库。
+     *
+     * 界面上的下标属于「显示顺序」，而 [_exercises] 是库里的顺序；拖动期间
+     * 两者可能不一致（上一次落库还没回声），所以这里收的是 id 列表，
+     * 不再用下标去猜。
+     */
+    fun applyExerciseOrder(orderedIds: List<Long>) {
+        val items = _exercises.value
+        if (items.isEmpty() || orderedIds.isEmpty()) return
+        val byId = items.associateBy { it.sessionExercise.id }
+        val orderedSet = orderedIds.toSet()
+        val reordered = orderedIds.mapNotNull { byId[it] } +
+            items.filter { it.sessionExercise.id !in orderedSet }
+        if (reordered.map { it.sessionExercise.id } == items.map { it.sessionExercise.id }) return
+        _exercises.value = reordered
         localOrderLock = true
+        persistExerciseOrder()
     }
 
     /** 拖动结束：把当前顺序一次性写入数据库 */
@@ -306,10 +334,16 @@ class WorkoutViewModel(
         val items = _exercises.value
         val sessionId = _sessionId.value ?: return
         viewModelScope.launch {
-            runCatching {
+            val ok = runCatching {
                 repo.reorderSessionExercises(sessionId, items.map { it.sessionExercise.id })
             }.onFailure { e ->
                 _error.value = "调整顺序失败：${e.message.orEmpty()}"
+            }.isSuccess
+            if (!ok) {
+                // 落库失败就回到库里的真实顺序，别让界面拿着一个永远等不到回声的顺序
+                runCatching { repo.getSessionDetails(sessionId) }.getOrNull()?.let {
+                    _exercises.value = it
+                }
             }
             // 必须等写入完成后再解锁：提前释放会让 Room Flow 的旧顺序
             // 在写入落地前覆盖本地新顺序
@@ -397,6 +431,12 @@ class WorkoutViewModel(
         viewModelScope.launch {
             runCatching {
                 repo.replaceSessionExercise(sessionExerciseId, newExerciseId)
+                // 换掉的是正在休息的那个动作：标签里的名字已经不对了，
+                // 留着会让「设为该动作默认休息」写到新动作上
+                if (_currentExerciseId.value == sessionExerciseId) {
+                    _currentExerciseId.value = null
+                    restLabel = null
+                }
                 // 动作换了，「上次表现」也得换。这个映射原本只在动作增减时刷新，
                 // 换动作不改 sessionExercise id，所以要手动重载一次。
                 _exercises.value.let { list ->
@@ -435,6 +475,12 @@ class WorkoutViewModel(
         viewModelScope.launch {
             runCatching { repo.removeSessionExercise(sessionExerciseId) }
                 .onFailure { e -> _error.value = "移除动作失败：${e.message.orEmpty()}" }
+            // 被删的动作如果正在休息计时里，标签要一起清掉：
+            // 否则休息条还挂着「某动作 · 第 N 组」，点进去还能把它设成默认
+            if (_currentExerciseId.value == sessionExerciseId) {
+                _currentExerciseId.value = null
+                restLabel = null
+            }
         }
     }
 
@@ -463,10 +509,14 @@ class WorkoutViewModel(
 
     fun toggleSetComplete(set: SetLog) {
         viewModelScope.launch {
-            val willComplete = !set.completed
+            // 以库里的最新值为准取反，而不是界面的快照：
+            // 手指抖一下连点两次时，两次都基于同一个旧快照算成 true，
+            // 勾就取消不掉了，还会把休息计时重新拉满
+            val fresh = runCatching { repo.getSet(set.id) }.getOrNull() ?: return@launch
+            val willComplete = !fresh.completed
             // 只改完成这一列。整行写回会用这一行的旧快照，
             // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
-            repo.setSetCompleted(set.id, willComplete)
+            repo.setSetCompleted(fresh.id, willComplete)
             if (willComplete) {
                 // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
                 val sessionId = _sessionId.value
@@ -519,8 +569,9 @@ class WorkoutViewModel(
     /** 标记/取消 PR 组（计入 PR 榜，但不作为下次训练参考重量） */
     fun toggleSetPr(set: SetLog) {
         viewModelScope.launch {
-            // 同样只改 isPr 一列，别把快照里的旧重量写回去
-            runCatching { repo.setSetPr(set.id, !set.isPr) }
+            // 以库里的最新值为准取反：用界面快照连点两下会算成同一个值，PR 标记就取消不掉
+            val fresh = runCatching { repo.getSet(set.id) }.getOrNull() ?: return@launch
+            runCatching { repo.setSetPr(fresh.id, !fresh.isPr) }
                 .onFailure { e -> _error.value = "标记 PR 失败：${e.message.orEmpty()}" }
         }
     }
@@ -670,16 +721,25 @@ class WorkoutViewModel(
     }
 
     /** 完成训练 */
+    /** 完成训练只允许进来一次：finishSession 里会推进计划游标，重复执行等于白丢一天 */
+    private var finishing = false
+
     fun finishWorkout(name: String, note: String, onDone: () -> Unit) {
+        if (finishing) return
         val id = _sessionId.value ?: return
+        finishing = true
         // 名称为空时用默认名（模板名或「计划」）
         val finalName = name.trim().ifBlank { _defaultSessionName.value }
         viewModelScope.launch {
-            repo.finishSession(id, finalName, note)
+            val result = runCatching { repo.finishSession(id, finalName, note) }
+            if (result.isFailure) {
+                finishing = false
+                _error.value = "完成训练失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
+                return@launch
+            }
             tickerJob?.cancel()
             restTickerJob?.cancel()
             RestTimerService.skip(context)
-            tickerJob?.cancel()
             onDone()
             // 训练完成后按设置自动备份（独立协程，不阻塞导航）
             autoBackupAfterFinish()

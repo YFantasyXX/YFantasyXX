@@ -64,6 +64,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
     var curveHint by remember { mutableStateOf<com.yfantasyxx.data.CurveHint?>(null) }
     var showRestPicker by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
+    var showDelete by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf("") }
     var editCategory by remember { mutableStateOf("") }
     var editEquipment by remember { mutableStateOf("") }
@@ -106,10 +107,7 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                 tint = MiuixTheme.colorScheme.primary,
                             )
                         }
-                        IconButton(onClick = {
-                            vm.deleteExercise(exerciseId)
-                            onBack()
-                        }) {
+                        IconButton(onClick = { showDelete = true }) {
                             Icon(
                                 imageVector = Icons.Filled.Delete,
                                 contentDescription = "删除",
@@ -400,6 +398,31 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                     null
                 },
             )
+        }
+    }
+
+    // 删除是「从动作库移除」，不是「删掉练过的记录」：
+    // 练过的动作会被归档，历史里的每一组都还在
+    if (showDelete) {
+        AppDialog(
+            title = "删除「${exercise?.name ?: "这个动作"}」？",
+            summary = "动作会从动作库移除。已经练过的记录不会被删——那部分会原样保留在历史里。",
+            onDismissRequest = { showDelete = false },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ActionText(text = "取消", onClick = { showDelete = false })
+                Spacer(Modifier.width(12.dp))
+                ActionText(
+                    text = "删除",
+                    onClick = {
+                        showDelete = false
+                        vm.deleteExercise(exerciseId) { onBack() }
+                    },
+                )
+            }
         }
     }
 }
