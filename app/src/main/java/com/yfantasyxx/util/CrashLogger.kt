@@ -15,8 +15,11 @@ import java.util.Locale
  *
  * 同时写两处：
  *  - filesDir/last_crash.txt：首页展示用
- *  - getExternalFilesDir/logs/crash-*.txt：带时间戳的存档，
- *    路径为 /Android/data/<包名>/files/logs/，文件管理器可直接查看，无需任何权限
+ *  - getExternalFilesDir/logs/crash-*.txt：带时间戳的存档
+ *
+ * 存档路径是 /Android/data/<包名>/files/logs/。注意 API 30+ 起这个目录
+ * 对文件管理器基本不可见（分区存储），用户拿不到——真正的出口是
+ * 测试工具里的「诊断包」，它会把 logs/ 打进 zip 再走 FileProvider 分享。
  */
 object CrashLogger {
 
@@ -46,12 +49,20 @@ object CrashLogger {
                 // 1) 首页展示
                 File(app.filesDir, FILE_NAME).writeText(text)
 
-                // 2) 带时间戳的存档，供文件管理器查看
+                // 2) 带时间戳的存档，供诊断包收集
                 val dir = logDir(app)
                 if (!dir.exists()) dir.mkdirs()
                 File(dir, "crash-${timeStamp("yyyyMMdd-HHmmss")}.txt").writeText(text)
             }
-            previous?.uncaughtException(thread, throwable)
+            // 交回上一级处理器。正常情况下它就是 KillProcessHandler，会让进程退出；
+            // 但它是 null（没装处理器、或被人换成了空实现）时不能什么都不做——
+            // 异常线程会带着坏掉的状态继续跑，界面卡死又不留痕。这里兜一个 halt。
+            val delegate = previous
+            if (delegate != null) {
+                delegate.uncaughtException(thread, throwable)
+            } else {
+                Runtime.getRuntime().halt(1)
+            }
         }
     }
 

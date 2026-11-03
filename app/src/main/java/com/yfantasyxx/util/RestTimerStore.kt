@@ -32,11 +32,16 @@ object RestTimerStore {
     fun snapshot(context: Context): Snapshot {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val end = prefs.getLong(KEY_END, 0L)
-        val total = prefs.getInt(KEY_TOTAL, 0)
-        val remaining = ((end - System.currentTimeMillis()) / 1000).toInt()
+        val total = prefs.getInt(KEY_TOTAL, 0).coerceAtLeast(0)
+        val raw = ((end - System.currentTimeMillis()) / 1000).toInt()
+        // 系统时间被往回调（手动改时间、NTP 校时）时 (end - now) 会超过总时长。
+        // 剩余秒数必须夹在 [0, total] 内：调用方按 remaining/total 算进度，
+        // 超出去就是「已用时间为负」，进度环和通知都画不对。
+        // total 为 0 表示没存过（clear 之后），此时不夹上界，保持原语义。
+        val remaining = if (total > 0) raw.coerceIn(0, total) else raw.coerceAtLeast(0)
         return Snapshot(
             running = remaining > 0,
-            remainingSeconds = remaining.coerceAtLeast(0),
+            remainingSeconds = remaining,
             totalSeconds = total,
             endTime = end,
             label = prefs.getString(KEY_LABEL, null),

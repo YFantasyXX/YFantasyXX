@@ -10,16 +10,17 @@ package com.yfantasyxx.ui.nav.liquid
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.fastCoerceAtMost
-import top.yukonga.miuix.kmp.blur.BackdropEffectScope
-import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
-import top.yukonga.miuix.kmp.blur.runtimeShaderEffect
+import com.kyant.backdrop.BackdropEffectScope
+import com.kyant.backdrop.effects.runtimeShaderEffect
+import com.kyant.backdrop.isRuntimeShaderSupported
 
 /**
  * 圆角矩形的「透镜折射」——把背景按近似圆形的梯度往里挤，
  * 让玻璃边缘看起来是凸起来的曲面。
  *
- * miuix-blur 本身不提供折射（只有模糊 + 调色），但暴露了
- * [runtimeShaderEffect]，所以这里自己写一段 AGSL。
+ * 上游库自带一个 `lens`，但色散只支持开/关；底部药丸要的是
+ * 「按强度连续变化」的色散（按下时从 0 渐强到 0.35），所以这里
+ * 保留自己的一段 AGSL，走的是同一个 [BackdropEffectScope]。
  *
  * 参数全是**像素**（调用方用 `dp.toPx()` 转换）：
  *
@@ -38,7 +39,9 @@ internal fun BackdropEffectScope.lens(
     if (!isRuntimeShaderSupported()) return
     if (refractionHeight <= 0f || refractionAmount <= 0f) return
 
-    // 折射会把坐标往外推，绘制区域要跟着扩一圈，否则边缘会被裁掉
+    // 折射会把坐标往外推，绘制区域要跟着扩一圈，否则边缘会被裁掉。
+    // 上游库的 padding 语义就是「离屏层向四周多录多少像素」，
+    // 着色器里的 offset 会用 -padding 抵消回来，所以这里只需保证够大。
     if (padding < refractionAmount) {
         padding = refractionAmount
     }
@@ -53,21 +56,17 @@ internal fun BackdropEffectScope.lens(
     }
     val key = if (dispersion) "YFXLensDispersion" else "YFXLens"
 
-    // backdrop 通常是降采样过的，uniform 全部换算到同一尺度
-    val sf = downscaleFactor.coerceAtLeast(1).toFloat()
-    val scaledRadii = FloatArray(radii.size) { radii[it] / sf }
-
     runtimeShaderEffect(
         key = key,
         shaderString = shader,
         uniformShaderName = "content",
     ) {
-        setFloatUniform("size", size.width / sf, size.height / sf)
-        setFloatUniform("offset", -padding / sf, -padding / sf)
-        setFloatUniform("cornerRadii", scaledRadii)
-        setFloatUniform("refractionHeight", refractionHeight / sf)
+        setFloatUniform("size", size.width, size.height)
+        setFloatUniform("offset", -padding, -padding)
+        setFloatUniform("cornerRadii", radii)
+        setFloatUniform("refractionHeight", refractionHeight)
         // 取负：正的雪碧方向会让画面「凹」，负值才是凸起
-        setFloatUniform("refractionAmount", -refractionAmount / sf)
+        setFloatUniform("refractionAmount", -refractionAmount)
         setFloatUniform("depthEffect", if (depthEffect) 1f else 0f)
         if (dispersion) {
             setFloatUniform("chromaticAberration", chromaticAberration)

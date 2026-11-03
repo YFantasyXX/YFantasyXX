@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.yfantasyxx.data.ExerciseHistoryEntry
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
+import com.yfantasyxx.util.Clock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,8 +43,8 @@ internal fun ExerciseHistoryDialog(
     onDismiss: () -> Unit,
 ) {
     // 今天/昨天的判断在一帧内算一次就够，别每行都去格式化当前时间
-    val today = remember { dayKey(System.currentTimeMillis()) }
-    val yesterday = remember { dayKey(System.currentTimeMillis() - DAY_MILLIS) }
+    val today = remember { dayKey(Clock.now()) }
+    val yesterday = remember { dayKey(Clock.now() - DAY_MILLIS) }
 
     AppDialog(
         title = "${state.exerciseName} · 历史",

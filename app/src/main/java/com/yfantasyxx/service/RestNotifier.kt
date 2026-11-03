@@ -116,7 +116,11 @@ object RestNotifier {
             .setChronometerCountDown(true)
             .setProgress(
                 totalSeconds.coerceAtLeast(1),
-                (totalSeconds - remainingSeconds).coerceIn(0, totalSeconds),
+                // 上界必须和 max 用同一个夹取结果：直接用原始 totalSeconds 的话，
+                // 一旦它 <= 0，coerceIn(0, 负数) 会抛「空区间」异常，通知直接建不出来
+                (totalSeconds - remainingSeconds)
+                    .coerceAtMost(totalSeconds.coerceAtLeast(1))
+                    .coerceAtLeast(0),
                 false
             )
             .setOngoing(true)
@@ -143,6 +147,32 @@ object RestNotifier {
             // 锁屏上也把内容显出来，不然只能看到一个「有新通知」
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setTimeoutAfter(60_000L)
+            .build()
+
+    /**
+     * 常驻模式下的「休息结束」通知。
+     *
+     * 悬浮窗要一直留着（12 秒后收成小球继续挂），前台服务就不能退——
+     * 进程被系统回收的话，悬浮窗窗口会跟着一起消失。
+     *
+     * 这条通知是 ongoing 的（划不掉），也**不给「关闭」按钮**：
+     * 常驻小球本身就是不可关闭的，想收掉只有一条路——去设置里关掉
+     * 「悬浮窗常驻」开关，服务会跟着退场。
+     */
+    fun buildFinishedPersistent(context: Context, label: String? = null): Notification =
+        NotificationCompat.Builder(context, CHANNEL_DONE)
+            .setSmallIcon(R.drawable.ic_timer_notification)
+            .setContentTitle("休息结束")
+            .setContentText(
+                if (label != null) "$label 完成，可以开始下一组了" else "可以开始下一组了"
+            )
+            .setSubText("悬浮窗常驻中")
+            .setContentIntent(openAppIntent(context))
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
 
     /**

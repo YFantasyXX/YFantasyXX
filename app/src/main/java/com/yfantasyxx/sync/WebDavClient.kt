@@ -46,14 +46,39 @@ data class UploadReceipt(
  * 兼容坚果云、Nextcloud、InfiniCLOUD、自建 WebDAV 等服务。
  */
 class WebDavClient(
-    baseUrl: String,
+    rawBaseUrl: String,
     username: String,
     password: String,
-) {
+) : RemoteStore {
+
+    override val directory: String get() = BACKUP_DIRECTORY
+
+    /**
+     * 规范化后的基础 URL（确保以 / 结尾）。
+     *
+     * 构造参数刻意叫 [rawBaseUrl]：原来参数和这个属性同名，属性初始化式里
+     * 引用 `baseUrl` 究竟指参数还是属性全看声明顺序，读代码时要来回确认。
+     */
+    val baseUrl: String = if (rawBaseUrl.endsWith("/")) rawBaseUrl else "$rawBaseUrl/"
+
+    /**
+     * 地址不可用时的原因；null 表示没问题。
+     *
+     * 明文 http:// 在 targetSdk 36 下会被系统直接掐断，用户看到的是
+     * 「CLEARTEXT communication to xxx not permitted」——根本不知道要改什么。
+     * 这里提前判定，把话说明白。
+     */
+    private val schemeError: String? = run {
+        val url = baseUrl.toHttpUrlOrNull()
+        when {
+            url == null -> "WebDAV 地址格式不对：$rawBaseUrl（应形如 https://dav.example.com/dav/）"
+            url.scheme != "https" -> "只支持 https:// 地址（当前是 ${url.scheme}://）"
+            else -> null
+        }
+    }
+
     /** 只对本服务器发凭据：重定向到第三方主机时绝不能把 Basic Auth 带过去 */
-    private val authHost: String? = runCatching {
-        baseUrl.toHttpUrlOrNull()?.host
-    }.getOrNull()
+    private val authHost: String? = baseUrl.toHttpUrlOrNull()?.host
 
     /**
      * Basic 凭据，显式 UTF-8。
@@ -71,6 +96,9 @@ class WebDavClient(
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
+            // 地址本身不合法时，任何请求都没必要发出去。
+            // 放在拦截器里是为了覆盖全部 7 个入口，只写一处。
+            schemeError?.let { throw IOException(it) }
             val request = chain.request()
             // 重定向后 host 会变；只有同一主机才加 Authorization
             if (authHost != null && request.url.host == authHost) {
@@ -83,11 +111,8 @@ class WebDavClient(
         }
         .build()
 
-    /** 规范化基础 URL（确保以 / 结尾） */
-    val baseUrl: String = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
-
     /** 测试连接：对目录做 Depth 0 PROPFIND */
-    suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
                 .url(baseUrl)
@@ -104,7 +129,7 @@ class WebDavClient(
     }
 
     /** 确保目录存在（逐级 MKCOL，已存在则忽略） */
-    suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun ensureDirectory(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val segments = path.trim('/').split('/')
             var current = baseUrl
@@ -137,7 +162,7 @@ class WebDavClient(
      * - 服务器报的大小和本地不一致 → 直接算失败；
      * - 服务器不支持查大小 → 成功但不标记 verified。
      */
-    suspend fun upload(path: String, bytes: ByteArray): Result<UploadReceipt> =
+    override suspend fun upload(path: String, bytes: ByteArray): Result<UploadReceipt> =
         withContext(Dispatchers.IO) {
             runCatching {
                 if (bytes.isEmpty()) throw IOException("内容为空，已取消上传")
@@ -158,7 +183,7 @@ class WebDavClient(
         }
 
     /** 查询单个文件的信息；返回 success(null) 表示服务器明确说「不存在」 */
-    suspend fun stat(path: String): Result<RemoteBackupFile?> =
+    override suspend fun stat(path: String): Result<RemoteBackupFile?> =
         withContext(Dispatchers.IO) { statNow(path) }
 
     private fun statNow(path: String): Result<RemoteBackupFile?> = runCatching {
@@ -215,7 +240,7 @@ class WebDavClient(
     }
 
     /** 下载文件 */
-    suspend fun download(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+    override suspend fun download(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
                 .url("$baseUrl$path")
@@ -236,7 +261,7 @@ class WebDavClient(
         listBackupFiles(directory).map { list -> list.map { it.name } }
 
     /** 列出目录中的备份文件（含大小与修改时间） */
-    suspend fun listBackupFiles(directory: String): Result<List<RemoteBackupFile>> =
+    override suspend fun listBackupFiles(directory: String): Result<List<RemoteBackupFile>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val url = if (directory.isEmpty()) baseUrl else baseUrl + directory.trim('/') + "/"
@@ -256,7 +281,7 @@ class WebDavClient(
         }
 
     /** 删除远端文件 */
-    suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun delete(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
                 .url("$baseUrl$path")
@@ -340,8 +365,8 @@ class WebDavClient(
     }
 
     companion object {
-        const val BACKUP_PREFIX = "yfantasyxx-backup-"
-        const val BACKUP_DIRECTORY = "YFantasyXX"
+        const val BACKUP_PREFIX = RemoteStore.BACKUP_PREFIX
+        const val BACKUP_DIRECTORY = RemoteStore.BACKUP_DIRECTORY
 
         /** 试写测试用的临时文件名 */
         private const val WRITE_TEST_FILE = ".write-test"

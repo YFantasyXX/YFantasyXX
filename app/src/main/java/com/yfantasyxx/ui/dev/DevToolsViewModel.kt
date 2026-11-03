@@ -14,6 +14,7 @@ import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.service.RestNotifier
 import com.yfantasyxx.service.RestOverlayController
 import com.yfantasyxx.service.RestTimerService
+import com.yfantasyxx.util.Clock
 import com.yfantasyxx.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -43,6 +45,9 @@ data class DevInfo(
     val planDetail: String? = null,
     val crashLog: String? = null,
 )
+
+/** 一次演练的判定结果 */
+private data class DrillResult(val passed: Boolean, val message: String)
 
 /**
  * 测试工具（只在 lite 版出现）。
@@ -66,6 +71,26 @@ class DevToolsViewModel(
 
     private val _info = MutableStateFlow(DevInfo())
     val info: StateFlow<DevInfo> = _info.asStateFlow()
+
+    /** 已存的数据快照，最新的在前 */
+    private val _snapshots = MutableStateFlow<List<DevSnapshot>>(emptyList())
+    val snapshots: StateFlow<List<DevSnapshot>> = _snapshots.asStateFlow()
+
+    /** 断言面板结果 */
+    private val _kernelCases = MutableStateFlow<List<KernelCase>>(emptyList())
+    val kernelCases: StateFlow<List<KernelCase>> = _kernelCases.asStateFlow()
+
+    /** 假时钟当前偏移（毫秒），正数=拨到未来 */
+    private val _clockOffset = MutableStateFlow(Clock.offsetMillis())
+    val clockOffset: StateFlow<Long> = _clockOffset.asStateFlow()
+
+    /** 假远端：(备份份数, 占用字节) */
+    private val _fakeRemote = MutableStateFlow(0 to 0L)
+    val fakeRemote: StateFlow<Pair<Int, Long>> = _fakeRemote.asStateFlow()
+
+    init {
+        refreshFakeRemote()
+    }
 
     private fun say(text: String, error: Boolean = false) {
         messageSeq += 1
@@ -112,18 +137,76 @@ class DevToolsViewModel(
 
     /** 忽略「App 在前台就不显示」的判断，强制把结束悬浮窗画出来看长相 */
     fun forceShowOverlay() {
-        if (!RestOverlayController.canShow(container.appContext)) {
-            say("没有悬浮窗权限：去「我的 → 休息提醒」开启", error = true)
-            return
-        }
+        if (!ensureOverlayPermission()) return
         runCatching {
             RestTimerService.showFinished(
                 container.appContext,
                 "测试动作 · 第 3 组",
                 forceOverlay = true,
             )
-            say("已强制显示结束悬浮窗，12 秒后自动消失")
+            say("已强制显示结束悬浮窗；常驻开着的话 12 秒后收成小球")
         }.onFailure { say("显示失败：${it.message}", error = true) }
+    }
+
+    /**
+     * 只画倒计时气泡，不启动计时服务。
+     *
+     * 走的是和真实休息一样的气泡（环随剩余时间收缩），不占进程、也不会到点弹卡片，
+     * 用来调位置、看配色、验权限最省事。
+     */
+    fun previewCountdownBubble(seconds: Int = 90) {
+        if (!ensureOverlayPermission()) return
+        runCatching {
+            val overlay = RestOverlayController.shared(container.appContext)
+            val end = System.currentTimeMillis() + seconds * 1000L
+            if (!overlay.showCountdown(end, seconds, "测试 · 组间休息")) {
+                say("气泡没显示出来：权限可能刚被撤销，去系统设置里看一下", error = true)
+                return
+            }
+            say("已显示倒计时气泡（$seconds 秒 · 可以拖动）")
+        }.onFailure { say("显示失败：${it.message}", error = true) }
+    }
+
+    /**
+     * 跳过结束卡片的 12 秒等待，直接看它收成的常驻小球。
+     *
+     * 小球没有关闭入口，预览完点「收掉常驻小球」。
+     */
+    fun previewPersistentBall() {
+        if (!ensureOverlayPermission()) return
+        runCatching {
+            val overlay = RestOverlayController.shared(container.appContext)
+            overlay.persistent = true
+            if (!overlay.showFinished("测试动作 · 第 3 组", lingerMs = 0L)) {
+                say("小球没显示出来：权限可能刚被撤销", error = true)
+                return
+            }
+            say("已跳过 12 秒，直接收成常驻小球（点它只会回 App）")
+        }.onFailure { say("显示失败：${it.message}", error = true) }
+    }
+
+    /** 收掉预览出来的悬浮窗。正式路径是去设置里关掉「悬浮窗常驻」 */
+    fun dismissPersistentBall() {
+        runCatching {
+            val overlay = RestOverlayController.shared(container.appContext)
+            val wasPersistent = overlay.persistent || overlay.mode == RestOverlayController.MODE_PERSIST
+            overlay.persistent = false
+            overlay.hide()
+            RestNotifier.cancelDone(container.appContext)
+            // 只有常驻小球需要顺手把服务退掉（它本来就靠前台服务撑着）。
+            // 倒计时气泡背后可能是一次真在跑的计时，收掉窗口就够了，不能把计时一起停掉
+            if (wasPersistent) RestTimerService.dismissOverlayNow(container.appContext)
+            say(
+                if (wasPersistent) "常驻悬浮窗、前台服务和「休息结束」通知都已收掉"
+                else "悬浮窗已收掉"
+            )
+        }.onFailure { say("收掉失败：${it.message}", error = true) }
+    }
+
+    private fun ensureOverlayPermission(): Boolean {
+        if (RestOverlayController.canShow(container.appContext)) return true
+        say("没有悬浮窗权限：点下面的「悬浮窗权限设置」开启", error = true)
+        return false
     }
 
     fun testVibrate() {
@@ -196,7 +279,10 @@ class DevToolsViewModel(
         includeToday: Boolean,
     ) {
         run("已生成测试训练") {
-            seedHistoryInternal(days, exercisesPerDay, setsPerExercise, includeToday)
+            // 造数据前先存档：这一步失败就不往下写，免得真实记录回不来
+            val guard = DevSnapshots.snapshot(container.appContext, container.db(), "before-seed")
+            seedHistoryInternal(days, exercisesPerDay, setsPerExercise, includeToday) +
+                " · 存了快照 ${DevSnapshots.sizeLabel(guard.bytes)}"
         }
     }
 
@@ -282,6 +368,8 @@ class DevToolsViewModel(
     fun seedBodyMetrics(days: Int) {
         run("已生成体重曲线") {
             val db = container.db()
+            // 下面第一句就是 DELETE，先把现有的体重数据存下来
+            val guard = DevSnapshots.snapshot(container.appContext, db, "before-seed-body")
             val n = days.coerceIn(7, 365)
             val today = TrainingCycle.startOfDay(System.currentTimeMillis())
             db.withTransaction {
@@ -299,7 +387,7 @@ class DevToolsViewModel(
                 }
             }
             repo.notifyDataChanged()
-            "$n 天体重记录（原有体重数据已清空）"
+            "$n 天体重记录（原有体重数据已清空）· 存了快照 ${DevSnapshots.sizeLabel(guard.bytes)}"
         }
     }
 
@@ -313,6 +401,8 @@ class DevToolsViewModel(
     fun clearWorkouts() {
         run("已清空训练记录") {
             val db = container.db()
+            // 这是最不可逆的一个入口，快照必须存成功才继续
+            val guard = DevSnapshots.snapshot(container.appContext, db, "before-clear")
             db.withTransaction {
                 val sqlite = db.openHelper.writableDatabase
                 // 子表先删，避免外键约束报错（虽然 ON DELETE CASCADE 也能兜住）
@@ -321,7 +411,8 @@ class DevToolsViewModel(
                 sqlite.execSQL("DELETE FROM sessions")
             }
             repo.notifyDataChanged()
-            "训练记录、组数、PR 全部清空（动作 / 模板 / 计划保留）"
+            "训练记录、组数、PR 全部清空（动作 / 模板 / 计划保留）· " +
+                "清空前存了 ${DevSnapshots.sizeLabel(guard.bytes)} 的快照"
         }
     }
 
@@ -341,7 +432,10 @@ class DevToolsViewModel(
      * 顶部是不是「7 个动作 · 已完成 2/21 组」。
      */
     fun startFakeWorkout(onReady: () -> Unit = {}) {
-        if (_busy.value) return
+        if (_busy.value) {
+            say("上一个操作还在跑，等它结束再来一次", error = true)
+            return
+        }
         viewModelScope.launch {
             _busy.value = true
             val result = withContext(Dispatchers.IO) { runCatching { buildFakeWorkout() } }
@@ -351,6 +445,7 @@ class DevToolsViewModel(
                 onReady()
             }.onFailure { say("生成假训练失败：${it.message ?: it::class.simpleName}", true) }
             refreshInfo()
+            refreshSnapshots()
         }
     }
 
@@ -359,6 +454,8 @@ class DevToolsViewModel(
         if (pool.size < FAKE_EXERCISES) {
             throw IllegalStateException("动作库只有 ${pool.size} 个动作，先点「补全动作库」")
         }
+        // 下面会 discardSession 掉正在练的那次，先存档
+        val guard = DevSnapshots.snapshot(container.appContext, container.db(), "before-fake-workout")
         val chosen = pool.take(FAKE_EXERCISES)
         val db = container.db()
 
@@ -428,7 +525,8 @@ class DevToolsViewModel(
         repo.markSessionStarted(sessionId, System.currentTimeMillis() - 12 * 60_000L)
         repo.notifyDataChanged()
         return "$FAKE_EXERCISES 个动作 × $FAKE_SETS 组，已完成 2 组；" +
-            "上次训练第 $FAKE_SETS 组是 PR（更重、只有 2 次）"
+            "上次训练第 $FAKE_SETS 组是 PR（更重、只有 2 次）；" +
+            "动手前存了快照 ${DevSnapshots.sizeLabel(guard.bytes)}"
     }
 
     // ---------- 计划时间旅行 ----------
@@ -588,6 +686,219 @@ class DevToolsViewModel(
         }
     }
 
+    // ---------- 数据快照 ----------
+
+    fun refreshSnapshots() {
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                runCatching { DevSnapshots.list(container.appContext) }.getOrDefault(emptyList())
+            }
+            _snapshots.value = list
+        }
+    }
+
+    fun snapshotNow() {
+        run("已存一份快照") {
+            val s = DevSnapshots.snapshot(container.appContext, container.db(), "manual")
+            "${s.sessions} 次训练 · ${DevSnapshots.sizeLabel(s.bytes)}"
+        }
+    }
+
+    fun restoreSnapshot(file: File) {
+        run("已还原") {
+            val detail = DevSnapshots.restore(container.appContext, container, file)
+            repo.notifyDataChanged()
+            detail
+        }
+    }
+
+    fun deleteSnapshot(file: File) {
+        run("快照已删除") {
+            DevSnapshots.delete(container.appContext, file)
+            DevSnapshots.stampOf(file)
+        }
+    }
+
+    fun clearSnapshots() {
+        run("快照已清空") {
+            val n = _snapshots.value.size
+            DevSnapshots.clear(container.appContext)
+            "$n 份，共释放约 ${DevSnapshots.sizeLabel(_snapshots.value.sumOf { it.bytes })}"
+        }
+    }
+
+    // ---------- 计算内核（P1） ----------
+
+    /**
+     * 跑一遍全部断言。
+     *
+     * 这些函数算错了不会崩，只会在训练页印一个偏了十几公斤的数字——
+     * 靠肉眼是看不出 117.6 和 122.0 哪个对的。
+     */
+    fun runKernelAssertions() {
+        val cases = DevKernel.runAll()
+        _kernelCases.value = cases
+        val failed = cases.count { !it.passed }
+        say(
+            if (failed == 0) {
+                "断言全绿：${cases.size} 项全部通过"
+            } else {
+                "断言 $failed / ${cases.size} 项未通过，展开下面的分组看具体哪条"
+            },
+            error = failed > 0,
+        )
+    }
+
+    /** 用库里真实训练数据跑一次校准，看每一档的 γ 和样本量 */
+    fun refreshCalibration() {
+        run("校准结果") {
+            val rows = container.db().sessionDao().repMaxPoints()
+            DevKernel.calibrationSummary(rows)
+        }
+    }
+
+    // ---------- 时间旅行（P1） ----------
+
+    /** [days] 传 0 = 拨回现在；正数前进，负数后退 */
+    fun shiftClock(days: Int) {
+        val offset = if (days == 0) {
+            Clock.reset(container.appContext)
+        } else {
+            Clock.shiftDays(container.appContext, days)
+        }
+        _clockOffset.value = offset
+        // 统计页的窗口是在 Flow 里算的，得推一下才会按新时间重算
+        repo.notifyDataChanged()
+        say(
+            if (offset == 0L) {
+                "业务时间已拨回现在"
+            } else {
+                "业务时间${if (offset > 0) "前进" else "后退"} " +
+                    "${abs(offset) / 86_400_000L} 天（只影响读，倒计时和已有记录不走这个钟）"
+            }
+        )
+    }
+
+    // ---------- 备份演练（P1） ----------
+
+    /**
+     * 用假远端跑一次真实 [com.yfantasyxx.sync.BackupManager]。
+     *
+     * **只演练「该被拦下」的分支和「备份」分支**，没有「恢复成功」的场景：
+     * 那条路径会真的覆盖本地库，用它做演练等于拿真实训练记录冒险。
+     */
+    fun runDrill(drill: BackupDrill) {
+        if (_busy.value) {
+            say("上一个操作还在跑，等它结束再来一次", error = true)
+            return
+        }
+        viewModelScope.launch {
+            _busy.value = true
+            val startedAt = System.nanoTime()
+            val outcome = withContext(Dispatchers.IO) { runCatching { executeDrill(drill) } }
+            val ms = (System.nanoTime() - startedAt) / 1_000_000
+            _busy.value = false
+            refreshFakeRemote()
+            outcome.onSuccess { r ->
+                say(
+                    "${if (r.passed) "通过" else "未通过"} · ${drill.label} · ${ms}ms · ${r.message}",
+                    error = !r.passed,
+                )
+            }.onFailure {
+                say(
+                    "未通过 · ${drill.label} · 演练本身出错：${it.message ?: it::class.simpleName}",
+                    error = true,
+                )
+            }
+        }
+    }
+
+    private suspend fun executeDrill(drill: BackupDrill): DrillResult {
+        val store = DevBackupLab.store(container.appContext, drill.fault)
+        val result = when (drill.op) {
+            DrillOp.BACKUP ->
+                container.backupManager.backup(store).map { "产出 $it" }
+
+            DrillOp.RESTORE -> {
+                val name = if (drill == BackupDrill.MISSING) {
+                    MISSING_REMOTE_NAME
+                } else {
+                    ensureFakeRemoteFile()
+                }
+                container.backupManager.restore(store, name).map { "恢复流程返回成功" }
+            }
+        }
+        val text = result.fold(
+            onSuccess = { it },
+            onFailure = { it.message ?: it::class.simpleName.orEmpty() },
+        )
+        val branchOk = result.isFailure == drill.expectFailure
+        val keywordOk = !drill.expectFailure || text.contains(drill.expectKeyword)
+        return DrillResult(
+            passed = branchOk && keywordOk,
+            message = buildString {
+                append(text)
+                if (branchOk && !keywordOk) {
+                    append("（失败原因里没有「")
+                    append(drill.expectKeyword)
+                    append("」，可能走了别的分支，这条不算验到）")
+                }
+            },
+        )
+    }
+
+    /** 假远端里没有文件时放一个占位：只为让「文件存在」这一关过掉 */
+    private fun ensureFakeRemoteFile(): String {
+        DevBackupLab.firstFileName(container.appContext)?.let { return it }
+        val dir = DevBackupLab.backupDir(container.appContext)
+        dir.mkdirs()
+        val placeholder = File(dir, PLACEHOLDER_REMOTE_NAME)
+        if (!placeholder.exists()) placeholder.writeBytes(ByteArray(4096))
+        return placeholder.name
+    }
+
+    fun clearFakeRemote() {
+        val n = DevBackupLab.clear(container.appContext)
+        refreshFakeRemote()
+        say("假远端已清空（$n 份）")
+    }
+
+    private fun refreshFakeRemote() {
+        _fakeRemote.value = DevBackupLab.fileCount(container.appContext) to
+            DevBackupLab.totalBytes(container.appContext)
+    }
+
+    // ---------- 诊断包 ----------
+
+    /**
+     * 打一个 zip 并拉系统分享面板。
+     *
+     * 内容：库快照 + 崩溃日志 + 最近的 logs/ + 脱敏设置 + 机型/schema/行数。
+     * 以前排查一个「恢复备份后打不开」的问题要来回问四次，现在一次发完。
+     */
+    fun shareDiagnostics() {
+        if (_busy.value) {
+            say("还有操作在进行，稍等一下再打包", error = true)
+            return
+        }
+        viewModelScope.launch {
+            _busy.value = true
+            val result = runCatching {
+                DevDiagnostics.ensureUsable(
+                    DevDiagnostics.build(container.appContext, container, _info.value)
+                )
+            }
+            _busy.value = false
+            result.onSuccess { file ->
+                runCatching { DevDiagnostics.share(container.appContext, file) }
+                    .onSuccess { say("诊断包 ${mb(file.length())}，已拉起分享面板") }
+                    .onFailure {
+                        say("分享面板打不开：${it.message}；文件在 ${file.absolutePath}", error = true)
+                    }
+            }.onFailure { say("打包失败：${it.message ?: it::class.simpleName}", true) }
+        }
+    }
+
     // ---------- 崩溃 / 日志 ----------
 
     /**
@@ -613,7 +924,11 @@ class DevToolsViewModel(
     // ---------- 内部工具 ----------
 
     private fun run(successPrefix: String, block: suspend () -> String) {
-        if (_busy.value) return
+        // 以前这里直接 return，表现是「点了没反应」，看不出是撞上了还是没生效
+        if (_busy.value) {
+            say("上一个操作还在跑，等它结束再来一次", error = true)
+            return
+        }
         viewModelScope.launch {
             _busy.value = true
             val result = withContext(Dispatchers.IO) { runCatching { block() } }
@@ -621,6 +936,7 @@ class DevToolsViewModel(
             result.onSuccess { detail -> say("$successPrefix：$detail") }
                 .onFailure { say("失败：${it.message ?: it::class.simpleName}", true) }
             refreshInfo()
+            refreshSnapshots()
         }
     }
 
@@ -655,6 +971,12 @@ class DevToolsViewModel(
         /** 假训练的动作数：和首页常见的一天训练量对齐，方便看顶部统计 */
         private const val FAKE_EXERCISES = 7
         private const val FAKE_SETS = 3
+
+        /** 「远端文件已被删」场景用的文件名：一定不存在 */
+        private const val MISSING_REMOTE_NAME = "yfantasyxx-backup-19700101-000000-000-v15.db"
+
+        /** 占位文件：只为让「文件存在」这一关过掉，内容会被注入的故障覆盖 */
+        private const val PLACEHOLDER_REMOTE_NAME = "yfantasyxx-backup-19900101-000000-000-v15.db"
 
         fun factory(container: AppContainer) = viewModelFactory {
             initializer { DevToolsViewModel(container, container.workoutRepository) }

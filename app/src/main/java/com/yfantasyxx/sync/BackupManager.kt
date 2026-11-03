@@ -3,6 +3,7 @@ package com.yfantasyxx.sync
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.yfantasyxx.data.db.AppDatabase
+import com.yfantasyxx.util.Clock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,21 +55,33 @@ class BackupManager(
     private val dbFile: File
         get() = context.getDatabasePath(AppDatabase.NAME)
 
-    /** 立即备份到 WebDAV */
-    suspend fun backup(client: WebDavClient): Result<String> = withContext(Dispatchers.IO) {
-        if (!gate.tryLock()) {
+    /**
+     * 立即备份到 WebDAV。
+     *
+     * @param waitForGate 门被占着时是排队等待（自动备份用）还是立刻失败（手动点按用）。
+     *   手动点按要的是「马上给个说法」，不能让它默默排在那儿；
+     *   训练完成后的自动备份则会连着触发（练完一场接着练下一场），
+     *   立刻失败就会弹一句莫名其妙的「已有任务在进行」。
+     */
+    suspend fun backup(
+        client: RemoteStore,
+        waitForGate: Boolean = false,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (waitForGate) {
+            gate.lock()
+        } else if (!gate.tryLock()) {
             return@withContext Result.failure(IOException("已有备份或恢复任务在进行，请稍候"))
         }
         try {
         _state.update { it.copy(running = true, message = null, isError = false) }
         runCatching {
-            client.ensureDirectory(WebDavClient.BACKUP_DIRECTORY).getOrThrow()
+            client.ensureDirectory(RemoteStore.BACKUP_DIRECTORY).getOrThrow()
             val bytes = checkpointAndReadDb()
             // 文件名带上 schema 版本，列表里一眼能看出是哪一版写的
             val schema = currentSchemaVersion()
             val name = backupFileName(schema)
             val receipt = client
-                .upload("${WebDavClient.BACKUP_DIRECTORY}/$name", bytes)
+                .upload("${RemoteStore.BACKUP_DIRECTORY}/$name", bytes)
                 .getOrThrow()
             // 清理旧备份：绝不能失手删掉刚传上去的这份，失败也只提示不影响本次
             val pruneNote = pruneOldBackups(client, name)
@@ -103,8 +116,8 @@ class BackupManager(
     }
 
     /** 列出远端备份（按时间倒序，最新的在前） */
-    suspend fun refreshRemoteBackups(client: WebDavClient) = withContext(Dispatchers.IO) {
-        val result = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY)
+    suspend fun refreshRemoteBackups(client: RemoteStore) = withContext(Dispatchers.IO) {
+        val result = client.listBackupFiles(RemoteStore.BACKUP_DIRECTORY)
         _state.value = _state.value.copy(
             remoteBackups = sortByTimeDesc(result.getOrDefault(emptyList())),
             message = result.exceptionOrNull()?.let { "获取备份列表失败：${it.message}" },
@@ -123,7 +136,7 @@ class BackupManager(
      * 权限、断电），App 就永远拿着一个已关闭的数据库，进任何页面都崩，
      * 连「再恢复一次」都做不到。
      */
-    suspend fun restore(client: WebDavClient, fileName: String): Result<Unit> =
+    suspend fun restore(client: RemoteStore, fileName: String): Result<Unit> =
         withContext(Dispatchers.IO) {
             if (!gate.tryLock()) {
                 return@withContext Result.failure(IOException("已有备份或恢复任务在进行，请稍候"))
@@ -132,7 +145,7 @@ class BackupManager(
             _state.value = _state.value.copy(running = true, message = null, isError = false)
             var dbClosed = false
             runCatching {
-                val bytes = client.download("${WebDavClient.BACKUP_DIRECTORY}/$fileName").getOrThrow()
+                val bytes = client.download("${RemoteStore.BACKUP_DIRECTORY}/$fileName").getOrThrow()
                 // 覆盖本地库前先验一下，避免把 HTML 错误页 / 半个文件写进去导致应用起不来
                 if (!looksLikeSqlite(bytes)) {
                     throw IOException(
@@ -190,6 +203,11 @@ class BackupManager(
                     }
                     throw t
                 }
+                // 替换成功，旧库副本就没用了。它是整库大小的一份文件，
+                // 每恢复一次留一个太浪费；而且界面上没有任何入口能用它回滚。
+                // 走到这里说明这份备份已经通过头部校验、schema 校验、记录数校验，
+                // 再因为文件损坏打不开的概率极低。
+                runCatching { backup.delete() }
 
                 _state.value = _state.value.copy(
                     running = false,
@@ -199,7 +217,7 @@ class BackupManager(
                         if (backupVersion in 1 until appVersion) {
                             append("，表结构已从 v$backupVersion 升到 v$appVersion")
                         }
-                        append("，请重启应用")
+                        append("，即将重启应用")
                     },
                 )
             }.onFailure { e ->
@@ -218,9 +236,18 @@ class BackupManager(
         }
 
     /** 删除远端备份 */
-    suspend fun deleteRemote(client: WebDavClient, fileName: String) = withContext(Dispatchers.IO) {
-        client.delete("${WebDavClient.BACKUP_DIRECTORY}/$fileName")
+    suspend fun deleteRemote(client: RemoteStore, fileName: String) = withContext(Dispatchers.IO) {
+        val result = client.delete("${RemoteStore.BACKUP_DIRECTORY}/$fileName")
+        // 先刷新列表，再把失败提示盖回去：refreshRemoteBackups 会重写 message，
+        // 顺序反了的话「删除失败」一刷就没了
         refreshRemoteBackups(client)
+        result.exceptionOrNull()?.let { e ->
+            // 原来这里把 delete 的 Result 直接丢了：删不掉时列表里那份文件还在，
+            // 界面却一句话都不说，看着就是「点了没反应」
+            _state.update {
+                it.copy(message = "删除失败：${e.message ?: "未知错误"}", isError = true)
+            }
+        }
     }
 
     /** 外部设置错误信息（如未配置） */
@@ -297,11 +324,11 @@ class BackupManager(
      *
      * 单份删除失败不影响本次备份结果，只附一句提示。
      */
-    private suspend fun pruneOldBackups(client: WebDavClient, keepName: String): String? {
-        val list = client.listBackupFiles(WebDavClient.BACKUP_DIRECTORY).getOrElse {
+    private suspend fun pruneOldBackups(client: RemoteStore, keepName: String): String? {
+        val list = client.listBackupFiles(RemoteStore.BACKUP_DIRECTORY).getOrElse {
             return "旧备份未清理（${it.message ?: "获取列表失败"}），不影响本次备份"
         }
-        val todayStart = startOfDay(System.currentTimeMillis())
+        val todayStart = startOfDay(Clock.now())
         val cutoff = daysBefore(todayStart, KEEP_DAYS)
         val keep = linkedSetOf(keepName)
         val keptDays = mutableSetOf<Long>()
@@ -322,7 +349,7 @@ class BackupManager(
         if (stale.isEmpty()) return null
         var failed = 0
         stale.forEach { old ->
-            client.delete("${WebDavClient.BACKUP_DIRECTORY}/${old.name}")
+            client.delete("${RemoteStore.BACKUP_DIRECTORY}/${old.name}")
                 .onFailure { failed++ }
         }
         return when {

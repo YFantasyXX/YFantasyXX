@@ -15,7 +15,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.db.WorkoutTemplate
 import com.yfantasyxx.ui.components.EmptyState
@@ -83,8 +83,8 @@ fun TemplatesScreen(
 ) {
     val container = rememberAppContainer()
     val vm: TemplatesViewModel = viewModel(factory = TemplatesViewModel.factory(container))
-    val groups by vm.groups.collectAsState()
-    val folders by vm.folders.collectAsState()
+    val groups by vm.groups.collectAsStateWithLifecycle()
+    val folders by vm.folders.collectAsStateWithLifecycle()
 
     var showNewFolder by remember { mutableStateOf(false) }
     var folderNameInput by remember { mutableStateOf("") }
@@ -499,7 +499,7 @@ private fun FolderHeader(
 fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: TemplateEditViewModel = viewModel(factory = TemplateEditViewModel.factory(container))
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
     var showPicker by remember { mutableStateOf(false) }
     var showAddExercise by remember { mutableStateOf(false) }
     var restPickerKey by remember { mutableStateOf<Long?>(null) }
@@ -813,7 +813,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
         val exerciseFlow = remember(keyword) {
             container.workoutRepository.observeExercises(keyword, null)
         }
-        val list by exerciseFlow.collectAsState(initial = emptyList())
+        val list by exerciseFlow.collectAsStateWithLifecycle(initialValue = emptyList())
         AppDialog(
             title = "选择动作",
             fullWidth = true,

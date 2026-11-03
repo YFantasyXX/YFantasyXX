@@ -61,8 +61,9 @@
 
 环境要求：JDK 17+、Android SDK Platform 37。
 
-> 本应用 minSdk 为 **32（Android 12L）**：悬浮底栏的毛玻璃效果依赖 `miuix-blur`，
-> 该库要求 API 32+。如需支持更低版本，可移除 `miuix-blur` 依赖并把底栏改为纯色。
+> 本应用 minSdk 为 **32（Android 12L）**。底栏的液态玻璃效果由
+> [`io.github.kyant0:backdrop`](https://github.com/Kyant0/AndroidLiquidGlass) 提供（Apache-2.0）；
+> 如需支持更低版本，可移除该依赖并把底栏改为纯色。
 
 ```bash
 git clone https://github.com/YFantasyXX/YFantasyXX.git
@@ -178,6 +179,7 @@ tools/
 ## 致谢
 
 - [MIUIX](https://github.com/compose-miuix-ui/miuix) — HyperOS 风格 Compose UI 组件库
+- [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) — 底栏液态玻璃（`backdrop`，Apache-2.0）
 - [DuarteSantos8/openGym](https://github.com/DuarteSantos8/openGym) — 1RM 估算与拖动排序的设计参考（见上节）
 - 数据模型与交互设计参考了 [flandyw/Workout](https://github.com/flandyw/Workout)、[mihretu-dev/HomeWorkoutApp](https://github.com/mihretu-dev/HomeWorkoutApp) 等优秀开源健身项目
 

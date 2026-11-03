@@ -22,6 +22,8 @@ class YFantasyXXApplication : Application() {
         container = AppContainer(this)
         CrashLogger.install(this)
         com.yfantasyxx.util.AppVisibility.install(this)
+        // 读回测试工具上次拨的时间偏移（正式版没有入口，永远是 0）
+        com.yfantasyxx.util.Clock.install(this)
         // 首次启动写入内置动作库；清理异常退出留下的重复草稿
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()
@@ -35,6 +37,14 @@ class YFantasyXXApplication : Application() {
  */
 class AppContainer(context: Context) {
     val appContext: Context = context.applicationContext
+
+    /**
+     * 应用级协程作用域，活到进程结束。
+     *
+     * 设置流做成进程内单例（见 SettingsRepository.settings），必须有个
+     * 生命周期够长的作用域来跑；用 viewModelScope 会在页面销毁时把流停掉。
+     */
+    val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @Volatile
     private var database: AppDatabase? = null
@@ -80,7 +90,7 @@ class AppContainer(context: Context) {
      * 之后所有写入都会打在已关闭的库上（`attempt to re-open an already-closed object`）。
      */
     val workoutRepository: WorkoutRepository by lazy { WorkoutRepository { db() } }
-    val settingsRepository: SettingsRepository by lazy { SettingsRepository(appContext) }
+    val settingsRepository: SettingsRepository by lazy { SettingsRepository(appContext, appScope) }
     val backupManager: BackupManager by lazy {
         BackupManager(
             context = appContext,

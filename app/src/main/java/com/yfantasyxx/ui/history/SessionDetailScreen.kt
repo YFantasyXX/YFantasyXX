@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -78,6 +78,10 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     private val _loaded = MutableStateFlow(false)
     val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
 
+    /** 最近一次体重：自重动作的容量要加它，见 data/Load.kt */
+    private val _bodyweight = MutableStateFlow<Float?>(null)
+    val bodyweight: StateFlow<Float?> = _bodyweight.asStateFlow()
+
     private var observeJob: kotlinx.coroutines.Job? = null
     private var sessionId: Long? = null
 
@@ -95,6 +99,7 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
             }
         }
         viewModelScope.launch { _session.value = repo.getSession(id) }
+        viewModelScope.launch { _bodyweight.value = repo.latestWeightKg() }
     }
 
     /** 改重量 / 次数：只动这一组，完成状态与所属会话都不变 */
@@ -191,9 +196,10 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
 fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: SessionDetailViewModel = viewModel(factory = SessionDetailViewModel.factory(container))
-    val details by vm.details.collectAsState()
-    val session by vm.session.collectAsState()
-    val loaded by vm.loaded.collectAsState()
+    val details by vm.details.collectAsStateWithLifecycle()
+    val session by vm.session.collectAsStateWithLifecycle()
+    val loaded by vm.loaded.collectAsStateWithLifecycle()
+    val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
     var showDelete by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -205,7 +211,11 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
 
     val totalVolume = details.sumOf { item ->
         item.sets.filter { it.completed && !it.isWarmup }
-            .sumOf { (it.weightKg * it.reps).toDouble() }
+            .sumOf {
+                // 自重动作的 weightKg 是额外负重，容量要把体重算进去
+                (com.yfantasyxx.data.Load
+                    .effectiveKg(it.weightKg, item.exercise.equipment, bodyweight) * it.reps).toDouble()
+            }
     }.toFloat()
     val totalSets = details.sumOf { item -> item.sets.count { it.completed } }
 
@@ -229,7 +239,10 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                 highlights = details
                     .sortedByDescending { item ->
                         item.sets.filter { it.completed }
-                            .sumOf { (it.weightKg * it.reps).toDouble() }
+                            .sumOf {
+                                (com.yfantasyxx.data.Load
+                                    .effectiveKg(it.weightKg, item.exercise.equipment, bodyweight) * it.reps).toDouble()
+                            }
                     }
                     .take(3)
                     .mapNotNull { item ->

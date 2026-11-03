@@ -44,6 +44,8 @@ internal fun WorkoutExerciseRow(
     index: Int,
     lastSets: List<SetLog>,
     unitLabel: String,
+    /** 最近一次体重：自重动作的容量按它折算 */
+    bodyweightKg: Float?,
     collapsed: Boolean,
     onToggleCollapse: () -> Unit,
     drag: WorkoutDragState,
@@ -181,6 +183,7 @@ internal fun WorkoutExerciseRow(
                 item = item,
                 lastSets = lastSets,
                 unitLabel = unitLabel,
+                bodyweightKg = bodyweightKg,
                 collapsed = collapsed,
                 onToggleCollapse = onToggleCollapse,
                 supersetGroup = item.sessionExercise.supersetGroup,

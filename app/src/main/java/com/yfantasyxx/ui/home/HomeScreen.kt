@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -69,12 +69,11 @@ fun HomeScreen(
     onOpenTemplates: () -> Unit,
     onOpenSession: (Long) -> Unit,
     onStartFromTemplate: () -> Unit,
-    onOpenSettings: () -> Unit = {},
 ) {
     val container = rememberAppContainer()
     val vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(container))
-    val state by vm.uiState.collectAsState()
-    val latestWeight by vm.latestWeightKg.collectAsState()
+    val state by vm.uiState.collectAsStateWithLifecycle()
+    val latestWeight by vm.latestWeightKg.collectAsStateWithLifecycle()
     var showWeightDialog by remember { mutableStateOf(false) }
     var showPlans by remember { mutableStateOf(false) }
     var showSkipConfirm by remember { mutableStateOf(false) }
@@ -229,72 +228,6 @@ fun HomeScreen(
                             )
                         }
 
-                        // ---- 周目标 ----
-                        // 没设目标时给一个入口，而不是空白：不然用户不知道有这个功能
-                        Spacer(Modifier.height(14.dp))
-                        if (state.settings.weeklyGoal > 0) {
-                            val goal = state.settings.weeklyGoal
-                            val done = state.weekSessionCount
-                            val ratio = (done.toFloat() / goal).coerceIn(0f, 1f)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "本周目标",
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Text(
-                                    text = "$done / $goal 次" +
-                                        if (done >= goal) " · 已达成" else "",
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = if (done >= goal) {
-                                        MiuixTheme.colorScheme.primary
-                                    } else {
-                                        MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                    },
-                                )
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(6.dp)
-                                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
-                                    .background(MiuixTheme.colorScheme.surfaceContainer),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(ratio)
-                                        .height(6.dp)
-                                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
-                                        .background(MiuixTheme.colorScheme.primary),
-                                )
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(onClick = onOpenSettings)
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "设定每周训练目标",
-                                    style = MiuixTheme.textStyles.footnote1,
-                                    color = MiuixTheme.colorScheme.primary,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null,
-                                    modifier = Modifier.height(16.dp),
-                                    tint = MiuixTheme.colorScheme.primary,
-                                )
-                            }
-                        }
                     }
                 }
             }

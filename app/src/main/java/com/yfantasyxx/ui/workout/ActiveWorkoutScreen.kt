@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
@@ -57,15 +57,16 @@ import androidx.compose.runtime.mutableStateMapOf
 fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: WorkoutViewModel = viewModel(factory = WorkoutViewModel.factory(container))
-    val exercises by vm.exercises.collectAsState()
-    val elapsed by vm.elapsedSeconds.collectAsState()
-    val restTimer by vm.restTimer.collectAsState()
-    val lastPerformance by vm.lastPerformance.collectAsState()
-    val history by vm.history.collectAsState()
-    val error by vm.error.collectAsState()
-    val currentExerciseId by vm.currentExerciseId.collectAsState()
-    val restFinished by vm.restFinished.collectAsState()
-    val defaultSessionName by vm.defaultSessionName.collectAsState()
+    val exercises by vm.exercises.collectAsStateWithLifecycle()
+    val elapsed by vm.elapsedSeconds.collectAsStateWithLifecycle()
+    val restRunning by vm.restRunning.collectAsStateWithLifecycle()
+    val lastPerformance by vm.lastPerformance.collectAsStateWithLifecycle()
+    val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
+    val history by vm.history.collectAsStateWithLifecycle()
+    val error by vm.error.collectAsStateWithLifecycle()
+    val currentExerciseId by vm.currentExerciseId.collectAsStateWithLifecycle()
+    val restFinished by vm.restFinished.collectAsStateWithLifecycle()
+    val defaultSessionName by vm.defaultSessionName.collectAsStateWithLifecycle()
 
     // 训练内动作拖动排序：相位状态（未拖 / 拖动中 / 落位中）收敛在
     // WorkoutDragState 里，屏幕这边只负责渲染列表与消费落位计划
@@ -103,13 +104,20 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     var showFinishDialog by remember { mutableStateOf(false) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showRestPicker by remember { mutableStateOf(false) }
+    // 打开时长选择框那一刻的秒数快照。
+    // 不能让它去读 vm.restTimer：那份状态每秒都变，读一次就等于
+    // 把整个 content lambda（含 LazyColumn）拉进每秒重组的范围。
+    var restPickerInitial by remember { mutableStateOf(0) }
     var showAddExercise by remember { mutableStateOf(false) }
     // 正在替换的动作（sessionExerciseId）；非空时打开动作选择器
     var replaceTargetId by remember { mutableStateOf<Long?>(null) }
     // 杠铃片计算器的初始重量；非空时打开
     var plateWeight by remember { mutableStateOf<Float?>(null) }
-    val settings by vm.settings.collectAsState()
-    val progressionModes by vm.progressionModes.collectAsState()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    val progressionModes by vm.progressionModes.collectAsStateWithLifecycle()
+    // 提交中：按钮置灰并改文案。不加这个的话，写库那一两百毫秒里按钮毫无反应，
+    // 用户会以为没点上，连点又被防重入静默吞掉
+    val finishing by vm.finishing.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         vm.ensureSession()
@@ -217,7 +225,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     "${exercises.size} 个动作 · 已完成 $doneSets/$totalSets 组"
                 },
                 navigationIcon = {
-                    IconButton(onClick = { showDiscardDialog = true }) {
+                    // 提交中禁用：放弃训练会把这一行删掉，
+                    // 和正在跑的「结束 + 推进计划」撞上就是数据错乱
+                    IconButton(
+                        onClick = { showDiscardDialog = true },
+                        enabled = !finishing,
+                    ) {
                         Icon(
                             imageVector = Icons.Filled.Delete,
                             contentDescription = "放弃",
@@ -226,8 +239,14 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    Button(onClick = { showFinishDialog = true }) {
-                        Text("完成", style = MiuixTheme.textStyles.button)
+                    Button(
+                        onClick = { showFinishDialog = true },
+                        enabled = !finishing,
+                    ) {
+                        Text(
+                            if (finishing) "完成中" else "完成",
+                            style = MiuixTheme.textStyles.button,
+                        )
                     }
                 },
             )
@@ -275,7 +294,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                 // 底部留出休息条的高度：休息条是浮层，靠 contentPadding 让最后一张卡
                 // 还能滚到它上面去。改 contentPadding 不会推动当前内容，只会加长可滚范围。
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    bottom = 24.dp + if (restTimer.running) 88.dp else 0.dp,
+                    bottom = 24.dp + if (restRunning) 88.dp else 0.dp,
                 ),
             ) {
                 // 操作异常提示（不闪退，显示原因）
@@ -345,6 +364,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         index = index,
                         lastSets = lastPerformance[item.sessionExercise.exerciseId].orEmpty(),
                         unitLabel = WeightUnit.KG.label,
+                        bodyweightKg = bodyweight,
                         collapsed = collapsedIds[id] == true,
                         onToggleCollapse = {
                             collapsedIds[id] = collapsedIds[id] != true
@@ -395,26 +415,32 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             // 被推下去一张卡；休息结束再抽走，列表又弹回来。这就是「点完成这一组，
             // 位置往上/往下跳」的根源（开输入法时可视区更小，跳得更明显）。
             // 做成浮层以后列表结构完全不变，而且滚到哪个动作都看得见剩余时间。
-            if (restTimer.running) {
-                RestBar(
-                    state = restTimer,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .zIndex(1f),
-                    onAdjust = { showRestPicker = true },
-                    onExtend = { vm.extendRestTimer(30) },
-                    onSkip = { vm.skipRestTimer() },
-                )
-            }
+            //
+            // 收集放在 RestBarHost 内部：倒计时每秒变一次，读在父作用域的话
+            // 每秒都会重建一次列表的 content lambda，所有可见动作卡跟着重组。
+            RestBarHost(
+                vm = vm,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(1f),
+                onAdjust = {
+                    // 用当前值做快照，弹框里就不再订阅每秒的变化
+                    val t = vm.restTimer.value
+                    restPickerInitial = if (t.totalSeconds > 0) {
+                        t.totalSeconds
+                    } else {
+                        t.remainingSeconds
+                    }
+                    showRestPicker = true
+                },
+                onExtend = { vm.extendRestTimer(30) },
+                onSkip = { vm.skipRestTimer() },
+            )
         }
 
         if (showRestPicker) {
             RestSecondsPickerDialog(
-                initialSeconds = if (restTimer.totalSeconds > 0) {
-                    restTimer.totalSeconds
-                } else {
-                    restTimer.remainingSeconds
-                },
+                initialSeconds = if (restPickerInitial > 0) restPickerInitial else 90,
                 showSaveAsDefault = currentExerciseId != null,
                 onDismiss = { showRestPicker = false },
                 onConfirm = { seconds, saveAsDefault ->
@@ -523,6 +549,33 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * 休息条的宿主。
+ *
+ * 抽出来只为一件事：让「每秒变化一次」的 restTimer 只在这个浮层里重组。
+ * 如果读在训练页的 content lambda 里，LazyColumn 的 content lambda 每秒
+ * 都会换一个新实例 → item provider 重建 → 所有可见动作卡跟着重组，
+ * 而每张卡里有十几个回调 lambda 和若干 remember。
+ */
+@Composable
+private fun RestBarHost(
+    vm: WorkoutViewModel,
+    modifier: Modifier = Modifier,
+    onAdjust: () -> Unit,
+    onExtend: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    val state by vm.restTimer.collectAsStateWithLifecycle()
+    if (!state.running) return
+    RestBar(
+        state = state,
+        modifier = modifier,
+        onAdjust = onAdjust,
+        onExtend = onExtend,
+        onSkip = onSkip,
+    )
 }
 
 /**

@@ -24,10 +24,10 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Scale
 import androidx.compose.material.icons.filled.Timer
@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.prefs.AlertSound
 import com.yfantasyxx.data.prefs.BottomBarStyle
@@ -125,10 +125,10 @@ fun SettingsScreen(
 ) {
     val container = rememberAppContainer()
     val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(container))
-    val settings by vm.settings.collectAsState()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val refreshRate = rememberDisplayRefreshRate()
     val refreshRateLabel = if (refreshRate > 0f) "${refreshRate.toInt()} Hz" else "读取中…"
-    val backupState by vm.backupState.collectAsState()
+    val backupState by vm.backupState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -290,20 +290,6 @@ fun SettingsScreen(
                         )
                     },
                 )
-                SettingsDivider()
-                SettingsRow(
-                    title = "每周训练目标",
-                    subtitle = "0 = 不设目标，首页显示本周进度",
-                    icon = Icons.Filled.Flag,
-                    trailing = {
-                        NumberStepper(
-                            value = settings.weeklyGoal.toFloat(),
-                            onValueChange = { vm.setWeeklyGoal(it.toInt()) },
-                            step = 1f,
-                            unit = " 次",
-                        )
-                    },
-                )
             }
 
             /* ───────── 休息提醒 ───────── */
@@ -339,6 +325,43 @@ fun SettingsScreen(
                 )
                 SettingsDivider()
                 SettingsRow(
+                    title = "悬浮窗常驻",
+                    subtitle = when {
+                        !settings.restOverlay ->
+                            "需要先打开上面的「悬浮窗倒计时」"
+                        !settings.restOverlayPersistent ->
+                            "开着后：App 在前台也显示气泡；结束卡片停 12 秒后收成小球一直挂着"
+                        else ->
+                            "结束卡片停 12 秒后收成小圆球常驻屏幕；小球不能关，只能关掉这个开关"
+                    },
+                    icon = Icons.Filled.PushPin,
+                    trailing = {
+                        Switch(
+                            checked = settings.restOverlayPersistent,
+                            onCheckedChange = { on ->
+                                if (!on) {
+                                    vm.setRestOverlayPersistent(false)
+                                } else {
+                                    // 常驻也依赖悬浮窗权限，顺手要一下
+                                    if (!overlayGranted) requestOverlay()
+                                    vm.setRestOverlayPersistent(true)
+                                }
+                            },
+                        )
+                    },
+                    onClick = {
+                        if (!settings.restOverlay) {
+                            // 上面那个开关都没开，先把它打开
+                            vm.setRestOverlay(true)
+                            if (!overlayGranted) requestOverlay()
+                            vm.setRestOverlayPersistent(true)
+                        } else {
+                            vm.setRestOverlayPersistent(!settings.restOverlayPersistent)
+                        }
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
                     title = "结束提示音",
                     value = settings.restAlertSound.label,
                     subtitle = settings.restAlertSound.hint,
@@ -351,6 +374,15 @@ fun SettingsScreen(
                 SettingsHint(
                     text = "悬浮窗需要系统权限。荣耀/小米等机型如果重启后失效，" +
                         "去「设置 → 应用 → 特殊权限 → 显示在其他应用上层」重新打开即可。",
+                    startIndent = 20.dp,
+                    top = 8.dp,
+                    bottom = 6.dp,
+                )
+            }
+            if (settings.restOverlay && settings.restOverlayPersistent) {
+                SettingsHint(
+                    text = "常驻小圆球没有关闭按钮，点它只会回到 App；" +
+                        "想收掉就把上面的「悬浮窗常驻」关掉。",
                     startIndent = 20.dp,
                     top = 8.dp,
                     bottom = 6.dp,
@@ -468,6 +500,17 @@ fun SettingsScreen(
                         },
                     )
                     Spacer(Modifier.height(12.dp))
+                    // 两条都是用户实际会踩到的坑：
+                    // 1) 填 http:// 会被系统明文策略拦掉，报错完全看不懂；
+                    // 2) 口令用本机 Keystore 加密，密钥不可导出，换机后解不开，
+                    //    系统云备份又只带数据库 → 新机上必须重填一次
+                    SettingsHint(
+                        text = "地址要以 https:// 开头。口令用本机密钥加密，换机后不会跟系统备份一起恢复，" +
+                            "需要重新填写一次。",
+                        top = 0.dp,
+                        bottom = 10.dp,
+                        startIndent = 0.dp,
+                    )
                     Button(
                         onClick = {
                             vm.saveWebdav(url, user, pass)
@@ -577,6 +620,8 @@ fun SettingsScreen(
                     InfoRow("屏幕刷新率", refreshRateLabel)
                     InfoRow("数据存储", "本地 Room + WebDAV 备份")
                     InfoRow("UI 框架", "MIUIX (Compose Multiplatform)")
+                    // Apache-2.0 要求保留归属：底栏的玻璃效果由这个库绘制
+                    InfoRow("液态玻璃", "Kyant0/AndroidLiquidGlass (Apache-2.0)")
                     InfoRow("开源地址", "github.com/YFantasyXX/YFantasyXX")
                 }
             }

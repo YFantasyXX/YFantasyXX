@@ -19,12 +19,14 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -47,8 +49,8 @@ import com.yfantasyxx.ui.templates.TemplateEditScreen
 import com.yfantasyxx.ui.templates.TemplatesScreen
 import com.yfantasyxx.ui.workout.ActiveWorkoutScreen
 import androidx.compose.ui.unit.dp
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 object Routes {
     const val HOME = "home"
@@ -90,8 +92,23 @@ fun YFantasyXXApp() {
 @Composable
 private fun YFantasyXXNavHost() {
     val container = LocalAppContainer.current
-    val settings by container.settingsRepository.settings
-        .collectAsState(initial = com.yfantasyxx.data.prefs.AppSettings())
+    // 只让底栏真正用到的两个字段参与组合，而不是整份 settings。
+    //
+    // 整份 settings 参与组合的话，任何一次设置写入（包括每次自动备份回来
+    // 更新的 lastBackupTime）都会让这个函数重组；而 NavHost 的导航图是
+    // `remember(route, startDestination, builder)` 建的，builder 每次重组
+    // 都是新实例 → 整张图连同所有 destination 一起重建。
+    //
+    // 注意：derivedStateOf 只能追踪 Compose 的 State（快照系统），
+    // 直接读 `StateFlow.value` 是不会失效的，所以必须先 collect 成 State 再派生。
+    val settingsState = container.settingsRepository.settings.collectAsStateWithLifecycle()
+    val barStyle by remember {
+        derivedStateOf {
+            val s = settingsState.value
+            s.bottomBarStyle to s.blurBottomBar
+        }
+    }
+    val (bottomBarStyle, blurBottomBar) = barStyle
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -102,7 +119,7 @@ private fun YFantasyXXNavHost() {
         .asPaddingValues().calculateBottomPadding()
     val bottomSpace = when {
         !showBottomBar -> 0.dp
-        settings.bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS ->
+        bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS ->
             84.dp + navBarInset
         else -> 92.dp + navBarInset
     }
@@ -143,15 +160,6 @@ private fun YFantasyXXNavHost() {
                     onOpenTemplates = { navController.navigate(Routes.TEMPLATES) },
                     onOpenSession = { id -> navController.navigate(Routes.sessionDetail(id)) },
                     onStartFromTemplate = { navController.navigate(Routes.WORKOUT) },
-                    onOpenSettings = {
-                        navController.navigate(Routes.SETTINGS) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
-                            }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
                 )
             }
             composable(Routes.EXERCISES) {
@@ -218,7 +226,7 @@ private fun YFantasyXXNavHost() {
         }
 
         if (showBottomBar) {
-            if (settings.bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS) {
+            if (bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS) {
                 LiquidGlassBottomBar(
                     tabs = tabs,
                     selectedRoute = currentRoute,
@@ -231,7 +239,7 @@ private fun YFantasyXXNavHost() {
                     tabs = tabs,
                     selectedRoute = currentRoute,
                     backdrop = backdrop,
-                    glass = settings.blurBottomBar,
+                    glass = blurBottomBar,
                     onSelect = onTabSelected,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )

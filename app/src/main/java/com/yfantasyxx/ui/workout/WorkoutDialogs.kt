@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import top.yukonga.miuix.kmp.basic.Button
@@ -88,7 +88,7 @@ internal fun ExercisePickerDialog(
     var category by remember { mutableStateOf<String?>(null) }
     val exercises = remember(keyword, category) {
         container.workoutRepository.observeExercises(keyword, category)
-    }.collectAsState(initial = emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
 
     AppDialog(
         title = "选择动作",

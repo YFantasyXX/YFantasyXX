@@ -10,13 +10,15 @@ import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.ui.YFantasyXXApp
 import com.yfantasyxx.ui.theme.YFantasyXXTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -41,16 +43,26 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermissionIfNeeded()
 
         val app = application as YFantasyXXApplication
+        // 触摸分发路径上每次点击都要读这个值，只关心一个布尔量。
+        // 不 distinct 的话，设置里任何一次写入（备份时间、组间休息秒数…）
+        // 都会重新跑一遍 collect，白白唤醒主线程。
         lifecycleScope.launch {
-            app.container.settingsRepository.settings.collect {
-                tapHapticsEnabled = it.tapHaptics
-            }
+            app.container.settingsRepository.settings
+                .map { it.tapHaptics }
+                .distinctUntilChanged()
+                .collect { tapHapticsEnabled = it }
         }
 
+        // 主题同理：只订阅 themeMode，切成深浅色时才重组主题树，
+        // 改别的设置（比如刚备份完写回 lastBackupTime）不牵动根组合
+        val themeModeFlow = app.container.settingsRepository.settings
+            .map { it.themeMode }
+            .distinctUntilChanged()
+
         setContent {
-            val settings by app.container.settingsRepository.settings
-                .collectAsState(initial = AppSettings())
-            YFantasyXXTheme(themeMode = settings.themeMode) {
+            val themeMode by themeModeFlow
+                .collectAsStateWithLifecycle(initialValue = AppSettings().themeMode)
+            YFantasyXXTheme(themeMode = themeMode) {
                 YFantasyXXApp()
             }
         }

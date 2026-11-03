@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.TrainingCycle
 import com.yfantasyxx.data.db.PlanEntity
@@ -67,9 +67,9 @@ private data class PlanDraft(
 fun TrainingPlanDialog(onDismiss: () -> Unit) {
     val container = rememberAppContainer()
     val vm: PlansViewModel = viewModel(factory = PlansViewModel.factory(container))
-    val plans by vm.plans.collectAsState()
-    val allDays by vm.days.collectAsState()
-    val templates by vm.templates.collectAsState()
+    val plans by vm.plans.collectAsStateWithLifecycle()
+    val allDays by vm.days.collectAsStateWithLifecycle()
+    val templates by vm.templates.collectAsStateWithLifecycle()
 
     var draft by remember { mutableStateOf<PlanDraft?>(null) }
     var picking by remember { mutableStateOf<Int?>(null) }

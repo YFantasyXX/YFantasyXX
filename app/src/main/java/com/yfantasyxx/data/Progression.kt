@@ -31,7 +31,10 @@ data class RepRange(val min: Int, val max: Int) {
             val nums = Regex("\\d+").findAll(text).mapNotNull { it.value.toIntOrNull() }.toList()
             return when {
                 nums.isEmpty() -> null
-                nums.size == 1 -> RepRange(nums[0], nums[0])
+                // 单值也要夹到 1：旧数据里出现过 "0"，
+                // 而 max = 0 会让 Progression 的 allHitTop 恒为 true，
+                // 于是每次训练完都建议加重
+                nums.size == 1 -> nums[0].coerceAtLeast(1).let { RepRange(it, it) }
                 else -> {
                     val a = nums[0].coerceAtLeast(1)
                     val b = nums[1].coerceAtLeast(1)

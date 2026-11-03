@@ -33,9 +33,14 @@ android {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 107
-        versionName = "1.4"
-        resourceConfigurations += listOf("zh", "en")
+        versionCode = 119
+        versionName = "1.5"
+    }
+
+    androidResources {
+        // 只保留中日韩外最常用的两套语言资源。
+        // AGP 8.9 起 defaultConfig.resourceConfigurations 已废弃，等价写法是这个
+        localeFilters += listOf("zh", "en")
     }
 
     buildTypes {
@@ -116,7 +121,11 @@ dependencies {
 
     // MIUIX - HyperOS style Compose UI library
     implementation(libs.miuix.ui)
-    implementation(libs.miuix.blur)
+
+    // 液态玻璃底栏的绘制引擎（Kyant0/AndroidLiquidGlass）。
+    // 原来用 miuix-blur，它其实是这个库的分叉；统一到上游之后只留一套
+    // backdrop 录制，两个底栏共享同一份背景层，不再重复录制全屏离屏层。
+    implementation(libs.kyant.backdrop)
 
     // Room
     implementation(libs.androidx.room.runtime)

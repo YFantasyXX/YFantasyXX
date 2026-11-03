@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.width
@@ -18,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.db.CategoryVolume
 import com.yfantasyxx.ui.components.DistributionRow
@@ -27,6 +27,7 @@ import com.yfantasyxx.ui.components.VolumeBarChart
 import com.yfantasyxx.ui.components.WeightLineChart
 import com.yfantasyxx.ui.components.formatVolume
 import com.yfantasyxx.ui.rememberAppContainer
+import com.yfantasyxx.util.Clock
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
@@ -39,7 +40,7 @@ import androidx.compose.runtime.Composable
 fun StatsScreen() {
     val container = rememberAppContainer()
     val vm: StatsViewModel = viewModel(factory = StatsViewModel.factory(container))
-    val state by vm.uiState.collectAsState()
+    val state by vm.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = { SmallTopAppBar(title = "训练统计") },
@@ -209,7 +210,9 @@ fun StatsScreen() {
 @Composable
 private fun MuscleHeatmap(loads: List<com.yfantasyxx.data.db.MuscleLoad>) {
     val maxSets = (loads.maxOfOrNull { it.sets } ?: 1f).coerceAtLeast(1f)
-    val now = remember { System.currentTimeMillis() }
+    // 测试工具拨钟后要立刻按新时间重算「几小时前练的」，所以订阅 Clock 的版本号
+    val clockRev by Clock.revision.collectAsStateWithLifecycle()
+    val now = remember(clockRev) { Clock.now() }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         loads.chunked(2).forEach { pair ->
             Row(

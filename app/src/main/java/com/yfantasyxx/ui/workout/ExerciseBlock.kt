@@ -67,6 +67,8 @@ internal fun ExerciseBlock(
     item: SessionExerciseWithSets,
     lastSets: List<SetLog>,
     unitLabel: String,
+    /** 最近一次体重：自重动作的容量按它折算，null = 还没记过 */
+    bodyweightKg: Float? = null,
     collapsed: Boolean = false,
     onToggleCollapse: () -> Unit = {},
     /** 超级组编号，非空时在标题行显示标记 */
@@ -91,8 +93,16 @@ internal fun ExerciseBlock(
     onApplyProgression: (Float, Int) -> Unit = { _, _ -> },
 ) {
     val completed = item.sets.count { it.completed }
+    // 自重动作的重量栏是「额外负重」：0 就是纯徒手，显示成「自重×10」而不是「0×10」
+    val isBodyweight = com.yfantasyxx.data.Load.isBodyweight(item.exercise.equipment)
     val lastSummary = if (lastSets.isNotEmpty()) {
-        "上次 " + lastSets.take(3).joinToString(" / ") { "${it.weightKg.toInt()}×${it.reps}" }
+        "上次 " + lastSets.take(3).joinToString(" / ") { s ->
+            if (isBodyweight) {
+                if (s.weightKg > 0f) "+${fmtWeight(s.weightKg)}×${s.reps}" else "自重×${s.reps}"
+            } else {
+                "${s.weightKg.toInt()}×${s.reps}"
+            }
+        }
     } else ""
     // 动作级操作收进一个菜单：标题行原来挤了收纳 + 删除两个按钮，
     // 再加替换/超级组就放不下了，而且删除放这么显眼也容易误触。
@@ -295,8 +305,17 @@ internal fun ExerciseBlock(
                         Text(
                             text = buildString {
                                 append("进阶 ")
-                                append(fmtWeight(suggestion.weightKg))
-                                append(" kg × ")
+                                // 自重动作显示「自重 × n」，加了负重才显示 +X kg
+                                if (isBodyweight) {
+                                    if (suggestion.weightKg > 0f) {
+                                        append("+").append(fmtWeight(suggestion.weightKg)).append(" kg")
+                                    } else {
+                                        append("自重")
+                                    }
+                                } else {
+                                    append(fmtWeight(suggestion.weightKg)).append(" kg")
+                                }
+                                append(" × ")
                                 append(suggestion.reps)
                                 if (suggestion.addedWeight) append("  ↑")
                             },
@@ -342,7 +361,8 @@ internal fun ExerciseBlock(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "重量($unitLabel)",
+                    // 自重动作填的是额外负重，标签要说清楚，否则会被当成总重量
+                    text = if (isBodyweight) "负重($unitLabel)" else "重量($unitLabel)",
                     style = MiuixTheme.textStyles.footnote1,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     textAlign = TextAlign.Center,
@@ -357,6 +377,26 @@ internal fun ExerciseBlock(
                     modifier = Modifier.weight(1f),
                 )
                 Spacer(Modifier.width(44.dp))
+            }
+            // 自重动作的容量靠体重折算，没记过体重时容量会是 0：
+            // 不说清楚的话，用户只会看到"练了但容量不动"。
+            // 延迟 1.5 秒再显示：体重是异步读出来的，首帧还是 null，
+            // 立刻显示会在每次进训练页闪一下
+            var showBodyweightHint by remember { mutableStateOf(false) }
+            LaunchedEffect(isBodyweight, bodyweightKg) {
+                showBodyweightHint = false
+                if (isBodyweight && bodyweightKg == null) {
+                    kotlinx.coroutines.delay(1500)
+                    showBodyweightHint = true
+                }
+            }
+            if (showBodyweightHint) {
+                Text(
+                    text = "自重的容量按体重折算，先去首页记一次体重",
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                )
             }
             item.sets.sortedBy { it.setNumber }.forEach { set ->
                 SetRow(

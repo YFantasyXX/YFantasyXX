@@ -21,7 +21,10 @@ import java.io.FileOutputStream
  * 直接用 android.graphics 画，不走 Compose 截图：
  * 截图要等界面布局完成、还要处理主题与滚动位置，而这张卡片是固定版式，
  * 直接画反而更可控（深浅色主题下都是同一张图，发出去观感一致）。
- * 输出到 cacheDir，由 FileProvider 授权给分享目标，用完系统会自己清理。
+ *
+ * 输出到 cacheDir/shares/，由 FileProvider 授权给分享目标。
+ * **不能指望系统清理 cacheDir**：只有磁盘告急时才会动它，平时分享几十次
+ * 就攒下几十 MB。所以每次写入前自己 prune 一次，只留最近几张。
  */
 object ShareCard {
 
@@ -38,6 +41,15 @@ object ShareCard {
 
     private const val W = 900
     private const val H = 1200
+
+    /**
+     * 分享目录里最多留几份。
+     *
+     * 一张卡片约 300KB，留 5 份够覆盖「连发几张」的场景；多留的纯占空间。
+     * 之所以不每次只留最新一张：分享面板拿到 URI 后读取是异步的，
+     * 紧接着再分享一张时把上一张删掉，前一个目标可能就读不到了。
+     */
+    private const val MAX_CACHED_CARDS = 5
 
     private val bgTop = Color.parseColor("#12131A")
     private val bgBottom = Color.parseColor("#1D1F2A")
@@ -122,6 +134,7 @@ object ShareCard {
         // 圆角裁一下，某些 IM 客户端不会自动加圆角
         val rounded = roundCorners(bitmap, 48f)
         val dir = File(context.cacheDir, "shares").apply { mkdirs() }
+        pruneOldCards(dir)
         val file = File(dir, "workout-${System.currentTimeMillis()}.png")
         FileOutputStream(file).use { out ->
             rounded.compress(Bitmap.CompressFormat.PNG, 100, out)
@@ -129,6 +142,17 @@ object ShareCard {
         if (rounded !== bitmap) rounded.recycle()
         bitmap.recycle()
         return file
+    }
+
+    /** 只留最近 [MAX_CACHED_CARDS] - 1 份，给即将写入的这一份留位置 */
+    private fun pruneOldCards(dir: File) {
+        runCatching {
+            dir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".png") }
+                ?.sortedByDescending { it.lastModified() }
+                ?.drop(MAX_CACHED_CARDS - 1)
+                ?.forEach { it.delete() }
+        }
     }
 
     private fun stat(

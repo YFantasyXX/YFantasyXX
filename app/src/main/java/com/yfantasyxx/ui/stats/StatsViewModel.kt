@@ -10,6 +10,7 @@ import com.yfantasyxx.data.db.BodyMetric
 import com.yfantasyxx.data.db.CategoryVolume
 import com.yfantasyxx.data.db.ExercisePr
 import com.yfantasyxx.data.prefs.SettingsRepository
+import com.yfantasyxx.util.Clock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -40,7 +41,13 @@ class StatsViewModel(
     private val dayMs = 24L * 3600 * 1000
     private val dateFormat = SimpleDateFormat("M/d", Locale.CHINA)
 
-    /** 已经算过的数据版本，用来判断 PR 是复用缓存还是重算 */
+    /**
+     * 已经算过的数据版本，用来判断 PR 是复用缓存还是重算。
+     *
+     * 读写在 `flowOn(Dispatchers.IO)` 的 map 里，跨线程访问；不加 volatile 时
+     * 主线程可能读到旧值，把「需要重算」误判成「可以复用缓存」。
+     */
+    @Volatile
     private var computedVersion = -1
 
     /**
@@ -65,14 +72,14 @@ class StatsViewModel(
         computedVersion = version
         return StatsUiState(
             weekVolumes = buildWeekBuckets(),
-            categoryVolumes = repo.volumeByCategory(System.currentTimeMillis() - 30 * dayMs),
+            categoryVolumes = repo.volumeByCategory(Clock.now() - 30 * dayMs),
             personalRecords = repo.personalRecords(refresh = refresh),
             weightTrend = weights.sortedBy { it.date }.takeLast(30).map {
                 dateFormat.format(Date(it.date)) to it.weightKg
             },
             // 热力图看 7 天：一个肌群一周练 10-20 组是常见区间，
             // 只看 3 天会看不出「这周还没练过」的空白
-            muscleLoads = repo.muscleLoads(System.currentTimeMillis() - 7 * dayMs),
+            muscleLoads = repo.muscleLoads(Clock.now() - 7 * dayMs),
             // 校准结果也要能看见：PR 数字随曲线变，用户得知道现在用的是哪条
             curves = repo.calibration(),
         )

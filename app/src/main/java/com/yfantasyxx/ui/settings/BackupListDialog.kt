@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yfantasyxx.sync.BackupFileMeta
 import com.yfantasyxx.sync.BackupManager
 import com.yfantasyxx.sync.BackupState
@@ -38,6 +39,7 @@ import com.yfantasyxx.sync.WebDavClient
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.EmptyState
+import com.yfantasyxx.util.Clock
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
@@ -72,14 +74,16 @@ fun BackupListDialog(
     var pendingRestore by remember { mutableStateOf<String?>(null) }
 
     // 相对时间（3 小时前）用打开那一刻做基准，避免每次重组都变；
-    // 但「今天/昨天」的分组必须用实时时间：跨过零点后新备份不能被归到昨天
-    val now = remember { System.currentTimeMillis() }
+    // 但必须和下面的分组用同一个时间源：一个走假时钟一个走真实时钟的话，
+    // 时间旅行后会出现「分在『今天』、标签写着『昨天』」
+    val clockRev by Clock.revision.collectAsStateWithLifecycle()
+    val now = remember(clockRev) { Clock.now() }
     val items = remember(state.remoteBackups) {
         state.remoteBackups
             .map { BackupItem(it) }
             .sortedByDescending { it.timestamp ?: Long.MIN_VALUE }
     }
-    val groups = remember(items) { groupItems(items, System.currentTimeMillis()) }
+    val groups = remember(items) { groupItems(items, Clock.now()) }
     val latestName = items.firstOrNull()?.name
     val appSchema = state.appSchemaVersion
 

@@ -257,8 +257,17 @@ interface SessionDao {
                (SELECT COUNT(*) FROM set_logs sl
                     INNER JOIN session_exercises se2 ON sl.sessionExerciseId = se2.id
                     WHERE se2.sessionId = s.id AND sl.completed = 1) AS setCount,
-               COALESCE((SELECT SUM(sl2.weightKg * sl2.reps) FROM set_logs sl2
+               COALESCE((SELECT SUM(
+                        -- 有效负荷：自重动作的重量栏是「额外负重」，容量要把体重算进去。
+                        -- 不改 weightKg 本身，因为次数/RPE/PR 都还要用原始值。
+                        -- 与 data/Load.kt 的 effectiveKg 保持一致
+                        CASE WHEN e2.equipment = '自重'
+                             THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                             ORDER BY bm.date DESC LIMIT 1), 0) + sl2.weightKg) * sl2.reps
+                             ELSE sl2.weightKg * sl2.reps END)
+                    FROM set_logs sl2
                     INNER JOIN session_exercises se3 ON sl2.sessionExerciseId = se3.id
+                    INNER JOIN exercises e2 ON se3.exerciseId = e2.id
                     WHERE se3.sessionId = s.id AND sl2.completed = 1 AND sl2.isWarmup = 0), 0) AS totalVolume
         FROM sessions s
         WHERE s.endTime IS NOT NULL
@@ -350,10 +359,15 @@ interface SessionDao {
      */
     @Query(
         """
-        SELECT s.startTime AS startTime, SUM(sl.weightKg * sl.reps) AS volume
+        SELECT s.startTime AS startTime, SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                 ELSE sl.weightKg * sl.reps END) AS volume
         FROM sessions s
         INNER JOIN session_exercises se ON se.sessionId = s.id
         INNER JOIN set_logs sl ON sl.sessionExerciseId = se.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
         WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
           AND s.startTime >= :since
         GROUP BY s.id ORDER BY s.startTime
@@ -364,7 +378,11 @@ interface SessionDao {
     /** 近 N 天各分类容量 */
     @Query(
         """
-        SELECT e.category AS category, SUM(sl.weightKg * sl.reps) AS volume
+        SELECT e.category AS category, SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                 ELSE sl.weightKg * sl.reps END) AS volume
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
@@ -386,6 +404,7 @@ interface SessionDao {
     @Query(
         """
         SELECT e.id AS exerciseId, e.name AS exerciseName, e.pattern AS pattern,
+               e.equipment AS equipment,
                sl.weightKg AS weightKg, sl.reps AS reps
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
@@ -428,12 +447,18 @@ interface SessionDao {
     @Query("SELECT COUNT(*) FROM sessions WHERE endTime IS NOT NULL AND startTime >= :since")
     fun observeSessionCount(since: Long): Flow<Int>
 
-    /** 近 N 天总容量 */
+    /** 近 N 天总容量（自重动作按「体重 + 额外负重」折算，见 data/Load.kt） */
     @Query(
         """
-        SELECT COALESCE(SUM(sl.weightKg * sl.reps), 0) FROM set_logs sl
+        SELECT COALESCE(SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                 ELSE sl.weightKg * sl.reps END), 0)
+        FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
         WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0 AND s.startTime >= :since
         """
     )
@@ -728,6 +753,10 @@ interface BodyMetricDao {
     @Query("SELECT * FROM body_metrics WHERE date = :date LIMIT 1")
     suspend fun getByDate(date: Long): BodyMetric?
 
+    /** 最近一次体重（kg）；没记过返回 null */
+    @Query("SELECT weightKg FROM body_metrics ORDER BY date DESC LIMIT 1")
+    suspend fun latestWeightKg(): Float?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(metric: BodyMetric): Long
 
@@ -871,7 +900,9 @@ abstract class AppDatabase : RoomDatabase() {
                         }
                     }
                 }
-                // pattern.value 是枚举里的常量整数，拼进 SQL 不存在注入面
+                // 拼进 SQL 的只能是数值：value 是枚举常量，id 是 Cursor.getLong。
+                // 维护提醒——不要在这里加任何来自用户输入（动作名、文件名）的字符串，
+                // SQLite 不支持参数化标识符，一旦混进字符串就是注入面
                 inferred.forEach { (id, value) ->
                     db.execSQL("UPDATE exercises SET pattern = $value WHERE id = $id")
                 }
@@ -1057,7 +1088,9 @@ abstract class AppDatabase : RoomDatabase() {
                     parsed += id to range
                 }
             }
-            // 值来自正则匹配出的整数，直接拼进 SQL 是安全的（不存在注入面）
+            // 拼进 SQL 的只有两类：表名/列名（编译期常量，见各 MIGRATION 调用点）
+            // 和 RepRange.min/max（由正则从文本里抠出的整数）。都是数值或常量，
+            // 没有注入面。维护提醒——别把动作名、标签这类自由文本拼进来。
             parsed.forEach { (id, range) ->
                 db.execSQL(
                     "UPDATE $table SET $minColumn = ${range.min}, $maxColumn = ${range.max} WHERE id = $id"

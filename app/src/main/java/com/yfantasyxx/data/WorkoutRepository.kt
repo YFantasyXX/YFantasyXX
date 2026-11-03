@@ -19,15 +19,19 @@ import com.yfantasyxx.data.db.WorkoutSession
 import com.yfantasyxx.data.db.WorkoutTemplate
 import androidx.room.withTransaction
 import com.yfantasyxx.data.seed.ExerciseSeed
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.data.db.TemplateFolder
+import com.yfantasyxx.util.Clock
 
 /**
  * 某个动作在某一次训练里的完整表现。
@@ -37,10 +41,9 @@ data class ExerciseHistoryEntry(
     val sessionId: Long,
     val startedAt: Long,
     val sets: List<SetLog>,
-) {
-    /** 这次训练该动作的总容量（重量 × 次数） */
-    val volumeKg: Float = sets.sumOf { (it.weightKg * it.reps).toDouble() }.toFloat()
-}
+    /** 这次训练该动作的总容量（自重动作按体重折算，见 [Load]） */
+    val volumeKg: Float = 0f,
+)
 
 /**
  * 统一数据仓库：动作库 / 模板 / 训练记录 / 身体数据
@@ -721,10 +724,14 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         sessionDao.markStarted(id, time)
 
     suspend fun finishSession(id: Long, name: String, note: String) {
-        sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
-        // 结束一次训练才推进计划：这才是「这一轮练到哪」的权威时刻，
-        // 中途放弃的草稿不该让计划往前走一天
-        sessionDao.getById(id)?.let { advancePlanAfter(it) }
+        // 结束 + 推进计划必须一起成功：中途失败会留下「训练已结束、游标没动」，
+        // 用户下次进来还看到今天该练这一天，再练一次等于同一天练两遍
+        db.withTransaction {
+            sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
+            // 结束一次训练才推进计划：这才是「这一轮练到哪」的权威时刻，
+            // 中途放弃的草稿不该让计划往前走一天
+            sessionDao.getById(id)?.let { advancePlanAfter(it) }
+        }
         // endTime 从 null 变成有值，周容量 / 分类容量的统计口径会跟着变
         invalidateStats()
     }
@@ -750,7 +757,17 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
 
     // ---------- 历史 ----------
 
-    fun observeHistory(): Flow<List<SessionSummary>> = sessionDao.observeSummaries()
+    /**
+     * 历史列表。
+     *
+     * 包一层体重流：容量里的「自重按体重折算」是写在查询里的子查询，
+     * Room 只监听主查询的 FROM 表，不会监听子查询里的 body_metrics。
+     * 用 flatMapLatest 重新订阅，查询会重新执行，记完体重容量立刻变。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeHistory(): Flow<List<SessionSummary>> =
+        observeLatestWeight().distinctUntilChanged()
+            .flatMapLatest { sessionDao.observeSummaries() }
 
     /**
      * 删除一条训练记录。
@@ -802,27 +819,35 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         val rows = sessionDao.workingSetsForPr()
         // 循环外取一次：这里是全库聚合的热路径，别每组去拿锁
         val curves = calibration()
+        // 自重动作的容量要加体重，全库聚合只取一次
+        val bodyweight = latestWeightKg()
         val acc = HashMap<Long, PrAcc>()
         rows.forEach { row ->
             val item = acc.getOrPut(row.exerciseId) {
                 PrAcc(row.exerciseId, row.exerciseName)
             }
-            val volume = row.weightKg * row.reps
+            val isBodyweight = Load.isBodyweight(row.equipment)
+            // 容量按有效负荷算（自重 + 额外负重）
+            val volume = Load.effectiveKg(row.weightKg, row.equipment, bodyweight) * row.reps
             if (volume > item.bestVolume) {
                 item.bestVolume = volume
-                item.volumeWeight = row.weightKg
+                item.volumeWeight = Load.effectiveKg(row.weightKg, row.equipment, bodyweight)
                 item.volumeReps = row.reps
             }
-            val pattern = LiftPattern.fromValue(row.pattern)
-            val e1rm = OneRepMax.estimate(
-                weightKg = row.weightKg,
-                reps = row.reps,
-                curve = curves[pattern.value] ?: pattern,
-            )
-            if (e1rm != null && e1rm > item.estOneRm) {
-                item.estOneRm = e1rm
-                item.bestWeight = row.weightKg
-                item.bestReps = row.reps
+            // 1RM 只对外部重量有意义：自重动作的「总负荷」含体重，
+            // 换算出来的数字和杠铃 1RM 不是一回事，宁可不给
+            if (!isBodyweight) {
+                val pattern = LiftPattern.fromValue(row.pattern)
+                val e1rm = OneRepMax.estimate(
+                    weightKg = row.weightKg,
+                    reps = row.reps,
+                    curve = curves[pattern.value] ?: pattern,
+                )
+                if (e1rm != null && e1rm > item.estOneRm) {
+                    item.estOneRm = e1rm
+                    item.bestWeight = row.weightKg
+                    item.bestReps = row.reps
+                }
             }
         }
         return acc.values
@@ -980,7 +1005,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         plans: List<PlanEntity>? = null,
         days: List<PlanDay>? = null,
         templates: List<WorkoutTemplate>? = null,
-        now: Long = System.currentTimeMillis(),
+        now: Long = Clock.now(),
     ): TrainingPlan? {
         val plan = (plans ?: planDao.observePlans().first()).firstOrNull { it.isActive } ?: return null
         val allDays = days ?: planDao.observeDays().first()
@@ -1039,7 +1064,11 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
 
     fun observeSessionCount(since: Long): Flow<Int> = sessionDao.observeSessionCount(since)
 
-    fun observeTotalVolume(since: Long): Flow<Float> = sessionDao.observeTotalVolume(since)
+    /** 近 N 天总容量；同样要跟着体重变化重新查（见 [observeHistory]） */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun observeTotalVolume(since: Long): Flow<Float> =
+        observeLatestWeight().distinctUntilChanged()
+            .flatMapLatest { sessionDao.observeTotalVolume(since) }
 
     /**
      * 某动作最近一次完成记录（作为"上次数据"参考）。
@@ -1096,17 +1125,27 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      * 某动作最近 [limit] 次已完成训练的完整记录（新的在前）。
      * 训练中「看历史定重量次数」用，所以连每组的重量次数都要，不做聚合。
      */
-    suspend fun exerciseHistory(exerciseId: Long, limit: Int = 12): List<ExerciseHistoryEntry> =
-        sessionDao.historySetsFor(exerciseId, limit)
+    suspend fun exerciseHistory(exerciseId: Long, limit: Int = 12): List<ExerciseHistoryEntry> {
+        // 自重动作的容量要加体重：只在这里取一次，别每个条目去查
+        val equipment = exerciseDao.getById(exerciseId)?.equipment.orEmpty()
+        val bodyweight = if (Load.isBodyweight(equipment)) latestWeightKg() else null
+        return sessionDao.historySetsFor(exerciseId, limit)
             .groupBy { it.sessionId }
             .map { (sessionId, rows) ->
+                val sets = rows.map { it.log }.sortedBy { it.setNumber }
                 ExerciseHistoryEntry(
                     sessionId = sessionId,
                     startedAt = rows.first().sessionStart,
-                    sets = rows.map { it.log }.sortedBy { it.setNumber },
+                    sets = sets,
+                    volumeKg = sets.filter { it.completed }
+                        .sumOf {
+                            (Load.effectiveKg(it.weightKg, equipment, bodyweight) * it.reps).toDouble()
+                        }
+                        .toFloat(),
                 )
             }
             .sortedByDescending { it.startedAt }
+    }
 
     /** 某次训练里某个动作当前最新的组（界面手里的快照可能还没回包） */
     suspend fun currentSets(sessionExerciseId: Long): List<SetLog> =
@@ -1156,8 +1195,14 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     fun observeLatestWeight(): Flow<Float?> =
         bodyMetricDao.observeAll().map { list -> list.firstOrNull()?.weightKg }
 
+    /** 最近一次体重（kg）；自重动作的容量按它折算，见 [Load] */
+    suspend fun latestWeightKg(): Float? = bodyMetricDao.latestWeightKg()
+
     suspend fun saveWeight(date: Long, weightKg: Float, bodyFat: Float? = null) {
         bodyMetricDao.upsert(BodyMetric(date = date, weightKg = weightKg, bodyFatPercent = bodyFat))
+        // 自重动作的容量与 PR 都按体重折算（见 Load）：体重变了，缓存必须跟着失效，
+        // 否则统计页会停在旧体重算出来的数字上
+        invalidateStats()
     }
 
     suspend fun deleteBodyMetric(id: Long) = bodyMetricDao.delete(id)

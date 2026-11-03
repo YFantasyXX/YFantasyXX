@@ -24,14 +24,17 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.highlight.HighlightStyle
+import com.yfantasyxx.ui.nav.liquid.dither
+import com.yfantasyxx.ui.nav.liquid.pad
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Surface
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.Backdrop
-import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
-import top.yukonga.miuix.kmp.blur.textureBlurEffect
-import top.yukonga.miuix.kmp.blur.drawBackdrop
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,14 +54,14 @@ data class FloatingTab(
 /**
  * 悬浮底栏：浮在内容之上、圆角胶囊 + 细描边 + 阴影。
  *
- * [glass] 开启时用 miuix-blur 采样并模糊下方内容（真毛玻璃效果）；
+ * [glass] 开启时用 Kyant0/backdrop 采样并模糊下方内容（真毛玻璃效果）；
  * 关闭时使用不透明背景（默认），避免高刷屏上额外的 GPU 模糊开销。
  */
 @Composable
 fun FloatingBottomBar(
     tabs: List<FloatingTab>,
     selectedRoute: String?,
-    backdrop: Backdrop,
+    backdrop: LayerBackdrop,
     glass: Boolean,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -95,25 +98,29 @@ fun FloatingBottomBar(
                             shape = { shape },
                             effects = {
                                 // 轻微模糊 + 噪点抖动 + 提一点饱和度，液态玻璃的“通透感”
-                                textureBlurEffect(
-                                    blurRadiusX = 12f,
-                                    blurRadiusY = 12f,
-                                    noiseCoefficient = 0.012f,
-                                    colors = BlurColors(
-                                        brightness = 0.03f,
-                                        contrast = 1.02f,
-                                        saturation = 1.45f,
+                                blur(12f)
+                                pad(12f)
+                                colorControls(
+                                    brightness = 0.03f,
+                                    contrast = 1.02f,
+                                    saturation = 1.45f,
+                                )
+                                // 上游库没有内建抖动，这里补一层极细噪点压色带
+                                dither(0.012f)
+                            },
+                            // 玻璃边缘的高光描边（iOS 液态玻璃的关键特征）。
+                            // 用 Plain 而不是 Default：后者会把颜色 alpha 强制成 1，
+                            // 只剩 Highlight.alpha 一个亮度旋钮，和原来的观感对不上
+                            highlight = {
+                                Highlight(
+                                    width = 1.dp,
+                                    alpha = 0.9f,
+                                    style = HighlightStyle.Plain(
+                                        color = Color.White.copy(
+                                            alpha = if (isDark) 0.14f else 0.28f,
+                                        ),
                                     ),
                                 )
-                            },
-                            // 玻璃边缘的高光描边（iOS 液态玻璃的关键特征）
-                            highlight = {
-                                val base = if (isDark) {
-                                    Highlight.GlassStrokeMiddleDark
-                                } else {
-                                    Highlight.GlassStrokeMiddleLight
-                                }
-                                base.copy(width = 1.dp, alpha = 0.9f)
                             },
                             onDrawSurface = {
                                 drawRect(color = surface.copy(alpha = 0.12f))

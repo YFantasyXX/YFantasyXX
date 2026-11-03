@@ -14,10 +14,8 @@ import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
 import com.yfantasyxx.sync.BackupManager
 import com.yfantasyxx.sync.WebDavClient
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -28,8 +26,8 @@ class SettingsViewModel(
     private val repo: WorkoutRepository,
 ) : ViewModel() {
 
+    /** 直接复用仓库里的单例流，不再自己 stateIn 一份 */
     val settings: StateFlow<AppSettings> = settingsRepo.settings
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
 
     val backupState = backupManager.state
 
@@ -61,12 +59,12 @@ class SettingsViewModel(
         viewModelScope.launch { settingsRepo.setAutoBackup(enabled) }
     }
 
-    fun setWeeklyGoal(count: Int) {
-        viewModelScope.launch { settingsRepo.setWeeklyGoal(count.coerceIn(0, 14)) }
-    }
-
     fun setRestOverlay(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.setRestOverlay(enabled) }
+    }
+
+    fun setRestOverlayPersistent(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setRestOverlayPersistent(enabled) }
     }
 
     fun setRestAlertSound(sound: AlertSound) {
@@ -141,6 +139,16 @@ class SettingsViewModel(
         }
         val finalPass = pass.ifEmpty { if (sameServer) saved.webdavPassword else "" }
         if (finalUrl.isBlank() || finalUser.isBlank()) return null
+        // 明文 http:// 在 targetSdk 36 下必然失败，系统原话是
+        // 「CLEARTEXT communication to ... not permitted」，用户看不懂。
+        // 在入口处拦下来，直接说清楚要改成什么。
+        if (!finalUrl.startsWith("https://", ignoreCase = true)) {
+            backupManager.setError(
+                "WebDAV 地址要以 https:// 开头（当前填的是 $finalUrl）。" +
+                    "坚果云、Nextcloud 都支持 https，换成 https 地址即可。"
+            )
+            return null
+        }
         return WebDavClient(finalUrl, finalUser, finalPass)
     }
 

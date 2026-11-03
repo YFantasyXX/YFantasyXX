@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -18,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -101,8 +104,8 @@ class HistoryViewModel(private val repo: WorkoutRepository) : ViewModel() {
 fun HistoryScreen(onOpenSession: (Long) -> Unit) {
     val container = rememberAppContainer()
     val vm: HistoryViewModel = viewModel(factory = HistoryViewModel.factory(container))
-    val sessions by vm.sessions.collectAsState()
-    val query by vm.query.collectAsState()
+    val sessions by vm.sessions.collectAsStateWithLifecycle()
+    val query by vm.query.collectAsStateWithLifecycle()
 
     var month by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
@@ -129,28 +132,38 @@ fun HistoryScreen(onOpenSession: (Long) -> Unit) {
             )
 
             if (query.isNotBlank()) {
-                // 搜索结果：不受月份限制，全历史匹配
-                Column(
+                // 搜索结果不受月份限制，是「全历史」的：训练三年下来几百条，
+                // 用 Column + verticalScroll + forEach 会把每一张卡一次性全部组合出来，
+                // 首页那一帧要排几百个节点。换成 LazyColumn，只组合屏幕内的那几张。
+                LazyColumn(
                     modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp)
-                        .padding(bottom = 16.dp + LocalBottomBarSpace.current),
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 8.dp,
+                        bottom = 16.dp + LocalBottomBarSpace.current,
+                    ),
                 ) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "找到 ${sessions.size} 次训练",
-                        style = MiuixTheme.textStyles.subtitle,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    if (sessions.isEmpty()) {
+                    item {
                         Text(
-                            text = "换个关键词试试，可以搜动作名",
-                            style = MiuixTheme.textStyles.paragraph,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.padding(vertical = 12.dp),
+                            text = "找到 ${sessions.size} 次训练",
+                            style = MiuixTheme.textStyles.subtitle,
                         )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (sessions.isEmpty()) {
+                        item {
+                            Text(
+                                text = "换个关键词试试，可以搜动作名",
+                                style = MiuixTheme.textStyles.paragraph,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                modifier = Modifier.padding(vertical = 12.dp),
+                            )
+                        }
                     } else {
-                        sessions.forEach { session ->
+                        items(sessions, key = { it.id }) { session ->
                             SessionCard(
                                 session = session,
                                 showDate = true,

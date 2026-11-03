@@ -48,10 +48,18 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.colorControls
+import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.highlight.HighlightStyle
 import com.yfantasyxx.ui.nav.liquid.DampedDragAnimation
 import com.yfantasyxx.ui.nav.liquid.InnerShadow
+import com.yfantasyxx.ui.nav.liquid.dither
 import com.yfantasyxx.ui.nav.liquid.innerShadow
 import com.yfantasyxx.ui.nav.liquid.lens
+import com.yfantasyxx.ui.nav.liquid.pad
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sign
@@ -60,16 +68,6 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.Backdrop
-import top.yukonga.miuix.kmp.blur.blur
-import top.yukonga.miuix.kmp.blur.colorControls
-import top.yukonga.miuix.kmp.blur.drawBackdrop
-import top.yukonga.miuix.kmp.blur.noiseDither
-import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
-import top.yukonga.miuix.kmp.blur.highlight.LightPosition
-import top.yukonga.miuix.kmp.blur.highlight.LightSource
-import top.yukonga.miuix.kmp.blur.highlight.rememberTiltLight
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 底栏外框高度（不含上下留白） */
@@ -95,9 +93,9 @@ private const val PRESSED_SCALE = 78f / 56f
  *
  * 和 HyperOS 风格的 [FloatingBottomBar] 的区别不只是透明度：
  *
- * 1. **真实采样背景**：[textureBlur] 抓取下方内容层做模糊 + 提饱和，不是靠半透明色块假装磨砂；
+ * 1. **真实采样背景**：[drawBackdrop] 抓取下方内容层做模糊 + 提饱和，不是靠半透明色块假装磨砂；
  * 2. **药丸是能捏起来的**：按住会等比放大（[PRESSED_SCALE]），边缘折射（[lens]）随按压增强，
- *    同时整条底栏的高光扫过——这是「液态」的来源，也是它和普通滑块最大的差别；
+ *    药丸的高光同时拉满——这是「液态」的来源，也是它和普通滑块最大的差别；
  * 3. **拖动带阻尼**：位置由 [DampedDragAnimation] 的弹簧驱动，药丸会慢手指一点点，
  *    甩到底栏边缘时整条玻璃还会被「拉住」（橡胶回弹）；
  * 4. **药丸是一块透明玻璃，不是一层内容**：它画在图标**下面**，只带极薄的雾白、
@@ -110,7 +108,7 @@ private const val PRESSED_SCALE = 78f / 56f
 fun LiquidGlassBottomBar(
     tabs: List<FloatingTab>,
     selectedRoute: String?,
-    backdrop: Backdrop,
+    backdrop: LayerBackdrop,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -233,32 +231,25 @@ fun LiquidGlassBottomBar(
         }
     }
 
-    // 边缘高光：光源跟着手机倾斜走；药丸用自己的那套（按下才亮）
-    val tiltLight = rememberTiltLight(
-        basePosition = LightPosition(0.5f, 0.28f, -0.55f),
-        intensity = if (isDark) 0.7f else 0.55f,
-        sensitivity = 0.035f,
-    )
-    val edgeStyle = remember(isDark, tiltLight) {
-        BloomStroke(
+    // 边缘高光。原来用 Miuix 分叉里的 BloomStroke + 重力感应光源（手机倾斜时高光跟着走），
+    // 上游 Kyant0/backdrop 只有 Plain / Default / Ambient 三种样式。
+    //
+    // 这里选 Plain 而不是 Default：Default 的 AGSL 会把 `style.color` 的 alpha
+    // 强制拉成 1（`setColorUniform("color", color.copy(alpha = 1f))`），
+    // 亮度只剩 `Highlight.alpha` 一档，照搬原来的色值会亮一大截；
+    // Plain 是纯描边，最终亮度 = 颜色 alpha × Highlight.alpha，
+    // 和原来的 BloomStroke 算法完全一致，静态观感不变，也不再随重力偏移。
+    val edgeStyle = remember(isDark) {
+        HighlightStyle.Plain(
             color = Color.White.copy(alpha = if (isDark) 0.10f else 0.16f),
-            innerBlurRadius = 3.dp,
-            primaryLight = tiltLight,
-            secondaryLight = LightSource(LightPosition(0.5f, 0.8f, -0.5f), intensity = 0f),
-            dualPeak = true,
         )
     }
     val pillHighlight = remember {
         Highlight(
             width = 1.dp,
+            blurRadius = 2.dp,
             alpha = 1f,
-            style = BloomStroke(
-                color = Color.White.copy(alpha = 0.12f),
-                innerBlurRadius = 2.dp,
-                primaryLight = LightSource(LightPosition(0.5f, -0.3f, -0.05f), intensity = 1f),
-                secondaryLight = LightSource(LightPosition(0.5f, 0.8f, -0.5f), intensity = 0.4f),
-                dualPeak = true,
-            ),
+            style = HighlightStyle.Plain(color = Color.White.copy(alpha = 0.12f)),
         )
     }
 
@@ -290,7 +281,9 @@ fun LiquidGlassBottomBar(
                         backdrop = backdrop,
                         shape = { capsule },
                         effects = {
-                            blur(18.dp.toPx(), 18.dp.toPx())
+                            blur(18.dp.toPx())
+                            // 上游库的 blur 不再自动撑大离屏层，这里手动补回原来的录制范围
+                            pad(18.dp.toPx())
                             // 提饱和是玻璃「通透」的关键，否则模糊后一片灰
                             colorControls(
                                 brightness = if (isDark) -0.02f else 0.03f,
@@ -303,9 +296,18 @@ fun LiquidGlassBottomBar(
                                 refractionAmount = 10.dp.toPx(),
                             )
                             // 抖动放在最后：模糊之后再撒噪点才有消色带的作用
-                            noiseDither(0.006f)
+                            dither(0.006f)
                         },
-                        highlight = { Highlight(width = 1.1.dp, alpha = 0.85f, style = edgeStyle) },
+                        // blurRadius 对应原来 BloomStroke 的 innerBlurRadius = 3dp，
+                        // 不写的话默认是 width/2，描边会变得像一条硬线
+                        highlight = {
+                            Highlight(
+                                width = 1.1.dp,
+                                blurRadius = 3.dp,
+                                alpha = 0.85f,
+                                style = edgeStyle,
+                            )
+                        },
                     )
                     .clip(capsule),
             ) {
@@ -399,7 +401,8 @@ fun LiquidGlassBottomBar(
                                     val press = dampedDrag.pressProgress
                                     // 比底栏更清透：折射 + 高饱和，像一块凸起的玻璃
                                     colorControls(brightness = 0f, contrast = 1f, saturation = 1.35f)
-                                    blur(4.dp.toPx(), 4.dp.toPx())
+                                    blur(4.dp.toPx())
+                                    pad(4.dp.toPx())
                                     lens(
                                         refractionHeight = 10.dp.toPx() * press,
                                         refractionAmount = 14.dp.toPx() * press,

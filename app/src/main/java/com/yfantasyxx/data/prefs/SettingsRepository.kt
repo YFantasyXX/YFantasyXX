@@ -10,11 +10,17 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import java.io.IOException
 
 enum class ThemeMode(val value: Int) {
@@ -87,17 +93,31 @@ data class AppSettings(
     val barWeightKg: Float = 20f,
     /** 手上有哪些片，逗号分隔（每侧每档的数量视为不限） */
     val plates: String = "25,20,15,10,5,2.5,1.25",
-    /** 每周训练次数目标；0 表示不设目标 */
-    val weeklyGoal: Int = 0,
     /** 休息期间在桌面/其他应用上方显示悬浮窗（需要悬浮窗权限） */
     val restOverlay: Boolean = true,
+    /**
+     * 悬浮窗常驻。
+     *
+     * 关着的时候（默认）：只在 App 不在前台时显示气泡，休息结束的卡片 12 秒后自动消失。
+     * 开着的时候：App 在前台也显示气泡；休息结束的卡片一直挂在屏幕上，直到手动关闭。
+     */
+    val restOverlayPersistent: Boolean = false,
     /** 休息结束时的提示音来源 */
     val restAlertSound: AlertSound = AlertSound.ALARM,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
-class SettingsRepository(private val context: Context) {
+class SettingsRepository(
+    private val context: Context,
+    /**
+     * 跑共享流的作用域，必须是应用级的。
+     *
+     * 用 viewModelScope 的话，页面一销毁整条流就停，下一个页面进来又要
+     * 重新读 DataStore + 解密一遍，等于没做成共享。
+     */
+    scope: CoroutineScope,
+) {
 
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -113,12 +133,35 @@ class SettingsRepository(private val context: Context) {
         val LAST_BACKUP = longPreferencesKey("last_backup")
         val BAR_WEIGHT = floatPreferencesKey("bar_weight")
         val PLATES = stringPreferencesKey("plates")
-        val WEEKLY_GOAL = longPreferencesKey("weekly_goal")
         val REST_OVERLAY = booleanPreferencesKey("rest_overlay")
+        val REST_OVERLAY_PERSISTENT = booleanPreferencesKey("rest_overlay_persistent")
         val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
     }
 
-    val settings: Flow<AppSettings> = context.dataStore.data
+    /**
+     * 是否已经读到 DataStore 的第一份真实设置。
+     *
+     * `settings` 是 StateFlow，在读到磁盘之前它的值是 [AppSettings] 的默认构造。
+     * 进程被闹钟从冷启动拉起时（RestAlarmReceiver → 前台服务），DataStore 还没读完，
+     * 这时 `settings.first()` 会**立刻**返回默认值：休息 90 秒、悬浮窗开着、
+     * 提示音是闹钟——全都不是用户设置的那份。所以需要「确定值」的地方要走
+     * [awaitSettings]。
+     */
+    private val settled = MutableStateFlow(false)
+
+    /**
+     * 设置流，进程内只有一份。
+     *
+     * 原来这里是冷 Flow：MainActivity（两处）、SettingsViewModel、
+     * WorkoutViewModel、HomeViewModel、RestTimerService 各收一份，
+     * 任意一个设置变化，每个收集者都要完整跑一遍 map —— 而 map 里要
+     * 解密 WebDAV 口令（跨进程 Keystore 调用）。改成 `stateIn(Eagerly)` 后
+     * 只跑一遍，收集者共享同一个最新值。
+     *
+     * Eagerly 而不是 WhileSubscribed：进程启动就开始读，第一个订阅者
+     * 拿到的是已就绪的值，不会先闪一下默认主题再跳成用户主题。
+     */
+    val settings: StateFlow<AppSettings> = context.dataStore.data
         // 配置文件损坏 / 磁盘满时 DataStore 会抛 IOException，
         // 不接住就会一路传到 stateIn 的协程 → 每次启动都崩，用户连设置页都进不去
         .catch { e ->
@@ -128,7 +171,9 @@ class SettingsRepository(private val context: Context) {
             AppSettings(
                 themeMode = ThemeMode.from(prefs[Keys.THEME_MODE]?.toIntOrNull() ?: 0),
                 weightUnit = WeightUnit.from(prefs[Keys.WEIGHT_UNIT]),
-                restSeconds = (prefs[Keys.REST_SECONDS] ?: 90L).toInt(),
+                // 先按 Long 夹住再转 Int：直接 toInt() 遇到超大值会截断成负数，
+                // 负数会让倒计时立刻结束，还会把通知的 setProgress 打成非法区间
+                restSeconds = (prefs[Keys.REST_SECONDS] ?: 90L).coerceIn(1L, 3600L).toInt(),
                 webdavUrl = prefs[Keys.WEBDAV_URL] ?: "",
                 webdavUsername = prefs[Keys.WEBDAV_USER] ?: "",
                 webdavPassword = SecureStore.decrypt(prefs[Keys.WEBDAV_PASS_ENC]),
@@ -139,13 +184,26 @@ class SettingsRepository(private val context: Context) {
                 tapHaptics = prefs[Keys.TAP_HAPTICS] ?: true,
                 barWeightKg = prefs[Keys.BAR_WEIGHT] ?: 20f,
                 plates = prefs[Keys.PLATES] ?: "25,20,15,10,5,2.5,1.25",
-                weeklyGoal = (prefs[Keys.WEEKLY_GOAL] ?: 0L).toInt(),
                 restOverlay = prefs[Keys.REST_OVERLAY] ?: true,
+                restOverlayPersistent = prefs[Keys.REST_OVERLAY_PERSISTENT] ?: false,
                 restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
             )
         }
         // 解密 WebDAV 密码要走 Keystore（跨进程），不能在主线程做
         .flowOn(Dispatchers.IO)
+        .onEach { settled.value = true }
+        .stateIn(scope, SharingStarted.Eagerly, AppSettings())
+
+    /**
+     * 等到真实设置到位再返回。
+     *
+     * `settings.first()` 在 StateFlow 上会立刻返回初始占位值，冷启动时读到的
+     * 是默认设置。需要「用户真正设置的那份」时必须用这个。
+     */
+    suspend fun awaitSettings(): AppSettings {
+        settled.first { it }
+        return settings.value
+    }
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[Keys.THEME_MODE] = mode.value.toString() }
@@ -156,7 +214,8 @@ class SettingsRepository(private val context: Context) {
     }
 
     suspend fun setRestSeconds(seconds: Int) {
-        context.dataStore.edit { it[Keys.REST_SECONDS] = seconds.toLong() }
+        // 写入侧同样夹住：UI 之外（导入、测试工具）也可能调进来
+        context.dataStore.edit { it[Keys.REST_SECONDS] = seconds.coerceIn(1, 3600).toLong() }
     }
 
     suspend fun setWebdavConfig(url: String, username: String, password: String) {
@@ -195,12 +254,12 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.PLATES] = csv }
     }
 
-    suspend fun setWeeklyGoal(count: Int) {
-        context.dataStore.edit { it[Keys.WEEKLY_GOAL] = count.toLong() }
-    }
-
     suspend fun setRestOverlay(enabled: Boolean) {
         context.dataStore.edit { it[Keys.REST_OVERLAY] = enabled }
+    }
+
+    suspend fun setRestOverlayPersistent(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.REST_OVERLAY_PERSISTENT] = enabled }
     }
 
     suspend fun setRestAlertSound(sound: AlertSound) {

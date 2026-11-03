@@ -20,10 +20,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.yfantasyxx.service.RestTimerService
 import com.yfantasyxx.util.RestTimerStore
@@ -69,6 +70,20 @@ class WorkoutViewModel(
     private val _restTimer = MutableStateFlow(RestTimerState())
     val restTimer: StateFlow<RestTimerState> = _restTimer.asStateFlow()
 
+    /**
+     * 「有没有在休息」，只有开始/结束会翻转。
+     *
+     * 为什么单独拆一个：`restTimer` 里的 `remainingSeconds` 每秒都变，
+     * 而训练列表只需要知道「要不要给底部留出一条的高度」。
+     * 让列表去读整份 `restTimer`，等于每秒钟把整个 LazyColumn 的
+     * content lambda 换一个新实例，item provider 重建、可见卡片全部重组。
+     * 拆出一个布尔量以后，列表只在开始/结束各重组一次。
+     */
+    val restRunning: StateFlow<Boolean> = _restTimer
+        .map { it.running }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /** 当前这次休息对应的动作（用于"设为该动作默认"） */
     private val _currentExerciseId = MutableStateFlow<Long?>(null)
     val currentExerciseId: StateFlow<Long?> = _currentExerciseId.asStateFlow()
@@ -91,13 +106,24 @@ class WorkoutViewModel(
         _restFinished.value = false
     }
 
-    /** 提示音/震动等全局设置（杠铃片计算器要用杆重与配片） */
+    /**
+     * 提示音/震动等全局设置（杠铃片计算器要用杆重与配片）。
+     * 仓库里已经是进程内单例流，这里直接复用，不再自己 stateIn 一份。
+     */
     val settings: kotlinx.coroutines.flow.StateFlow<com.yfantasyxx.data.prefs.AppSettings> =
-        settingsRepo.settings.stateIn(
-            viewModelScope,
-            kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
-            com.yfantasyxx.data.prefs.AppSettings(),
-        )
+        settingsRepo.settings
+
+    /**
+     * 最近一次体重。
+     *
+     * 自重动作的容量要按「体重 + 额外负重」折算（见 data/Load.kt）；
+     * 没记过体重时这里为 null，界面据此提示用户先去记一次。
+     */
+    val bodyweight: StateFlow<Float?> = repo.observeLatestWeight().stateIn(
+        viewModelScope,
+        kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+        null,
+    )
 
     /** 每个动作的"上次表现"参考（exerciseId -> 组列表） */
     private val _lastPerformance = MutableStateFlow<Map<Long, List<SetLog>>>(emptyMap())
@@ -201,7 +227,7 @@ class WorkoutViewModel(
         localOrderLock = false
         // 新训练重新放行「完成」：finishing 是防重复提交的闸门，
         // 不能跨 session 一直卡着
-        finishing = false
+        _finishing.value = false
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
@@ -512,7 +538,14 @@ class WorkoutViewModel(
             // 以库里的最新值为准取反，而不是界面的快照：
             // 手指抖一下连点两次时，两次都基于同一个旧快照算成 true，
             // 勾就取消不掉了，还会把休息计时重新拉满
-            val fresh = runCatching { repo.getSet(set.id) }.getOrNull() ?: return@launch
+            val fresh = runCatching { repo.getSet(set.id) }.getOrNull()
+            if (fresh == null) {
+                // 这一组可能已经被删掉了（放弃训练、删动作、恢复备份）。
+                // 静默 return 的话用户只看到「勾没打上」，不知道是数据没了；
+                // toggleSetPr 那边是会提示的，这里保持一致
+                _error.value = "这一组已经不存在了（可能已被删除），请返回后重新进入"
+                return@launch
+            }
             val willComplete = !fresh.completed
             // 只改完成这一列。整行写回会用这一行的旧快照，
             // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
@@ -594,7 +627,8 @@ class WorkoutViewModel(
         val actionDefault = exerciseId?.let { repo.restSecondsFor(it) }
         return fromTemplate
             ?: actionDefault
-            ?: settingsRepo.settings.first().restSeconds
+            // 用 awaitSettings 而不是 first()：后者在冷启动瞬间会拿到默认的 90 秒
+            ?: settingsRepo.awaitSettings().restSeconds
     }
 
     /**
@@ -704,10 +738,17 @@ class WorkoutViewModel(
                     delay(200)
                     continue
                 }
-                delay(400)
+                // 界面上只显示「秒」，没必要 400ms 问一次：
+                // 对齐到下一个整秒之后一点再读，既不会跳秒迟到，
+                // 也把主线程唤醒次数从 2.5 次/秒压到 1 次/秒
+                delay(waitToNextSecond())
             }
         }
     }
+
+    /** 距下一个整秒（再留 30ms 余量）还有多少毫秒 */
+    private fun waitToNextSecond(now: Long = System.currentTimeMillis()): Long =
+        1_000L - (now % 1_000L) + 30L
 
     fun skipRestTimer() {
         RestTimerService.skip(context)
@@ -720,20 +761,29 @@ class WorkoutViewModel(
         RestTimerService.extend(context, extraSeconds)
     }
 
-    /** 完成训练 */
-    /** 完成训练只允许进来一次：finishSession 里会推进计划游标，重复执行等于白丢一天 */
-    private var finishing = false
+    /**
+     * 完成训练的提交闸门。
+     *
+     * - 防重复提交：`finishSession` 会推进计划游标，进来两次等于白丢一天；
+     * - 同时也是界面状态：按钮据此置灰/显示「完成中」，用户不会再连点。
+     * - **成功后不复位**：训练已经结束，不该再允许提交；失败才放行重试。
+     */
+    private val _finishing = MutableStateFlow(false)
+    val finishing: StateFlow<Boolean> = _finishing.asStateFlow()
 
     fun finishWorkout(name: String, note: String, onDone: () -> Unit) {
-        if (finishing) return
-        val id = _sessionId.value ?: return
-        finishing = true
+        if (!_finishing.compareAndSet(expect = false, update = true)) return
+        val id = _sessionId.value
+        if (id == null) {
+            _finishing.value = false
+            return
+        }
         // 名称为空时用默认名（模板名或「计划」）
         val finalName = name.trim().ifBlank { _defaultSessionName.value }
         viewModelScope.launch {
             val result = runCatching { repo.finishSession(id, finalName, note) }
             if (result.isFailure) {
-                finishing = false
+                _finishing.value = false
                 _error.value = "完成训练失败：${result.exceptionOrNull()?.message ?: "未知错误"}"
                 return@launch
             }
@@ -751,11 +801,15 @@ class WorkoutViewModel(
         // 用应用级协程：finish 后界面导航离开、ViewModel 可能被清除，
         // viewModelScope 会被取消导致备份半途而废
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val s = settingsRepo.settings.first()
+            // awaitSettings：冷启动后立刻练完的情况（从通知/计划直接进入）也要
+            // 读到用户真正的自动备份开关，不能拿默认的 false 糊弄过去
+            val s = settingsRepo.awaitSettings()
             if (!s.autoBackup) return@launch
             if (s.webdavUrl.isBlank() || s.webdavUsername.isBlank()) return@launch
             val client = WebDavClient(s.webdavUrl, s.webdavUsername, s.webdavPassword)
-            val result = backupManager.backup(client)
+            // 排队等门，而不是撞门就失败：连着练完两场时，
+            // 第二场的自动备份会正好赶上第一场还在传
+            val result = backupManager.backup(client, waitForGate = true)
             if (result.isSuccess) {
                 settingsRepo.setLastBackupTime(System.currentTimeMillis())
             }

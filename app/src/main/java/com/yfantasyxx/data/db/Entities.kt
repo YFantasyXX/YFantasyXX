@@ -400,6 +400,8 @@ data class PrSetRow(
     val exerciseName: String,
     /** 该动作的 rep-max 分档，见 `LiftPattern` */
     val pattern: Int,
+    /** 器械类型：自重动作的 weightKg 是「额外负重」，容量要把体重算进去 */
+    val equipment: String,
     val weightKg: Float,
     val reps: Int,
 )

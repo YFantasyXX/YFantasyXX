@@ -2,6 +2,7 @@ package com.yfantasyxx.data
 
 import com.yfantasyxx.data.db.PlanDay
 import com.yfantasyxx.data.db.PlanEntity
+import com.yfantasyxx.util.Clock
 import java.util.Calendar
 
 /** 计划里的一天：模板或休息 */
@@ -97,7 +98,7 @@ object TrainingCycle {
         nextIndex: Int,
         dayStartedAt: Long,
         slots: List<PlanDaySlot>,
-        now: Long = System.currentTimeMillis(),
+        now: Long = Clock.now(),
     ): CycleCursor {
         if (slots.isEmpty()) return CycleCursor(0, dayStartedAt)
         var index = nextIndex.coerceIn(0, slots.lastIndex)
@@ -124,7 +125,7 @@ object TrainingCycle {
         nextIndex: Int,
         dayStartedAt: Long,
         slots: List<PlanDaySlot>,
-        now: Long = System.currentTimeMillis(),
+        now: Long = Clock.now(),
     ): Int = cursor(nextIndex, dayStartedAt, slots, now).index
 
     /** 把存下来的计划 + 天 + 模板名解析成界面要的整套状态 */
@@ -133,7 +134,7 @@ object TrainingCycle {
         days: List<PlanDay>,
         templateNames: Map<Long, String>,
         lastTrainedAt: Long?,
-        now: Long = System.currentTimeMillis(),
+        now: Long = Clock.now(),
     ): TrainingPlan? {
         val sorted = days.sortedBy { it.position }
         if (sorted.isEmpty()) return null

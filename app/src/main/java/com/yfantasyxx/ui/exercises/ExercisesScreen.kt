@@ -15,7 +15,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -46,14 +46,14 @@ import com.yfantasyxx.ui.components.AddExerciseDialog
 fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
     val container = rememberAppContainer()
     val vm: ExercisesViewModel = viewModel(factory = ExercisesViewModel.factory(container))
-    val exercises by vm.exercises.collectAsState()
+    val exercises by vm.exercises.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
-    val keyword by vm.keyword.collectAsState()
-    val category by vm.selectedCategory.collectAsState()
-    val equipment by vm.selectedEquipment.collectAsState()
-    val categories by vm.categories.collectAsState()
-    val equipments by vm.equipments.collectAsState()
-    val totalCount by vm.totalCount.collectAsState()
+    val keyword by vm.keyword.collectAsStateWithLifecycle()
+    val category by vm.selectedCategory.collectAsStateWithLifecycle()
+    val equipment by vm.selectedEquipment.collectAsStateWithLifecycle()
+    val categories by vm.categories.collectAsStateWithLifecycle()
+    val equipments by vm.equipments.collectAsStateWithLifecycle()
+    val totalCount by vm.totalCount.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
