@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +50,8 @@ data class FloatingTab(
     val label: String,
     val selectedIcon: ImageVector,
     val icon: ImageVector,
+    /** 右上角的小红点：有新版本时「我的」用 */
+    val badge: Boolean = false,
 )
 
 /**
@@ -186,16 +189,24 @@ fun FloatingBottomBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
                     ) {
-                        Icon(
-                            imageVector = if (selected) tab.selectedIcon else tab.icon,
-                            contentDescription = tab.label,
-                            modifier = Modifier.size(22.dp),
-                            tint = if (selected) {
-                                MiuixTheme.colorScheme.onPrimary
-                            } else {
-                                MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            },
-                        )
+                        Box {
+                            Icon(
+                                imageVector = if (selected) tab.selectedIcon else tab.icon,
+                                contentDescription = tab.label,
+                                modifier = Modifier.size(22.dp),
+                                tint = if (selected) {
+                                    MiuixTheme.colorScheme.onPrimary
+                                } else {
+                                    MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                },
+                            )
+                            TabBadgeDot(
+                                visible = tab.badge,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 2.dp, y = (-1).dp),
+                            )
+                        }
                         if (selected) {
                             Spacer(Modifier.width(6.dp))
                             Text(

@@ -34,6 +34,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.yfantasyxx.YFantasyXXApplication
+import com.yfantasyxx.AppContainer
+import com.yfantasyxx.data.prefs.BottomBarStyle
+import com.yfantasyxx.update.UpdateState
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.yfantasyxx.ui.nav.FloatingBottomBar
 import com.yfantasyxx.ui.nav.FloatingTab
@@ -49,6 +55,7 @@ import com.yfantasyxx.ui.templates.TemplateEditScreen
 import com.yfantasyxx.ui.templates.TemplatesScreen
 import com.yfantasyxx.ui.workout.ActiveWorkoutScreen
 import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
@@ -89,9 +96,77 @@ fun YFantasyXXApp() {
     }
 }
 
+/**
+ * 带 launchSingleTop 的跳转。
+ *
+ * 卡片双击、手指抖一下都会连着下发两次 navigate，压出两层一模一样的页面：
+ * 用户返回一次还停在原页，看起来就是「返回没反应」。
+ */
+private fun NavHostController.navigateSingleTop(route: String) {
+    navigate(route) { launchSingleTop = true }
+}
+
+/**
+ * 底栏宿主。
+ *
+ * 单独抽一层是为了隔离重组：这里要读「有没有新版本」，
+ * 如果直接在 [YFantasyXXNavHost] 里 collect，状态一变整张导航图
+ * （`remember(route, startDestination, builder)` 建的那份）会跟着重建。
+ * 下载进度每秒变好几次，更不能让它碰到 NavHost。
+ */
 @Composable
-private fun YFantasyXXNavHost() {
-    val container = LocalAppContainer.current
+private fun BottomBarHost(
+    container: AppContainer,
+    tabs: List<FloatingTab>,
+    selectedRoute: String?,
+    backdrop: LayerBackdrop,
+    style: BottomBarStyle,
+    glass: Boolean,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 只关心一个布尔量：有新版本且用户还没看过详情。
+    // 下载进度每秒变好几次，绝不能让它碰到 NavHost
+    val hasUpdate by combine(
+        container.updateRepository.state
+            .map { it is UpdateState.Available || it is UpdateState.Ready },
+        container.updateRepository.acknowledged,
+    ) { available, seen -> available && !seen }
+        .distinctUntilChanged()
+        .collectAsStateWithLifecycle(initialValue = false)
+
+    val items = remember(tabs, hasUpdate) {
+        if (!hasUpdate) {
+            tabs
+        } else {
+            tabs.map { tab ->
+                if (tab.route == Routes.SETTINGS) tab.copy(badge = true) else tab
+            }
+        }
+    }
+
+    if (style == BottomBarStyle.LIQUID_GLASS) {
+        LiquidGlassBottomBar(
+            tabs = items,
+            selectedRoute = selectedRoute,
+            backdrop = backdrop,
+            onSelect = onSelect,
+            modifier = modifier,
+        )
+    } else {
+        FloatingBottomBar(
+            tabs = items,
+            selectedRoute = selectedRoute,
+            backdrop = backdrop,
+            glass = glass,
+            onSelect = onSelect,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun YFantasyXXNavHost() {    val container = LocalAppContainer.current
     // 只让底栏真正用到的两个字段参与组合，而不是整份 settings。
     //
     // 整份 settings 参与组合的话，任何一次设置写入（包括每次自动备份回来
@@ -156,20 +231,20 @@ private fun YFantasyXXNavHost() {
         ) {
             composable(Routes.HOME) {
                 HomeScreen(
-                    onStartWorkout = { navController.navigate(Routes.WORKOUT) },
-                    onOpenTemplates = { navController.navigate(Routes.TEMPLATES) },
-                    onOpenSession = { id -> navController.navigate(Routes.sessionDetail(id)) },
-                    onStartFromTemplate = { navController.navigate(Routes.WORKOUT) },
+                    onStartWorkout = { navController.navigateSingleTop(Routes.WORKOUT) },
+                    onOpenTemplates = { navController.navigateSingleTop(Routes.TEMPLATES) },
+                    onOpenSession = { id -> navController.navigateSingleTop(Routes.sessionDetail(id)) },
+                    onStartFromTemplate = { navController.navigateSingleTop(Routes.WORKOUT) },
                 )
             }
             composable(Routes.EXERCISES) {
                 ExercisesScreen(
-                    onOpenExercise = { id -> navController.navigate(Routes.exerciseDetail(id)) },
+                    onOpenExercise = { id -> navController.navigateSingleTop(Routes.exerciseDetail(id)) },
                 )
             }
             composable(Routes.HISTORY) {
                 HistoryScreen(
-                    onOpenSession = { id -> navController.navigate(Routes.sessionDetail(id)) },
+                    onOpenSession = { id -> navController.navigateSingleTop(Routes.sessionDetail(id)) },
                 )
             }
             composable(Routes.STATS) {
@@ -177,8 +252,8 @@ private fun YFantasyXXNavHost() {
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
-                    onOpenTemplates = { navController.navigate(Routes.TEMPLATES) },
-                    onOpenDevTools = { navController.navigate(Routes.DEV_TOOLS) },
+                    onOpenTemplates = { navController.navigateSingleTop(Routes.TEMPLATES) },
+                    onOpenDevTools = { navController.navigateSingleTop(Routes.DEV_TOOLS) },
                 )
             }
             // 路由本身也要关掉：只藏设置里的入口不够，留着这条 composable 就等于
@@ -187,15 +262,15 @@ private fun YFantasyXXNavHost() {
                 composable(Routes.DEV_TOOLS) {
                     com.yfantasyxx.ui.dev.DevToolsScreen(
                         onBack = { navController.popBackStack() },
-                        onOpenWorkout = { navController.navigate(Routes.WORKOUT) },
+                        onOpenWorkout = { navController.navigateSingleTop(Routes.WORKOUT) },
                     )
                 }
             }
             composable(Routes.TEMPLATES) {
                 TemplatesScreen(
-                    onEditTemplate = { id -> navController.navigate(Routes.templateEdit(id)) },
+                    onEditTemplate = { id -> navController.navigateSingleTop(Routes.templateEdit(id)) },
                     onCreateTemplate = { folderId ->
-                        navController.navigate(Routes.templateEdit(null, folderId))
+                        navController.navigateSingleTop(Routes.templateEdit(null, folderId))
                     },
                     onBack = { navController.popBackStack() },
                 )
@@ -226,24 +301,16 @@ private fun YFantasyXXNavHost() {
         }
 
         if (showBottomBar) {
-            if (bottomBarStyle == com.yfantasyxx.data.prefs.BottomBarStyle.LIQUID_GLASS) {
-                LiquidGlassBottomBar(
-                    tabs = tabs,
-                    selectedRoute = currentRoute,
-                    backdrop = backdrop,
-                    onSelect = onTabSelected,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
-            } else {
-                FloatingBottomBar(
-                    tabs = tabs,
-                    selectedRoute = currentRoute,
-                    backdrop = backdrop,
-                    glass = blurBottomBar,
-                    onSelect = onTabSelected,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
-            }
+            BottomBarHost(
+                container = container,
+                tabs = tabs,
+                selectedRoute = currentRoute,
+                backdrop = backdrop,
+                style = bottomBarStyle,
+                glass = blurBottomBar,
+                onSelect = onTabSelected,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
         }
         }
     }

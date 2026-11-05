@@ -63,6 +63,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.text.style.TextOverflow
 import com.yfantasyxx.data.TrainingPlan
 
+/** 体重输入的显示格式：整数不带小数点，小数保留一位（小数点固定用 `.`，与键盘一致） */
+private fun fmtWeight(v: Float): String =
+    if (v == v.toInt().toFloat()) v.toInt().toString()
+    else String.format(java.util.Locale.CHINA, "%.1f", v)
+
 @Composable
 fun HomeScreen(
     onStartWorkout: () -> Unit,
@@ -212,7 +217,10 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
                             StatCard("训练次数", state.weekSessionCount.toString(), "次")
-                            StatCard("训练容量", formatVolume(state.weekVolume), state.weightUnitLabel)
+                            // 容量一律按 kg 显示：库里的 totalVolume 就是 kg，
+                            // 而 formatVolume 只做万/千分档、不做单位换算。
+                            // 原来这里跟着设置写「lb」，数字还是 kg，等于报了个假单位
+                            StatCard("训练容量", formatVolume(state.weekVolume), "kg")
                             StatCard("连续周数", state.streakWeeks.toString(), "周")
                             StatCard(
                                 "当前体重",
@@ -365,7 +373,18 @@ fun HomeScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     onClick = {
-                        weightInput = latestWeight?.toString() ?: ""
+                        weightInput = latestWeight
+                            // 弹窗按「当前单位」显示，而库里存的一律是 kg：
+                            // 用 lb 时必须先换算。原来直接把 kg 数值塞进去，
+                            // 70kg 会显示成「70 lb」，保存时再除以 2.20462，
+                            // 一次「不改直接保存」就把体重改成 31.7kg。
+                            ?.let {
+                                com.yfantasyxx.data.prefs.WeightUnit
+                                    .from(state.weightUnitLabel)
+                                    .fromKg(it)
+                            }
+                            ?.let { fmtWeight(it) }
+                            ?: ""
                         showWeightDialog = true
                     },
                 ) {
@@ -396,7 +415,7 @@ fun HomeScreen(
                 }
             } else {
                 items(state.recentSessions, key = { it.id }) { session ->
-                    SessionRow(session = session, unitLabel = state.weightUnitLabel, onClick = { onOpenSession(session.id) })
+                    SessionRow(session = session, unitLabel = "kg", onClick = { onOpenSession(session.id) })
                 }
             }
         }
@@ -406,10 +425,6 @@ fun HomeScreen(
         // 输入框的 value 必须是「用户敲进去的原文」。
         // 以前是按数字反推显示值，输到 "62." 时 toFloatOrNull() 得到 62.0，
         // 小数点立刻被抹掉，再按 5 就变成 625 —— 一次误输就把当天体重存成 625 kg
-        fun fmtWeight(v: Float): String =
-            if (v == v.toInt().toFloat()) v.toInt().toString()
-            else String.format(java.util.Locale.CHINA, "%.1f", v)
-
         var weightText by remember {
             mutableStateOf(weightInput.toFloatOrNull()?.let { fmtWeight(it) } ?: "60")
         }

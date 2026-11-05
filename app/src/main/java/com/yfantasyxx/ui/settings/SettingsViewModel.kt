@@ -14,6 +14,9 @@ import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
 import com.yfantasyxx.sync.BackupManager
 import com.yfantasyxx.sync.WebDavClient
+import com.yfantasyxx.update.InstallResult
+import com.yfantasyxx.update.UpdateRepository
+import com.yfantasyxx.update.UpdateState
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -24,12 +27,19 @@ class SettingsViewModel(
     private val settingsRepo: SettingsRepository,
     private val backupManager: BackupManager,
     private val repo: WorkoutRepository,
+    private val updater: UpdateRepository,
 ) : ViewModel() {
 
     /** 直接复用仓库里的单例流，不再自己 stateIn 一份 */
     val settings: StateFlow<AppSettings> = settingsRepo.settings
 
     val backupState = backupManager.state
+
+    /**
+     * 更新状态同样来自进程级单例：下载进度跨页面存活，
+     * 设置页关掉再进来还能看到「下载中 62%」。
+     */
+    val updateState: StateFlow<UpdateState> = container.updateRepository.state
 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { settingsRepo.setThemeMode(mode) }
@@ -70,6 +80,26 @@ class SettingsViewModel(
     fun setRestAlertSound(sound: AlertSound) {
         viewModelScope.launch { settingsRepo.setRestAlertSound(sound) }
     }
+
+    // ────────────────────────── 应用更新 ──────────────────────────
+
+    fun setAutoCheckUpdate(enabled: Boolean) {
+        viewModelScope.launch { settingsRepo.setAutoCheckUpdate(enabled) }
+    }
+
+    fun checkUpdate() = updater.check(manual = true)
+
+    /** 用户看过详情了，底栏红点可以收掉 */
+    fun markUpdateSeen() = updater.markSeen()
+
+    fun downloadUpdate() = updater.download()
+
+    fun cancelDownload() = updater.cancelDownload()
+
+    /** 安装是同步动作（起一个 Intent），错误直接回给界面上提示 */
+    fun installUpdate(): InstallResult = updater.install()
+
+    fun resetUpdateState() = updater.reset()
 
     fun setBarWeight(kg: Float) {
         viewModelScope.launch { settingsRepo.setBarWeight(kg.coerceIn(0f, 50f)) }
@@ -222,6 +252,7 @@ class SettingsViewModel(
                     container.settingsRepository,
                     container.backupManager,
                     container.workoutRepository,
+                    container.updateRepository,
                 )
             }
         }

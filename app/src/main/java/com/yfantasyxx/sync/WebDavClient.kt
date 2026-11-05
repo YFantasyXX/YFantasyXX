@@ -251,7 +251,22 @@ class WebDavClient(
                 if (response.code !in 200..299) {
                     throw IOException("下载失败(${response.code})：${response.message}")
                 }
-                response.body?.bytes() ?: throw IOException("响应为空")
+                val body = response.body ?: throw IOException("响应为空")
+                // 备份库正常只有 1–2 MB。长度超过上限，多半是地址指到了目录页
+                // 或者别的什么大文件，硬读进内存会直接把 App 撑爆，
+                // 用户看到的却是「闪退」，根本联想不到是备份地址
+                val declared = body.contentLength()
+                if (declared > MAX_DOWNLOAD_BYTES) {
+                    throw IOException(
+                        "文件过大（${declared / 1024 / 1024} MB），已取消下载；" +
+                            "请确认填的是 WebDAV 目录而不是单个大文件"
+                    )
+                }
+                val bytes = body.bytes()
+                if (bytes.size > MAX_DOWNLOAD_BYTES) {
+                    throw IOException("文件过大（${bytes.size / 1024 / 1024} MB），已取消恢复")
+                }
+                bytes
             }
         }
     }
@@ -304,14 +319,14 @@ class WebDavClient(
     private fun parseBackupFiles(xml: String): List<RemoteBackupFile> {
         val out = mutableListOf<RemoteBackupFile>()
         for (block in RESPONSE_BLOCK.findAll(xml).map { it.groupValues[1] }) {
-            val href = tagValue(block, "href") ?: continue
+            val href = tagValue(block, HREF) ?: continue
             val name = href.substringAfterLast('/')
             if (!name.startsWith(BACKUP_PREFIX) || !name.endsWith(".db")) continue
-            val size = tagValue(block, "getcontentlength")
+            val size = tagValue(block, CONTENT_LENGTH)
                 ?.trim()
                 ?.toLongOrNull()
                 ?: -1L
-            val modified = tagValue(block, "getlastmodified")
+            val modified = tagValue(block, LAST_MODIFIED)
                 ?.trim()
                 ?.let { parseHttpDate(it) }
             out += RemoteBackupFile(name, size, modified)
@@ -322,11 +337,11 @@ class WebDavClient(
     /** 解析 Depth 0 的单个文件响应 */
     private fun parseSingleFile(xml: String): RemoteBackupFile? {
         val block = RESPONSE_BLOCK.find(xml)?.groupValues?.get(1) ?: return null
-        val href = tagValue(block, "href") ?: return null
+        val href = tagValue(block, HREF) ?: return null
         val name = href.substringAfterLast('/')
         if (name.isEmpty()) return null
-        val size = tagValue(block, "getcontentlength")?.trim()?.toLongOrNull() ?: -1L
-        val modified = tagValue(block, "getlastmodified")?.trim()?.let { parseHttpDate(it) }
+        val size = tagValue(block, CONTENT_LENGTH)?.trim()?.toLongOrNull() ?: -1L
+        val modified = tagValue(block, LAST_MODIFIED)?.trim()?.let { parseHttpDate(it) }
         return RemoteBackupFile(name, size, modified)
     }
 
@@ -339,14 +354,14 @@ class WebDavClient(
         return "（" + text.replace(WHITESPACE, " ").take(limit) + "）"
     }
 
-    /** 取某个标签的文本内容，取不到返回 null */
-    private fun tagValue(block: String, tag: String): String? {
-        val re = Regex(
-            "<(?:[A-Za-z0-9_.-]+:)?$tag\\b[^>]*>(.*?)</(?:[A-Za-z0-9_.-]+:)?$tag>",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
-        )
-        return re.find(block)?.groupValues?.get(1)
-    }
+    /**
+     * 取某个标签的文本内容，取不到返回 null。
+     *
+     * 正则走预编译常量：一份目录列表要解析几十上百个 `<response>` 块，
+     * 每块取三个标签，现编正则等于每次刷新白烧 300 次正则编译。
+     */
+    private fun tagValue(block: String, regex: Regex): String? =
+        regex.find(block)?.groupValues?.get(1)
 
     /** 解析 HTTP 日期（RFC 1123 / ISO 8601） */
     private fun parseHttpDate(raw: String): Long? {
@@ -370,6 +385,9 @@ class WebDavClient(
 
         /** 试写测试用的临时文件名 */
         private const val WRITE_TEST_FILE = ".write-test"
+
+        /** 单次下载的硬上限：备份库正常 1–2 MB，100 MB 已经远超合理范围 */
+        private const val MAX_DOWNLOAD_BYTES = 100L * 1024 * 1024
 
         private val WHITESPACE = Regex("\\s+")
 
@@ -397,6 +415,16 @@ class WebDavClient(
             "<(?:[A-Za-z0-9_.-]+:)?response\\b[^>]*>(.*?)</(?:[A-Za-z0-9_.-]+:)?response>",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
         )
+
+        /** 标签正则：前缀可选（d: / D: / 无前缀），内容跨行 */
+        private fun tagRegex(tag: String) = Regex(
+            "<(?:[A-Za-z0-9_.-]+:)?$tag\\b[^>]*>(.*?)</(?:[A-Za-z0-9_.-]+:)?$tag>",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
+
+        private val HREF = tagRegex("href")
+        private val CONTENT_LENGTH = tagRegex("getcontentlength")
+        private val LAST_MODIFIED = tagRegex("getlastmodified")
 
         private val HTTP_DATE_PATTERNS = listOf(
             "EEE, dd MMM yyyy HH:mm:ss zzz",

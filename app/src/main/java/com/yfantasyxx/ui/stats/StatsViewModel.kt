@@ -63,14 +63,18 @@ class StatsViewModel(
         repo.observeDataVersion(),
         repo.observeBodyMetrics(),
     ) { version, weights -> version to weights }
-        .map { (version, weights) -> build(weights, version) }
+        // 任何一次查询抛异常（库正在恢复、磁盘满）都会把整条流取消掉，
+        // 统计页从此永远空白、也不会自己恢复。这里只兜住这一次，
+        // 下一次数据变化仍会重新算。
+        .map { (version, weights) ->
+            runCatching { build(weights, version) }.getOrElse { StatsUiState() }
+        }
         .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StatsUiState())
 
     private suspend fun build(weights: List<BodyMetric>, version: Int): StatsUiState {
         val refresh = version != computedVersion
-        computedVersion = version
-        return StatsUiState(
+        val state = StatsUiState(
             weekVolumes = buildWeekBuckets(),
             categoryVolumes = repo.volumeByCategory(Clock.now() - 30 * dayMs),
             personalRecords = repo.personalRecords(refresh = refresh),
@@ -83,6 +87,10 @@ class StatsViewModel(
             // 校准结果也要能看见：PR 数字随曲线变，用户得知道现在用的是哪条
             curves = repo.calibration(),
         )
+        // 算完才记版本：中途抛异常时不能标成「已算过」，
+        // 否则下一次同版本的数据变化会误判成可以复用缓存
+        computedVersion = version
+        return state
     }
 
     /**

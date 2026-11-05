@@ -553,7 +553,9 @@ private fun SetRow(
     val density = LocalDensity.current
     val maxSwipe = with(density) { 112.dp.toPx() }
     val haptics = LocalHapticFeedback.current
-    var rawOffset by remember { mutableStateOf(0f) }
+    // 按组 id 记忆：LazyColumn 复用行槽位时，上一行没走完的回弹位移会带到下一行，
+    // 表现是删掉一组之后，新顶上来的那组莫名其妙歪着
+    var rawOffset by remember(set.id) { mutableStateOf(0f) }
     val animatedOffset by androidx.compose.animation.core.animateFloatAsState(
         targetValue = rawOffset,
         animationSpec = androidx.compose.animation.core.tween(180),
@@ -668,6 +670,9 @@ private fun SetRow(
                 value = weight,
                 onValueChange = { weight = it },
                 step = 2.5f,
+                // 按组身份隔离输入态：勾选、增删组会让行槽位重排，
+                // 不隔离的话「正在编辑」会跟着格子跑到别的组上
+                rememberKey = set.id,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(6.dp))
@@ -675,6 +680,7 @@ private fun SetRow(
                 value = reps.toFloat(),
                 onValueChange = { reps = it.toInt() },
                 step = 1f,
+                rememberKey = set.id,
                 modifier = Modifier.weight(1f),
             )
             Checkbox(

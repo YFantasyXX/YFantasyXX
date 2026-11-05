@@ -590,6 +590,7 @@ private fun EditableSetRow(
             value = weight,
             onValueChange = { weight = it },
             step = 2.5f,
+            rememberKey = set.id,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(6.dp))
@@ -597,6 +598,7 @@ private fun EditableSetRow(
             value = reps,
             onValueChange = { reps = it },
             step = 1f,
+            rememberKey = set.id,
             modifier = Modifier.weight(1f),
         )
         // 用 22dp 的小圆点而不是标准按钮：两个步进器已经占满一行，

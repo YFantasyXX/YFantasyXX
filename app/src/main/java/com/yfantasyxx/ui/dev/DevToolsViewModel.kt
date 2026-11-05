@@ -1,5 +1,8 @@
 package com.yfantasyxx.ui.dev
 
+import android.os.VibrationEffect
+import android.os.VibratorManager
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
@@ -17,6 +20,7 @@ import com.yfantasyxx.service.RestTimerService
 import com.yfantasyxx.util.Clock
 import com.yfantasyxx.util.CrashLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,6 +99,25 @@ class DevToolsViewModel(
     private fun say(text: String, error: Boolean = false) {
         messageSeq += 1
         _message.value = DevMessage(messageSeq, text, error)
+    }
+
+    /**
+     * 只给 lite 版用：拉一次线上 Release 并伪装成更高版本，
+     * 好在真正发版之前就能验完下载与安装流程。
+     */
+    fun simulateUpdateAvailable() {
+        viewModelScope.launch {
+            val ok = container.updateRepository.simulateNewVersion()
+            _message.value = DevMessage(
+                id = ++messageSeq,
+                text = if (ok) {
+                    "已伪装成新版本，去「我的 → 应用更新」看效果"
+                } else {
+                    "拉取线上 Release 失败，先确认网络"
+                },
+                error = !ok,
+            )
+        }
     }
 
     fun clearMessage() {
@@ -213,6 +236,30 @@ class DevToolsViewModel(
         runCatching {
             RestNotifier.vibrate(container.appContext, force = true)
             say("已触发 4 段震动")
+        }.onFailure { say("震动失败：${it.message}", error = true) }
+    }
+
+    /**
+     * 模拟「休息结束那一刻，系统里别的应用也在震」。
+     *
+     * 震动有 350ms 起手延迟，这里在 450ms 处插一条 900ms 的独立震动——
+     * 和别的应用顶掉我们这一下是同一回事（振动器同一时刻只放一条）。
+     * 被顶掉的只是第 1、2 段，后面两段应该照样震。
+     */
+    fun testVibrateInterrupted() {
+        runCatching {
+            RestNotifier.vibrate(container.appContext, force = true)
+            viewModelScope.launch {
+                delay(450)
+                runCatching {
+                    val vibrator = ContextCompat.getSystemService(
+                        container.appContext,
+                        VibratorManager::class.java,
+                    )?.defaultVibrator
+                    vibrator?.vibrate(VibrationEffect.createOneShot(900, 255))
+                }
+                say("起震 100ms 后插了一条 900ms 震动：后两段应该照样震")
+            }
         }.onFailure { say("震动失败：${it.message}", error = true) }
     }
 

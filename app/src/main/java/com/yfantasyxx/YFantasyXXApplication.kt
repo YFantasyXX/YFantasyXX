@@ -6,6 +6,7 @@ import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.data.prefs.SettingsRepository
 import com.yfantasyxx.sync.BackupManager
+import com.yfantasyxx.update.UpdateRepository
 import com.yfantasyxx.util.CrashLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,8 @@ class YFantasyXXApplication : Application() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()
             container.workoutRepository.cleanupStaleDrafts()
+            // 静默查一次新版本：内部会自己看开关和 6 小时节流，失败也不打扰用户
+            container.updateRepository.autoCheck()
         }
     }
 }
@@ -91,6 +94,16 @@ class AppContainer(context: Context) {
      */
     val workoutRepository: WorkoutRepository by lazy { WorkoutRepository { db() } }
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(appContext, appScope) }
+
+    /**
+     * 软件内更新：检查 GitHub Release、下载 APK、调起安装器。
+     *
+     * 必须挂在应用级作用域上：下载要能跨页面继续，页面销毁不能把进度带走。
+     */
+    val updateRepository: UpdateRepository by lazy {
+        UpdateRepository(appContext, appScope, settingsRepository)
+    }
+
     val backupManager: BackupManager by lazy {
         BackupManager(
             context = appContext,

@@ -83,7 +83,7 @@ fun BackupListDialog(
             .map { BackupItem(it) }
             .sortedByDescending { it.timestamp ?: Long.MIN_VALUE }
     }
-    val groups = remember(items) { groupItems(items, Clock.now()) }
+    val groups = remember(items, now) { groupItems(items, now) }
     val latestName = items.firstOrNull()?.name
     val appSchema = state.appSchemaVersion
 

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Scale
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Visibility
@@ -75,6 +77,8 @@ import com.yfantasyxx.ui.dev.DevTools
 import com.yfantasyxx.service.RestOverlayController
 import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
+import com.yfantasyxx.update.InstallResult
+import com.yfantasyxx.update.UpdateState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -605,6 +609,14 @@ fun SettingsScreen(
                 }
             }
 
+            /* ───────── 应用更新 ───────── */
+            UpdateSection(
+                autoCheck = settings.autoCheckUpdate,
+                onAutoCheckChange = vm::setAutoCheckUpdate,
+                vm = vm,
+                onToast = { toastMessage = it },
+            )
+
             /* ───────── 关于 ───────── */
             SectionHeader("关于")
             SettingsCard {
@@ -743,6 +755,130 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+/**
+ * 「应用更新」分区。
+ *
+ * 单独抽一个 Composable 是为了重组边界：下载进度每 150ms 变一次，
+ * 若在 [SettingsScreen] 顶层收集，外观/训练/WebDAV/关于整页都会跟着重组。
+ */
+@Composable
+private fun UpdateSection(
+    autoCheck: Boolean,
+    onAutoCheckChange: (Boolean) -> Unit,
+    vm: SettingsViewModel,
+    onToast: (String) -> Unit,
+) {
+    val state by vm.updateState.collectAsStateWithLifecycle()
+    var showDialog by remember { mutableStateOf(false) }
+
+    SectionHeader("应用更新")
+    SettingsCard {
+        SettingsRow(
+            title = "检查更新",
+            subtitle = updateSubtitle(state, autoCheck),
+            value = updateValue(state),
+            icon = Icons.Filled.SystemUpdate,
+            showChevron = true,
+            onClick = {
+                showDialog = true
+                // 看过详情就把底栏红点收掉，避免「点进来红点还挂着」
+                vm.markUpdateSeen()
+                // 已经有结果（待下载 / 可安装 / 下载中）就直接展示，
+                // 别每次点都白打一次 GitHub 接口——它每小时只给 60 次
+                // 已经有结果（待下载 / 可安装 / 下载中）就直接展示，
+                // 别每次点都白打一次 GitHub 接口——它每小时只给 60 次。
+                // 限流冷却期间同理，仓库那边会直接挡掉，按了只会以为在检查。
+                val cooling = (state as? UpdateState.Failed)
+                    ?.retryAfterAt?.let { it > System.currentTimeMillis() } == true
+                when (state) {
+                    is UpdateState.Available,
+                    is UpdateState.Ready,
+                    is UpdateState.Downloading,
+                    -> Unit
+                    else -> if (!cooling) vm.checkUpdate()
+                }
+            },
+        )
+        SettingsDivider()
+        SettingsRow(
+            title = "自动检查",
+            subtitle = "启动时静默查一次 GitHub 上的最新 Release，6 小时内不重复",
+            icon = Icons.Filled.CloudDownload,
+            trailing = {
+                Switch(checked = autoCheck, onCheckedChange = onAutoCheckChange)
+            },
+        )
+    }
+
+    if (showDialog) {
+        UpdateDialog(
+            state = state,
+            currentLabel = "${com.yfantasyxx.BuildConfig.VERSION_NAME} " +
+                "(${com.yfantasyxx.BuildConfig.VERSION_CODE})",
+            onDownload = { vm.downloadUpdate() },
+            onCancelDownload = { vm.cancelDownload() },
+            onInstall = {
+                when (val result = vm.installUpdate()) {
+                    InstallResult.Started -> showDialog = false
+                    InstallResult.NeedPermission -> onToast(
+                        "已打开「安装未知应用」设置，允许后回来再点一次「立即安装」"
+                    )
+                    is InstallResult.Failed -> onToast(result.message)
+                }
+            },
+            onRetry = { vm.checkUpdate() },
+            onDismiss = { showDialog = false },
+        )
+    }
+}
+
+private fun updateSubtitle(state: UpdateState, autoCheck: Boolean): String = when (state) {
+    is UpdateState.Available ->
+        if (state.fromCache) "有新版本（${agoLabel(state.checkedAt)}的检查结果）"
+        else "GitHub 上有新版本，点这里查看"
+    is UpdateState.Downloading -> {
+        val percent = if (state.total > 0L) state.bytes * 100 / state.total else 0L
+        "正在下载 v${state.info.versionName} · $percent%"
+    }
+    is UpdateState.Ready -> if (state.installable) "安装包已就绪，点这里安装" else "这个包不能直接安装，点这里看原因"
+    is UpdateState.UpToDate -> if (state.fromCache) {
+        "已是最新 · 缓存于 " + SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(state.checkedAt))
+    } else {
+        "已是最新 · 上次检查 " + SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(state.checkedAt))
+    }
+    is UpdateState.Failed -> {
+        val left = state.retryAfterAt - System.currentTimeMillis()
+        when {
+            left > 0 -> "接口限流中 · 约 ${(left / 60_000L).coerceAtLeast(1L)} 分钟后可再查"
+            // 下载失败会带上 checkedAt，检查失败不会，用这个区分两句文案
+            state.checkedAt > 0L -> "下载没成功，点这里重试"
+            else -> "上次检查没成功，点这里重试"
+        }
+    }
+    UpdateState.Checking -> "正在检查…"
+    UpdateState.Idle ->
+        if (autoCheck) "启动时自动检查一次，也可以手动点" else "自动检查已关闭，可手动检查"
+}
+
+/** 设置项上的相对时间，别写出「2026-11-05 15:46」这种把一行撑爆的格式 */
+private fun agoLabel(at: Long): String {
+    val diff = System.currentTimeMillis() - at
+    return when {
+        diff < 60_000L -> "刚刚"
+        diff < 3_600_000L -> "${diff / 60_000L} 分钟前"
+        diff < 24 * 3_600_000L -> "${diff / 3_600_000L} 小时前"
+        else -> SimpleDateFormat("M月d日", Locale.CHINA).format(Date(at))
+    }
+}
+
+private fun updateValue(state: UpdateState): String? = when (state) {
+    is UpdateState.Available -> "v${state.info.versionName}"
+    is UpdateState.Ready -> "可安装"
+    is UpdateState.UpToDate -> "已最新"
+    is UpdateState.Downloading -> "下载中"
+    else -> null
 }
 
 /**

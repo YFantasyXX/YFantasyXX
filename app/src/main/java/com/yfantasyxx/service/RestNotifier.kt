@@ -12,6 +12,8 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -252,17 +254,29 @@ object RestNotifier {
         runCatching { manager(context)?.cancel(NOTIF_DONE) }
     }
 
-    /**
-     * 四段强震动，确保能感知。
-     * 带 2.6 秒去重：一次完整波形约 2.5 秒，避免前台轮询与服务/闹钟
-     * 同时触发时后一次把前一次的波形重置掉（表现为只震一下）。
+    /** 四段强震动，确保能感知。
+     *
+     * Android 的振动器同一时刻只放一条，系统里别的应用（通知、键盘触感、来电）
+     * 一响就会把**正在响的那一条**顶掉，而且被打断的波形不会自己续上。
+     * 公开 API 里没有「设备正在震动吗」这种查询，也没法排队，所以只能：
+     *
+     * 1. 拆成四次独立下发：打断只吃掉当前这一下，后面几次照常发出；
+     * 2. 每段之间留 200ms：给系统那条短震动留出收尾时间，别贴脸抢；
+     * 3. 起手先等 350ms：休息结束的横幅通知如果自己带了震动，让它先响完；
+     * 4. 标成 [VibrationAttributes.USAGE_ALARM]：和提示音走 STREAM_ALARM 是同一套
+     *    口径。后台应用不带 usage 的震动在 Android 13+ 可能被系统直接丢掉，
+     *    带上之后既能保证后台震得出来，系统调度时也按闹钟对待。
+     *
+     * 带 3.2 秒去重：一整轮约 2.75 秒，避免前台轮询与服务/闹钟同时触发时
+     * 两轮叠在一起（表现为震动变密而不是更长）。
      */
+    @Synchronized
     fun vibrate(context: Context, force: Boolean = false) {
         runCatching {
             val prefs = context.getSharedPreferences("rest_vibrate", Context.MODE_PRIVATE)
             val now = System.currentTimeMillis()
             // force 给测试工具用：连着点几次也能每次都震，不被去重吃掉
-            if (!force && now - prefs.getLong("last_at", 0L) < 2_600L) return
+            if (!force && now - prefs.getLong("last_at", 0L) < VIBRATE_DEDUPE_MS) return
             prefs.edit().putLong("last_at", now).apply()
 
             val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -274,9 +288,53 @@ object RestNotifier {
                 ContextCompat.getSystemService(context, Vibrator::class.java)
             }
             if (vibrator == null || !vibrator.hasVibrator()) return
-            val timings = longArrayOf(0, 400, 150, 400, 150, 400, 150, 600)
-            val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255, 0, 255)
-            vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+
+            // 上一轮还没发完（测试工具连点）：先撤掉它剩下的脉冲，免得两轮叠在一起
+            vibrateToken?.let { vibrateHandler.removeCallbacksAndMessages(it) }
+            val token = Any().also { vibrateToken = it }
+
+            var offset = VIBRATE_LEAD_IN_MS
+            for (duration in VIBRATE_PULSES_MS) {
+                vibrateHandler.postAtTime(
+                    { runCatching { fire(vibrator, duration) } },
+                    token,
+                    SystemClock.uptimeMillis() + offset,
+                )
+                offset += duration + VIBRATE_GAP_MS
+            }
         }
     }
+
+    /**
+     * 单次脉冲。
+     *
+     * 33 起用 [VibrationAttributes]；32 上只有废弃的 AudioAttributes 重载，
+     * 两者都把 usage 标成 ALARM，语义一致。
+     */
+    @Suppress("DEPRECATION")
+    private fun fire(vibrator: Vibrator, durationMs: Long) {
+        val effect = VibrationEffect.createOneShot(durationMs, VIBRATE_AMPLITUDE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            vibrator.vibrate(
+                effect,
+                VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM),
+            )
+        } else {
+            vibrator.vibrate(
+                effect,
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build(),
+            )
+        }
+    }
+
+    /** 震动播放在主线程排期：只有 4 个脉冲，精度比协程 delay 稳，也不用多一个 scope */
+    private val vibrateHandler = Handler(Looper.getMainLooper())
+    private var vibrateToken: Any? = null
+
+    /** 400 / 400 / 400 / 600，之间各停 200ms —— 与原来那条波形的节奏一致 */
+    private val VIBRATE_PULSES_MS = longArrayOf(400, 400, 400, 600)
+    private const val VIBRATE_GAP_MS = 200L
+    private const val VIBRATE_LEAD_IN_MS = 350L
+    private const val VIBRATE_AMPLITUDE = 255
+    private const val VIBRATE_DEDUPE_MS = 3_200L
 }

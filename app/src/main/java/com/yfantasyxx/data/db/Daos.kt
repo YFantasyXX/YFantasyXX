@@ -245,7 +245,13 @@ interface SessionDao {
     )
     fun observeActiveSummary(): Flow<ActiveSessionSummary?>
 
-    /** 历史列表摘要（已完成的） */
+    /**
+     * 历史列表摘要（已完成的）。
+     *
+     * [limit] 是必需的：历史页只显示最近 200 条，但 CSV 导出要全量——
+     * 以前导出复用这个查询，练满 200 场之后导出的文件会静默截断。
+     * SQLite 里 `LIMIT -1` 表示不限条数。
+     */
     @Query(
         """
         SELECT s.id AS id,
@@ -272,10 +278,10 @@ interface SessionDao {
         FROM sessions s
         WHERE s.endTime IS NOT NULL
         ORDER BY s.startTime DESC
-        LIMIT 200
+        LIMIT :limit
         """
     )
-    fun observeSummaries(): Flow<List<SessionSummary>>
+    fun observeSummaries(limit: Int): Flow<List<SessionSummary>>
 
     @Transaction
     @Query("SELECT * FROM sessions WHERE id = :id")
@@ -708,6 +714,15 @@ interface SetLogDao {
     @Query("UPDATE set_logs SET weightKg = :weightKg, reps = :reps WHERE id = :id")
     suspend fun updateWeightReps(id: Long, weightKg: Float, reps: Int)
 
+    /**
+     * 只改组号。
+     *
+     * 删组重排以前走整行 `@Update`：界面手里的那行快照会把同时发生的
+     * 打勾 / 改重量一起写回旧值。重排只该碰 setNumber 这一列。
+     */
+    @Query("UPDATE set_logs SET setNumber = :setNumber WHERE id = :id")
+    suspend fun updateSetNumber(id: Long, setNumber: Int)
+
     @Query("DELETE FROM set_logs WHERE id = :id")
     suspend fun delete(id: Long)
 
@@ -762,6 +777,16 @@ interface BodyMetricDao {
 
     @Upsert
     suspend fun upsert(metric: BodyMetric)
+
+    /**
+     * 删掉同一天里除 [keepId] 之外的行。
+     *
+     * 旧版本用 `@Upsert` 写过体重：主键是自增 id、传的是 0，永远匹配不到
+     * 已有行，所以同一天记两次就会留下两行。这里在下次记录时顺手清掉，
+     * 否则 `ORDER BY date DESC LIMIT 1` 取到哪条全看 rowid。
+     */
+    @Query("DELETE FROM body_metrics WHERE date = :date AND id != :keepId")
+    suspend fun deleteOthersOfDate(date: Long, keepId: Long)
 
     @Query("DELETE FROM body_metrics WHERE id = :id")
     suspend fun delete(id: Long)

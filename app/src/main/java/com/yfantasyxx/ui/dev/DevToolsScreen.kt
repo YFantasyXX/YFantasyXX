@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
@@ -350,6 +351,14 @@ fun DevToolsScreen(onBack: () -> Unit, onOpenWorkout: () -> Unit = {}) {
                     icon = Icons.Filled.Vibration,
                     showChevron = true,
                     onClick = { vm.testVibrate() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "震动被打断",
+                    subtitle = "120ms 后插一条 900ms 震动（等同别的应用顶掉）：后面几段应该照样震",
+                    icon = Icons.Filled.Vibration,
+                    showChevron = true,
+                    onClick = { vm.testVibrateInterrupted() },
                 )
                 SettingsDivider()
                 SettingsRow(
@@ -861,6 +870,24 @@ fun DevToolsScreen(onBack: () -> Unit, onOpenWorkout: () -> Unit = {}) {
                     icon = Icons.Filled.Delete,
                     showChevron = true,
                     onClick = { vm.clearCrashLogs() },
+                )
+            }
+
+            /* ───────── 应用更新 ───────── */
+            SectionHeader("应用更新")
+            SettingsCard {
+                SettingsRow(
+                    title = "模拟发现新版本",
+                    subtitle = "拉一次线上 Release 并伪装成更高版本，" +
+                        "验证下载 / 校验 / 安装这一整条链路",
+                    icon = Icons.Filled.SystemUpdate,
+                    showChevron = true,
+                    onClick = { vm.simulateUpdateAvailable() },
+                )
+                SettingsHint(
+                    text = "装的是真实的线上 APK。lite 包的包名是 com.yfantasyxx.debug，" +
+                        "与正式版不同，所以最后会停在「无法直接安装」——这是预期的，不是 bug。",
+                    bottom = 12.dp,
                 )
             }
 

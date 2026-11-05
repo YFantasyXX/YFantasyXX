@@ -489,12 +489,20 @@ fun LiquidGlassBottomBar(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = if (selected) accent else idleTint,
-                            modifier = Modifier.size(21.dp),
-                        )
+                        Box {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = if (selected) accent else idleTint,
+                                modifier = Modifier.size(21.dp),
+                            )
+                            TabBadgeDot(
+                                visible = tab.badge,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 1.dp, y = (-1).dp),
+                            )
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = tab.label,

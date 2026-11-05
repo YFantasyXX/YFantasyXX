@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- 组间休息的悬浮窗：离开 App 后仍能看见剩余时间 / 结束提示，需用户手动授权 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 软件内更新：下载好 APK 后调起系统安装器（仍需用户在系统设置里允许「安装未知应用」） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".YFantasyXXApplication"

@@ -2,4 +2,6 @@
 <paths>
     <!-- 分享卡片写在 cacheDir/shares/，只暴露这一个目录 -->
     <cache-path name="shares" path="shares/" />
+    <!-- 软件内更新下载的安装包，只在点「立即安装」时临时授权给系统安装器 -->
+    <cache-path name="updates" path="updates/" />
 </paths>

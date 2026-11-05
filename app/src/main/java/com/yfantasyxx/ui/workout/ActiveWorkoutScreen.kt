@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,8 +20,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -58,8 +61,6 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: WorkoutViewModel = viewModel(factory = WorkoutViewModel.factory(container))
     val exercises by vm.exercises.collectAsStateWithLifecycle()
-    val elapsed by vm.elapsedSeconds.collectAsStateWithLifecycle()
-    val restRunning by vm.restRunning.collectAsStateWithLifecycle()
     val lastPerformance by vm.lastPerformance.collectAsStateWithLifecycle()
     val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
@@ -94,6 +95,18 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     // 只按 listState 记忆：把 haptics 也写进 key 的话，
     // 一旦组合局部换了实例就会重建状态，拖到一半的 pendingDrop 会被清掉
     val drag = remember(listState) { WorkoutDragState(listState, haptics) }
+
+    // 勾选一组之后把列表位置钉住。
+    //
+    // 勾选 → 写库 → Room 发射 → 列表重新测量，这中间只要 ScrollPosition 动一下
+    // （contentPadding 变化、键盘收放、卡片高度变化…），用户眼前那一组就跑了，
+    // 得手动滑回来。这里在勾选那一刻记下第一可见项的 (index, offset)，
+    // 随后约 200ms 内轮询比对，被动过就补回去。
+    //
+    // 用独立协程而不是「状态 + LaunchedEffect」：token 做成 Compose 状态的话，
+    // item lambda 里读它会让整屏卡片跟着重组一次。
+    // 窗口只有 200ms：手指来不及接管列表，而 Room 回包 + 重新测量通常 30–80ms。
+    val keepScope = rememberCoroutineScope()
     // 动作列表之前还有几个 item（错误提示卡）。
     // visibleItemsInfo.index 是「整个 LazyColumn 的下标」，减掉它才是动作下标。
     // 若以后在动作列表前面再加 item，这里必须同步 +1。
@@ -215,6 +228,12 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
+            // 训练时长在这里收，不能放在函数顶层：它每秒变一次，
+            // 顶层读取会让整个 ActiveWorkoutScreen 每秒重组一遍，
+            // Scaffold 的 content lambda 跟着换新实例 → LazyColumn 的
+            // item provider 重建 → 所有可见动作卡都跟着重组。
+            // 收在 topBar lambda 里，每秒重组的只有这一行标题。
+            val elapsed by vm.elapsedSeconds.collectAsStateWithLifecycle()
             SmallTopAppBar(
                 title = if (elapsed == 0) "待开始" else formatDuration(elapsed),
                 subtitle = if (exercises.isEmpty()) {
@@ -290,11 +309,21 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
 
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth(),
-                // 底部留出休息条的高度：休息条是浮层，靠 contentPadding 让最后一张卡
-                // 还能滚到它上面去。改 contentPadding 不会推动当前内容，只会加长可滚范围。
+                // 必须 fillMaxSize：只写 fillMaxWidth 时 LazyColumn 的高度等于内容高度，
+                // 内容不满一屏时外层 Box 也被顶成「内容高度」——
+                // 于是 imePadding 缩不到这块区域，键盘弹起来会直接盖住下半屏，
+                // 输入框只能靠 bringIntoView 硬滚，列表就被拽着走。
+                modifier = Modifier.fillMaxSize(),
+                // 底部留白【固定】为「休息条高度 + 常规边距」，不跟着休息条出现而变。
+                //
+                // 原来写成 `24.dp + if (restRunning) 88.dp else 0.dp`：勾完一组
+                // restRunning 翻 true，contentPadding 跟着变，LazyColumn 就要重新
+                // 测量一遍。滚动锚点虽然还是第一可见项，但可滚范围、以及「已经在
+                // 底部时」的夹取结果都会变，屏幕上正在看的那一组就被推走了。
+                // 固定下来以后，勾选一组对列表布局是零改动。
+                // 代价只是没在休息时底部多 88dp 空白，最后一组反而更容易滚出来。
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    bottom = 24.dp + if (restRunning) 88.dp else 0.dp,
+                    bottom = 24.dp + 88.dp,
                 ),
             ) {
                 // 操作异常提示（不闪退，显示原因）
@@ -373,7 +402,24 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         headerCount = headerItemCount,
                         exerciseCount = displayExercises.size,
                         onUpdateSet = { set, weight, reps -> vm.updateSet(set, weight, reps) },
-                        onToggleSet = vm::toggleSetComplete,
+                        onToggleSet = { set ->
+                            // 先取锚点再打勾：数据回包引起的位移只有在这个
+                            // 窗口里才补得回来（理由见 keepScope）
+                            val anchor = listState.firstVisibleItemIndex to
+                                listState.firstVisibleItemScrollOffset
+                            keepScope.launch {
+                                repeat(12) {
+                                    kotlinx.coroutines.delay(16)
+                                    val moved = listState.firstVisibleItemIndex != anchor.first ||
+                                        listState.firstVisibleItemScrollOffset != anchor.second
+                                    if (moved) {
+                                        listState.scrollToItem(anchor.first, anchor.second)
+                                        return@launch
+                                    }
+                                }
+                            }
+                            vm.toggleSetComplete(set)
+                        },
                         onAddSet = { vm.addSet(id) },
                         onRemoveExercise = { vm.removeExercise(id) },
                         onDeleteSet = vm::deleteSet,

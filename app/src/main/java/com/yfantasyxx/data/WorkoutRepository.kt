@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.data.db.TemplateFolder
@@ -110,11 +111,25 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     private val prMutex = Mutex()
     private val calibrationMutex = Mutex()
 
+    /**
+     * 统计缓存的代次。
+     *
+     * 缓存是「先查库、再赋值」：查库期间数据可能又变了（训练中连续打勾），
+     * 如果照样把结果写回去，缓存里就是旧数据，而且没有任何东西会再让它失效——
+     * 表现是 PR / 校准值卡在某个中间状态，直到下一次写入。
+     * 所以算完先比对代次，变了就丢弃这次结果。
+     */
+    @Volatile
+    private var statsVersion = 0
+
     /** 写入 set_logs / sessions 之后调用 */
     private fun invalidateStats() {
         prCache = null
         calibrationCache = null
-        dataVersion.value += 1
+        statsVersion++
+        // dataVersion.value += 1 是「读-改-写」：两处并发失效时可能少加一次，
+        // 计划状态就会漏一次刷新
+        dataVersion.update { it + 1 }
     }
 
     /**
@@ -262,14 +277,19 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
 
     suspend fun getTemplate(id: Long): TemplateWithExercises? = templateDao.getWithExercises(id)
 
-    /** 新建/更新模板及其动作条目 */
+    /**
+     * 新建/更新模板及其动作条目。
+     *
+     * 整段必须在一个事务里：先删光旧条目再逐条插入，中途失败（磁盘满、
+     * 进程被杀、外键约束）会把用户的模板动作清空一半，而模板本身还在。
+     */
     suspend fun saveTemplate(
         templateId: Long?,
         name: String,
         note: String,
         items: List<TemplateExerciseDraft>,
         folderId: Long? = null,
-    ): Long {
+    ): Long = db.withTransaction {
         val id = if (templateId == null) {
             templateDao.insert(
                 WorkoutTemplate(
@@ -286,6 +306,9 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                     id = templateId,
                     name = name.trim(),
                     note = note.trim(),
+                    // createdAt 必须沿用：模板列表按 `sortOrder, createdAt DESC` 排，
+                    // 而所有模板的 sortOrder 都是 0，重建这一行会把刚编辑过的顶到最前面
+                    createdAt = current?.createdAt ?: System.currentTimeMillis(),
                     folderId = current?.folderId ?: folderId,
                     sortOrder = current?.sortOrder ?: 0,
                 )
@@ -312,7 +335,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                 )
             )
         }
-        return id
+        id
     }
 
     suspend fun deleteTemplate(template: WorkoutTemplate) = templateDao.delete(template)
@@ -519,36 +542,43 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun getActiveSessionId(): Long? =
         sessionDao.getActiveDraft()?.session?.id
 
-    /** 开始一次新训练（可从模板带入动作）；已有进行中的草稿时直接复用 */
-    suspend fun startSession(templateId: Long? = null, name: String = ""): Long {
-        val existing = sessionDao.getActiveDraft()
-        if (existing != null) {
-            val hasCompleted = existing.exercises.any { item -> item.sets.any { it.completed } }
-            val sameTemplate = existing.session.templateId == templateId
-            if (hasCompleted || sameTemplate || templateId == null) {
-                // 继续上次未完成的训练
-                if (templateId != null && existing.exercises.isEmpty()) {
-                    applyTemplate(existing.session.id, templateId)
+    /**
+     * 开始一次新训练（可从模板带入动作）；已有进行中的草稿时直接复用。
+     *
+     * 「清空旧草稿 + 按新模板重建」必须是一个事务：中途失败会留下一个
+     * 半空的草稿——旧动作删了、新动作没进来，用户看到的是空白训练页。
+     */
+    suspend fun startSession(templateId: Long? = null, name: String = ""): Long =
+        db.withTransaction {
+            val existing = sessionDao.getActiveDraft()
+            if (existing != null) {
+                val hasCompleted = existing.exercises.any { item -> item.sets.any { it.completed } }
+                val sameTemplate = existing.session.templateId == templateId
+                if (hasCompleted || sameTemplate || templateId == null) {
+                    // 继续上次未完成的训练
+                    if (templateId != null && existing.exercises.isEmpty()) {
+                        applyTemplate(existing.session.id, templateId)
+                    }
+                    return@withTransaction existing.session.id
                 }
-                return existing.session.id
+                // 上次只是打开没练，且这次换了个模板：清空旧内容按新模板重建
+                existing.exercises.forEach { sessionExerciseDao.delete(it.sessionExercise.id) }
+                sessionDao.setTemplateId(existing.session.id, templateId)
+                applyTemplate(existing.session.id, templateId)
+                invalidateStats()
+                return@withTransaction existing.session.id
             }
-            // 上次只是打开没练，且这次换了个模板：清空旧内容按新模板重建
-            existing.exercises.forEach { removeSessionExercise(it.sessionExercise.id) }
-            sessionDao.setTemplateId(existing.session.id, templateId)
-            applyTemplate(existing.session.id, templateId)
-            return existing.session.id
-        }
-        val sessionId = sessionDao.insert(
-            WorkoutSession(
-                name = name,
-                templateId = templateId,
-                startTime = System.currentTimeMillis(),
-                endTime = null,
+            val sessionId = sessionDao.insert(
+                WorkoutSession(
+                    name = name,
+                    templateId = templateId,
+                    startTime = System.currentTimeMillis(),
+                    endTime = null,
+                )
             )
-        )
-        if (templateId != null) applyTemplate(sessionId, templateId)
-        return sessionId
-    }
+            if (templateId != null) applyTemplate(sessionId, templateId)
+            sessionId
+        }
 
     /** 把模板中的动作（含目标组数）写入训练 */
     private suspend fun applyTemplate(sessionId: Long, templateId: Long) {
@@ -595,7 +625,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         exerciseId: Long,
         targetSets: Int = 3,
         completed: Boolean = false,
-    ): Long {
+    ): Long = db.withTransaction {
         val order = sessionExerciseDao.nextSortOrder(sessionId)
         val seId = sessionExerciseDao.insert(
             SessionExercise(sessionId = sessionId, exerciseId = exerciseId, sortOrder = order)
@@ -611,7 +641,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         )
         // 未完成的组不进统计，只有补录成已完成的才需要刷新缓存
         if (completed) invalidateStats()
-        return seId
+        seId
     }
 
     suspend fun removeSessionExercise(id: Long) {
@@ -631,13 +661,19 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         invalidateStats()
     }
 
-    /** 把某动作和它下面的动作组成超级组（原来没有组就新开一个编号） */
-    suspend fun linkSuperset(sessionId: Long, sessionExerciseId: Long, nextId: Long): Int {
-        val group = sessionExerciseDao.nextSupersetGroup(sessionId)
-        sessionExerciseDao.setSupersetGroup(sessionExerciseId, group)
-        sessionExerciseDao.setSupersetGroup(nextId, group)
-        return group
-    }
+    /**
+     * 把某动作和它下面的动作组成超级组（原来没有组就新开一个编号）。
+     *
+     * 两次写入必须同事务：只写上第一个的话，那个动作会挂着一个「只有自己」
+     * 的超级组编号，休息逻辑会把它当成组末，组间休息直接错掉。
+     */
+    suspend fun linkSuperset(sessionId: Long, sessionExerciseId: Long, nextId: Long): Int =
+        db.withTransaction {
+            val group = sessionExerciseDao.nextSupersetGroup(sessionId)
+            sessionExerciseDao.setSupersetGroup(sessionExerciseId, group)
+            sessionExerciseDao.setSupersetGroup(nextId, group)
+            group
+        }
 
     /** 退出超级组；同组不足两人时把剩下的也清掉，避免留下孤零零的编号 */
     suspend fun unlinkSuperset(sessionId: Long, sessionExerciseId: Long) {
@@ -703,14 +739,15 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     }
 
     /** 删除某一组并把剩余组重新编号，避免出现 1、2、4 这样的空缺 */
-    suspend fun deleteSetAndRenumber(id: Long) {
-        val target = setLogDao.getById(id) ?: return
+    suspend fun deleteSetAndRenumber(id: Long) = db.withTransaction {
+        val target = setLogDao.getById(id) ?: return@withTransaction
         val sessionExerciseId = target.sessionExerciseId
         setLogDao.delete(id)
         val remaining = setLogDao.getForSessionExercise(sessionExerciseId).sortedBy { it.setNumber }
         remaining.forEachIndexed { index, item ->
             if (item.setNumber != index + 1) {
-                setLogDao.update(item.copy(setNumber = index + 1))
+                // 只改这一列：整行写回会把并发的打勾 / 改重量覆盖成旧快照
+                setLogDao.updateSetNumber(item.id, index + 1)
             }
         }
         invalidateStats()
@@ -742,6 +779,13 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
         invalidateStats()
     }
 
+    /**
+     * 一次性取当前会话详情（非 Flow）。
+     *
+     * 训练页首屏用它把动作和「上次表现」都查齐再上屏：如果让列表先渲染、
+     * 参考数据后到，进阶建议条会凭空出现把卡片撑高约 50dp，
+     * 正在打勾的那一组就被推下去了。
+     */
     suspend fun getSessionDetails(id: Long): List<SessionExerciseWithSets>? =
         sessionDao.getWithDetails(id)?.exercises?.sortedBySessionOrder()
 
@@ -767,7 +811,8 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeHistory(): Flow<List<SessionSummary>> =
         observeLatestWeight().distinctUntilChanged()
-            .flatMapLatest { sessionDao.observeSummaries() }
+            // 历史页只渲染最近 200 条；CSV 导出另外走全量（见 buildCsvExport）
+            .flatMapLatest { sessionDao.observeSummaries(HISTORY_LIMIT) }
 
     /**
      * 删除一条训练记录。
@@ -812,7 +857,11 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      */
     suspend fun personalRecords(refresh: Boolean = false): List<ExercisePr> = prMutex.withLock {
         if (!refresh) prCache?.let { return@withLock it }
-        computePersonalRecords().also { prCache = it }
+        val version = statsVersion
+        val result = computePersonalRecords()
+        // 算的过程中数据又变了：这次结果已经是旧的，别写进缓存
+        if (version == statsVersion) prCache = result
+        result
     }
 
     private suspend fun computePersonalRecords(): List<ExercisePr> {
@@ -886,6 +935,11 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun lastSessionSets(exerciseId: Long): List<SetLog> =
         sessionDao.lastSessionSets(exerciseId)
 
+    private companion object {
+        /** 历史页一次加载多少条；再多列表也滚不到，反而拖慢首帧 */
+        const val HISTORY_LIMIT = 200
+    }
+
     /**
      * 各分档的 rep-max 曲线校准结果。
      *
@@ -895,8 +949,13 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun calibration(): Map<Int, PatternCalibration> {
         calibrationCache?.let { return it }
         return calibrationMutex.withLock {
-            calibrationCache ?: RepMaxCalibration.calibrate(sessionDao.repMaxPoints())
-                .also { calibrationCache = it }
+            calibrationCache ?: run {
+                val version = statsVersion
+                val result = RepMaxCalibration.calibrate(sessionDao.repMaxPoints())
+                // 同 personalRecords：算的是旧快照就别往缓存里塞
+                if (version == statsVersion) calibrationCache = result
+                result
+            }
         }
     }
 
@@ -1199,35 +1258,61 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun latestWeightKg(): Float? = bodyMetricDao.latestWeightKg()
 
     suspend fun saveWeight(date: Long, weightKg: Float, bodyFat: Float? = null) {
-        bodyMetricDao.upsert(BodyMetric(date = date, weightKg = weightKg, bodyFatPercent = bodyFat))
+        // 一天只留一条。**不能用 @Upsert**：主键是自增 id，传进去的 id 是 0，
+        // 永远匹配不到已有行，每记一次就会多插一行；而 `ORDER BY date DESC LIMIT 1`
+        // 在同一个 date 上取到哪一行并不确定（通常是先插入的那条），
+        // 表现就是「刚改的体重没生效，统计还在用旧值」。
+        val existing = bodyMetricDao.getByDate(date)
+        if (existing == null) {
+            bodyMetricDao.insert(BodyMetric(date = date, weightKg = weightKg, bodyFatPercent = bodyFat))
+        } else {
+            bodyMetricDao.upsert(existing.copy(weightKg = weightKg, bodyFatPercent = bodyFat))
+            // 旧版本留下的重复行顺手清掉，否则「最近一次体重」仍可能取到旧的那条
+            bodyMetricDao.deleteOthersOfDate(date, keepId = existing.id)
+        }
         // 自重动作的容量与 PR 都按体重折算（见 Load）：体重变了，缓存必须跟着失效，
         // 否则统计页会停在旧体重算出来的数字上
         invalidateStats()
     }
 
-    suspend fun deleteBodyMetric(id: Long) = bodyMetricDao.delete(id)
+    suspend fun deleteBodyMetric(id: Long) {
+        bodyMetricDao.delete(id)
+        // 删掉的可能正是「最近一次体重」，自重折算与 PR 都要重新算
+        invalidateStats()
+    }
 
     // ---------- CSV 导出 ----------
 
-    /** 导出全部训练记录为 CSV 文本 */
+    /**
+     * 导出全部训练记录为 CSV 文本。
+     *
+     * 口径必须和统计页一致：整库全量（不是历史页那 200 条），
+     * 容量按有效负荷算（自重动作加体重），数字一律用 `.` 作小数点。
+     */
     suspend fun buildCsvExport(): String {
         val sb = StringBuilder()
         sb.append("date,exercise,category,sets,reps,weight_kg,volume_kg\n")
-        sessionDao.observeSummaries().first().forEach { summary ->
+        // limit = -1 是 SQLite 的「不限条数」；用历史页那套默认值会静默截断
+        val bodyweight = latestWeightKg()
+        sessionDao.observeSummaries(limit = -1).first().forEach { summary ->
             val details = sessionDao.getWithDetails(summary.id) ?: return@forEach
             val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
                 .format(java.util.Date(summary.startTime))
             details.exercises.sortedBySessionOrder().forEach { item ->
                 item.sets.filter { it.completed }.sortedBy { it.setNumber }.forEach { set ->
+                    val volume =
+                        Load.effectiveKg(set.weightKg, item.exercise.equipment, bodyweight) * set.reps
                     sb.append(
+                        // Locale.US：默认 Locale 是德语/法语时小数点会变成逗号，整列错位
                         "%s,%s,%s,%d,%d,%.1f,%.1f\n".format(
+                            java.util.Locale.US,
                             date,
                             escapeCsv(item.exercise.name),
                             item.exercise.category,
                             set.setNumber,
                             set.reps,
                             set.weightKg,
-                            set.weightKg * set.reps,
+                            volume,
                         )
                     )
                 }

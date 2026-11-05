@@ -135,14 +135,23 @@ fun NumberStepper(
     step: Float = 2.5f,
     unit: String = "",
     allowNegative: Boolean = false,
+    /**
+     * 行身份。列表回收行槽位时（组数增减、动作卡换序），
+     * 输入态必须跟着「哪一组」走，而不是跟着屏幕上的格子走。
+     *
+     * 不给的话 remember 不按任何东西重置：被复用到的那一行会直接
+     * 以编辑态出现、带着上一行的数字，挂载后还会抢焦点把键盘弹起来
+     * —— 表现就是「勾完一组，页面自己滚到别处」。
+     */
+    rememberKey: Any? = null,
 ) {
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
     val bringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
-    var editing by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf("") }
+    var editing by remember(rememberKey) { mutableStateOf(false) }
+    var text by remember(rememberKey) { mutableStateOf("") }
     // 记录是否真正获得过焦点：刚显示时 onFocusChanged 会先报一次 false
-    var hasFocused by remember { mutableStateOf(false) }
+    var hasFocused by remember(rememberKey) { mutableStateOf(false) }
 
     val displayText = if (value == value.toInt().toFloat()) {
         value.toInt().toString() + unit
@@ -167,14 +176,16 @@ fun NumberStepper(
         return result
     }
 
-    // 键盘弹出（IME insets 变大）后再滚动，确保不被挡住
-    val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime
-        .getBottom(androidx.compose.ui.platform.LocalDensity.current)
-    LaunchedEffect(imeBottom, editing) {
-        if (editing && imeBottom > 0) {
-            kotlinx.coroutines.delay(120)
-            runCatching { bringIntoView.bringIntoView() }
-        }
+    // 键盘弹出后把输入框滚进可视区。
+    //
+    // key 只用 editing，绝对不能带上 ime.bottom：键盘动画期间 insets
+    // 每一帧都在变，写进 key 等于每帧重启协程 —— 每次重启都会重新发起
+    // bringIntoView，列表被一路往上拽，用户看到的就是「页面位置移位」。
+    // 现在只在「刚进入输入态」时等键盘动画走完滚一次，之后不再动。
+    LaunchedEffect(editing) {
+        if (!editing) return@LaunchedEffect
+        kotlinx.coroutines.delay(260)
+        runCatching { bringIntoView.bringIntoView() }
     }
 
     Row(

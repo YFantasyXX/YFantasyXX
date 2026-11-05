@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 
 enum class ThemeMode(val value: Int) {
@@ -104,6 +105,13 @@ data class AppSettings(
     val restOverlayPersistent: Boolean = false,
     /** 休息结束时的提示音来源 */
     val restAlertSound: AlertSound = AlertSound.ALARM,
+    /**
+     * 启动时自动去 GitHub 查一次新版本。
+     *
+     * 只检查、不下载：几 MB 的包在移动网络下静默拉走不合适，
+     * 查到之后在「我的 → 应用更新」里提示，用户点了才下。
+     */
+    val autoCheckUpdate: Boolean = true,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -136,6 +144,7 @@ class SettingsRepository(
         val REST_OVERLAY = booleanPreferencesKey("rest_overlay")
         val REST_OVERLAY_PERSISTENT = booleanPreferencesKey("rest_overlay_persistent")
         val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
+        val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
     }
 
     /**
@@ -187,6 +196,7 @@ class SettingsRepository(
                 restOverlay = prefs[Keys.REST_OVERLAY] ?: true,
                 restOverlayPersistent = prefs[Keys.REST_OVERLAY_PERSISTENT] ?: false,
                 restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
+                autoCheckUpdate = prefs[Keys.AUTO_CHECK_UPDATE] ?: true,
             )
         }
         // 解密 WebDAV 密码要走 Keystore（跨进程），不能在主线程做
@@ -201,7 +211,11 @@ class SettingsRepository(
      * 是默认设置。需要「用户真正设置的那份」时必须用这个。
      */
     suspend fun awaitSettings(): AppSettings {
-        settled.first { it }
+        // 兜底 3 秒：DataStore 读不出来（配置损坏、磁盘异常、作用域被取消）时，
+        // 这里会永久挂起——闹钟拉起的服务起不来、训练完成后不备份、
+        // 页面一直转圈，而且没有任何报错。超时后退回当前值（可能是默认值），
+        // 至少让流程能继续往下走。
+        withTimeoutOrNull(3_000L) { settled.first { it } }
         return settings.value
     }
 
@@ -264,5 +278,9 @@ class SettingsRepository(
 
     suspend fun setRestAlertSound(sound: AlertSound) {
         context.dataStore.edit { it[Keys.REST_ALERT_SOUND] = sound.value }
+    }
+
+    suspend fun setAutoCheckUpdate(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.AUTO_CHECK_UPDATE] = enabled }
     }
 }

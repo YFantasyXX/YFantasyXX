@@ -151,6 +151,11 @@ class RestTimerService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 finished = false
+                // 上一轮「休息结束」可能还排着 12 秒后的退场任务。不清掉的话，
+                // 新一轮刚开始计时，那个 endRunnable 会照旧到点 stopSelf()——
+                // 通知栏倒计时和悬浮窗一起消失；服务一旦不再前台，很快会被系统回收，
+                // 这一轮休息就彻底没了（只剩闹钟兜底）
+                handler.removeCallbacks(endRunnable)
                 // 夹住：Intent 里可能是 0 或负数（外部调用、旧版本残留），
                 // 负数会让 endTime 落在过去（倒计时立刻结束），
                 // 还会让 buildCountdown 里的 setProgress 拿到反转区间直接抛异常
@@ -440,6 +445,9 @@ class RestTimerService : Service() {
      */
     private fun endFinished() {
         handler.removeCallbacks(endRunnable)
+        // 这 12 秒里可能已经开始了下一轮休息：结束卡片还没收，用户回 App 勾了下一组。
+        // ACTION_START 会把 finished 重置成 false，这时退场任务就该作废。
+        if (!finished) return
         stopForeground(STOP_FOREGROUND_DETACH)
         overlay.hide()
         stopSelf()

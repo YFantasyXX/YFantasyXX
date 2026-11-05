@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.service.RestTimerService
 import com.yfantasyxx.util.RestTimerStore
 
@@ -228,6 +230,31 @@ class WorkoutViewModel(
         // 新训练重新放行「完成」：finishing 是防重复提交的闸门，
         // 不能跨 session 一直卡着
         _finishing.value = false
+
+        // 首屏先把「动作 + 上次表现」一次查齐再上屏。
+        //
+        // 原来是列表先渲染、上次表现后到：进阶建议条要等 lastSets 有值才算得出来，
+        // 它凭空出现会把整张卡撑高约 50dp，正好在用户勾第一组的那一刻
+        // 把下面所有内容推走 —— 也就是「完成这一组，页面位置移位」。
+        // 两次 StateFlow 赋值在同一个组合帧内生效，用户看到的首帧就是完整高度。
+        try {
+            val initial = repo.getSessionDetails(id).orEmpty()
+            if (initial.isNotEmpty()) {
+                val ids = initial.map { it.sessionExercise.exerciseId }
+                val performance = ids.associateWith { exerciseId ->
+                    repo.lastPerformance(exerciseId)
+                }
+                loadedPerformanceIds = ids
+                _lastPerformance.value = performance
+                _exercises.value = initial
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // 预取失败不致命：下面的 flow 会补一次同样的查询，
+            // 只是退化成「列表先出来、参考数据后到」的老样子
+        }
+
         observeJob?.cancel()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collectLatest { list ->
@@ -247,10 +274,14 @@ class WorkoutViewModel(
                 // 仅在动作增减时刷新"上次表现"参考（组数据变化不需要重查）
                 val ids = ordered.map { it.sessionExercise.exerciseId }
                 if (ids != loadedPerformanceIds) {
-                    loadedPerformanceIds = ids
-                    _lastPerformance.value = ids.associateWith { exerciseId ->
+                    // 先查完再记下 ids：collectLatest 会因为新一次发射取消这段查询，
+                    // 提前把 ids 存下来的话，下一次发射会认为「已经加载过」直接跳过，
+                    // 这批动作的「上次表现」就永远空着
+                    val performance = ids.associateWith { exerciseId ->
                         repo.lastPerformance(exerciseId)
                     }
+                    loadedPerformanceIds = ids
+                    _lastPerformance.value = performance
                 }
             }
         }
@@ -533,47 +564,56 @@ class WorkoutViewModel(
         }
     }
 
+    /**
+     * 打勾的串行闸门。
+     *
+     * 「读当前值 → 取反 → 写回」不是原子的：连点两下时两个协程都可能读到
+     * `completed=false`，两次都写 true，勾就取消不掉；而且两次都会走到
+     * 下面把休息计时重新拉满。串行执行后，第二次一定读到第一次写完之后的值。
+     */
+    private val toggleMutex = Mutex()
+
     fun toggleSetComplete(set: SetLog) {
         viewModelScope.launch {
-            // 以库里的最新值为准取反，而不是界面的快照：
-            // 手指抖一下连点两次时，两次都基于同一个旧快照算成 true，
-            // 勾就取消不掉了，还会把休息计时重新拉满
-            val fresh = runCatching { repo.getSet(set.id) }.getOrNull()
-            if (fresh == null) {
-                // 这一组可能已经被删掉了（放弃训练、删动作、恢复备份）。
-                // 静默 return 的话用户只看到「勾没打上」，不知道是数据没了；
-                // toggleSetPr 那边是会提示的，这里保持一致
-                _error.value = "这一组已经不存在了（可能已被删除），请返回后重新进入"
-                return@launch
-            }
-            val willComplete = !fresh.completed
-            // 只改完成这一列。整行写回会用这一行的旧快照，
-            // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
-            repo.setSetCompleted(fresh.id, willComplete)
-            if (willComplete) {
-                // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
-                val sessionId = _sessionId.value
-                if (sessionId != null && _session.value?.activeStartedAt == null) {
-                    val now = System.currentTimeMillis()
-                    repo.markSessionStarted(sessionId, now)
-                    _session.value = _session.value?.copy(activeStartedAt = now)
-                    startTicker()
+            toggleMutex.withLock {
+                // 以库里的最新值为准取反，而不是界面的快照
+                val fresh = runCatching { repo.getSet(set.id) }.getOrNull()
+                if (fresh == null) {
+                    // 这一组可能已经被删掉了（放弃训练、删动作、恢复备份）。
+                    // 静默 return 的话用户只看到「勾没打上」，不知道是数据没了；
+                    // toggleSetPr 那边是会提示的，这里保持一致
+                    _error.value = "这一组已经不存在了（可能已被删除），请返回后重新进入"
+                    return@withLock
                 }
-                val item = _exercises.value
-                    .firstOrNull { it.sessionExercise.id == set.sessionExerciseId }
-                val exerciseId = item?.sessionExercise?.exerciseId
-                // 兜底查询，避免 flow 尚未 emit 时拿不到动作名
-                val exerciseName = item?.exercise?.name
-                    ?: exerciseId?.let { runCatching { repo.getExercise(it)?.name }.getOrNull() }
-                val label = if (exerciseName != null) {
-                    "$exerciseName · 第 ${set.setNumber} 组"
-                } else {
-                    "第 ${set.setNumber} 组"
-                }
-                // 超级组里交替做，组内不休息：只有轮到最后那一个才起计时器
-                val supersetGroup = item?.sessionExercise?.supersetGroup
-                if (supersetGroup == null || isLastOfSupersetRound(item, set, supersetGroup)) {
-                    startRestTimerFor(exerciseId, set.sessionExerciseId, label)
+                val willComplete = !fresh.completed
+                // 只改完成这一列。整行写回会用这一行的旧快照，
+                // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
+                repo.setSetCompleted(fresh.id, willComplete)
+                if (willComplete) {
+                    // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
+                    val sessionId = _sessionId.value
+                    if (sessionId != null && _session.value?.activeStartedAt == null) {
+                        val now = System.currentTimeMillis()
+                        repo.markSessionStarted(sessionId, now)
+                        _session.value = _session.value?.copy(activeStartedAt = now)
+                        startTicker()
+                    }
+                    val item = _exercises.value
+                        .firstOrNull { it.sessionExercise.id == set.sessionExerciseId }
+                    val exerciseId = item?.sessionExercise?.exerciseId
+                    // 兜底查询，避免 flow 尚未 emit 时拿不到动作名
+                    val exerciseName = item?.exercise?.name
+                        ?: exerciseId?.let { runCatching { repo.getExercise(it)?.name }.getOrNull() }
+                    val label = if (exerciseName != null) {
+                        "$exerciseName · 第 ${set.setNumber} 组"
+                    } else {
+                        "第 ${set.setNumber} 组"
+                    }
+                    // 超级组里交替做，组内不休息：只有轮到最后那一个才起计时器
+                    val supersetGroup = item?.sessionExercise?.supersetGroup
+                    if (supersetGroup == null || isLastOfSupersetRound(item, set, supersetGroup)) {
+                        startRestTimerFor(exerciseId, set.sessionExerciseId, label)
+                    }
                 }
             }
         }

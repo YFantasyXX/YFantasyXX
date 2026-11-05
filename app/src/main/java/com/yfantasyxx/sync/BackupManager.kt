@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.yfantasyxx.data.db.AppDatabase
 import com.yfantasyxx.util.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -104,6 +105,10 @@ class BackupManager(
             )
             name
         }.onFailure { e ->
+            // 协程被取消不是「备份失败」：必须原样抛出去。
+            // runCatching 会把 CancellationException 一起接住，吞掉之后
+            // 调用方的 viewModelScope 已经取消、这里还在写状态、发提示。
+            if (e is CancellationException) throw e
             _state.value = _state.value.copy(
                 running = false,
                 message = "备份失败：${e.message ?: "未知错误"}",
@@ -221,6 +226,15 @@ class BackupManager(
                     },
                 )
             }.onFailure { e ->
+                // 取消要原样抛（见 backup 里同样的说明），不能当成恢复失败弹提示
+                if (e is CancellationException) throw e
+                // 走到这里要么根本没动主库（临时文件写失败），要么已经回滚成旧库了。
+                // 留一份整库大小的 .bak 只是白占空间，界面上也没有任何入口能用它回滚。
+                runCatching {
+                    if (dbFile.exists()) {
+                        File(dbFile.parentFile, "${AppDatabase.NAME}.bak").delete()
+                    }
+                }
                 // 关过库就必须给容器一个能用的实例，否则后续每个 DAO 调用都会
                 // 抛 already-closed，用户连设置页都进不去
                 if (dbClosed) runCatching { onDatabaseInvalidated() }
@@ -328,14 +342,24 @@ class BackupManager(
         val list = client.listBackupFiles(RemoteStore.BACKUP_DIRECTORY).getOrElse {
             return "旧备份未清理（${it.message ?: "获取列表失败"}），不影响本次备份"
         }
-        val todayStart = startOfDay(Clock.now())
+        // 清理基准必须用真实时钟：文件名里的时间戳是 realNow 写的，
+        // 用可拨动的业务时间做「今天/90 天前」，拨钟之后两边对不上，
+        // 会把还在保留期内的备份整批删掉
+        val todayStart = startOfDay(Clock.realNow())
         val cutoff = daysBefore(todayStart, KEEP_DAYS)
         val keep = linkedSetOf(keepName)
         val keptDays = mutableSetOf<Long>()
 
-        // 从新到旧扫，先遇到的就是这一天最晚的那份
+        // 从新到旧扫，先遇到的就是这一天最晚的那份。
+        // 时间戳只解析一次：effectiveTimestamp 要跑正则 + SimpleDateFormat，
+        // 原来在循环里算一遍、下面 filter 里又算一遍，列表长了纯属白烧 CPU
+        val undated = mutableListOf<String>()
         for (file in list.sortedWith(TIME_DESC)) {
-            val ts = BackupFileMeta.effectiveTimestamp(file) ?: continue
+            val ts = BackupFileMeta.effectiveTimestamp(file)
+            if (ts == null) {
+                undated += file.name
+                continue
+            }
             val day = startOfDay(ts)
             when {
                 day >= todayStart -> keep += file.name
@@ -343,7 +367,7 @@ class BackupManager(
                 keptDays.add(day) -> keep += file.name
             }
         }
-        list.filter { BackupFileMeta.effectiveTimestamp(it) == null }.forEach { keep += it.name }
+        keep += undated
 
         val stale = list.filter { it.name !in keep }
         if (stale.isEmpty()) return null
