@@ -259,6 +259,10 @@ interface SessionDao {
                s.templateId AS templateId,
                COALESCE(s.activeStartedAt, s.startTime) AS startTime,
                s.endTime AS endTime,
+               s.note AS note,
+               (SELECT COUNT(*) FROM set_logs slp
+                    INNER JOIN session_exercises sep ON slp.sessionExerciseId = sep.id
+                    WHERE sep.sessionId = s.id AND slp.isPr = 1 AND slp.completed = 1) AS prCount,
                (SELECT COUNT(DISTINCT se.exerciseId) FROM session_exercises se WHERE se.sessionId = s.id) AS exerciseCount,
                (SELECT COUNT(*) FROM set_logs sl
                     INNER JOIN session_exercises se2 ON sl.sessionExerciseId = se2.id
@@ -569,6 +573,35 @@ interface SessionDao {
         """
     )
     suspend fun lastSessionSetsWithPr(exerciseId: Long): List<SetLog>
+
+    /**
+     * 历史详情用：某动作在「这次训练之前」最近一次训练里的最强工作组。
+     *
+     * 排序先按会话时间倒序、再按重量次数，所以 `LIMIT 1` 拿到的是
+     * 「上一次练这个动作时最重的那组」，而不是把好几次训练混在一起比。
+     * 排除热身与 PR 组，和 [lastSessionSets] 的口径一致——PR 是极限组，
+     * 拿它当「上次练了多少」会把对比结果带偏。
+     */
+    @Query(
+        """
+        SELECT sl.*, s.startTime AS sessionStart
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId
+          AND s.endTime IS NOT NULL
+          AND s.id != :excludeSessionId
+          AND s.startTime < :before
+          AND sl.completed = 1 AND sl.isWarmup = 0 AND sl.isPr = 0
+        ORDER BY s.startTime DESC, sl.weightKg DESC, sl.reps DESC
+        LIMIT 1
+        """
+    )
+    suspend fun previousBestSet(
+        exerciseId: Long,
+        before: Long,
+        excludeSessionId: Long,
+    ): PreviousSetRow?
 
     /**
      * 某动作的历史：最近 [limit] 次「已完成」训练里的全部工作组。

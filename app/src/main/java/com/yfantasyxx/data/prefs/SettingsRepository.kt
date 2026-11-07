@@ -116,6 +116,52 @@ data class AppSettings(
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
+/**
+ * DataStore 的 key 表。
+ *
+ * 放在文件级而不是类内部，是因为 [applySafeModeDefaults] 也要用它——
+ * 安全模式必须在「主界面起不来」的情况下改设置，不能用 [SettingsRepository]
+ * 那条路（它会起 StateFlow、跑解密），但 key 名必须和这里保持一致，
+ * 否则改了设置界面的 key、安全模式这边就悄悄失效了。
+ */
+private object Keys {
+    val THEME_MODE = stringPreferencesKey("theme_mode")
+    val WEIGHT_UNIT = stringPreferencesKey("weight_unit")
+    val REST_SECONDS = longPreferencesKey("rest_seconds")
+    val WEBDAV_URL = stringPreferencesKey("webdav_url")
+    val WEBDAV_USER = stringPreferencesKey("webdav_user")
+    val WEBDAV_PASS_ENC = stringPreferencesKey("webdav_pass_enc")
+    val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
+    val BOTTOM_BAR_STYLE = stringPreferencesKey("bottom_bar_style")
+    val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
+    val TAP_HAPTICS = booleanPreferencesKey("tap_haptics")
+    val LAST_BACKUP = longPreferencesKey("last_backup")
+    val BAR_WEIGHT = floatPreferencesKey("bar_weight")
+    val PLATES = stringPreferencesKey("plates")
+    val REST_OVERLAY = booleanPreferencesKey("rest_overlay")
+    val REST_OVERLAY_PERSISTENT = booleanPreferencesKey("rest_overlay_persistent")
+    val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
+    val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
+}
+
+/**
+ * 安全模式专用的降级写入。
+ *
+ * 只做一件事：把最可能引起渲染崩溃的三项关掉——液态玻璃、毛玻璃、启动查更新。
+ * 不碰数据、不碰训练记录、不碰账号口令。
+ *
+ * 直接在 DataStore 上改，不经过 [SettingsRepository]：那边构造时要
+ * `stateIn(Eagerly)` 起一条常驻的流，安全模式只想写三个布尔量，没必要
+ * 把整套设置管线拉起来。
+ */
+suspend fun Context.applySafeModeDefaults() {
+    dataStore.edit { prefs ->
+        prefs[Keys.BOTTOM_BAR_STYLE] = BottomBarStyle.FLOATING.value
+        prefs[Keys.BLUR_BOTTOM_BAR] = false
+        prefs[Keys.AUTO_CHECK_UPDATE] = false
+    }
+}
+
 class SettingsRepository(
     private val context: Context,
     /**
@@ -126,26 +172,6 @@ class SettingsRepository(
      */
     scope: CoroutineScope,
 ) {
-
-    private object Keys {
-        val THEME_MODE = stringPreferencesKey("theme_mode")
-        val WEIGHT_UNIT = stringPreferencesKey("weight_unit")
-        val REST_SECONDS = longPreferencesKey("rest_seconds")
-        val WEBDAV_URL = stringPreferencesKey("webdav_url")
-        val WEBDAV_USER = stringPreferencesKey("webdav_user")
-        val WEBDAV_PASS_ENC = stringPreferencesKey("webdav_pass_enc")
-        val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
-        val BOTTOM_BAR_STYLE = stringPreferencesKey("bottom_bar_style")
-        val BLUR_BOTTOM_BAR = booleanPreferencesKey("blur_bottom_bar")
-        val TAP_HAPTICS = booleanPreferencesKey("tap_haptics")
-        val LAST_BACKUP = longPreferencesKey("last_backup")
-        val BAR_WEIGHT = floatPreferencesKey("bar_weight")
-        val PLATES = stringPreferencesKey("plates")
-        val REST_OVERLAY = booleanPreferencesKey("rest_overlay")
-        val REST_OVERLAY_PERSISTENT = booleanPreferencesKey("rest_overlay_persistent")
-        val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
-        val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
-    }
 
     /**
      * 是否已经读到 DataStore 的第一份真实设置。

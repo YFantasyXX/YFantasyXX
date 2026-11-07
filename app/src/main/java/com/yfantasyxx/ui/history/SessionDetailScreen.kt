@@ -38,7 +38,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yfantasyxx.AppContainer
+import com.yfantasyxx.data.Load
 import com.yfantasyxx.data.WorkoutRepository
+import com.yfantasyxx.data.db.PreviousSetRow
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SetLog
 import com.yfantasyxx.data.db.WorkoutSession
@@ -46,12 +48,19 @@ import com.yfantasyxx.ui.components.EmptyState
 import com.yfantasyxx.ui.components.InfoRow
 import com.yfantasyxx.ui.components.NumberStepper
 import com.yfantasyxx.ui.components.SectionHeader
+import com.yfantasyxx.ui.components.formatSessionDuration
 import com.yfantasyxx.ui.components.formatVolume
 import com.yfantasyxx.ui.rememberAppContainer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -82,6 +91,18 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     private val _bodyweight = MutableStateFlow<Float?>(null)
     val bodyweight: StateFlow<Float?> = _bodyweight.asStateFlow()
 
+    /** 每个动作的「上次」对照，key 是 exerciseId */
+    private val _previous = MutableStateFlow<Map<Long, PreviousSetRow>>(emptyMap())
+    val previous: StateFlow<Map<Long, PreviousSetRow>> = _previous.asStateFlow()
+
+    /**
+     * 已经查过「上次」的动作。
+     *
+     * 明细是持续观察的，改一次重量就会重新发射；不记这一笔的话每改一次
+     * 都要把全部动作的「上次」重查一遍。
+     */
+    private val compared = HashSet<Long>()
+
     private var observeJob: kotlinx.coroutines.Job? = null
     private var sessionId: Long? = null
 
@@ -92,14 +113,46 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     fun load(id: Long) {
         sessionId = id
         observeJob?.cancel()
+        compared.clear()
+        _previous.value = emptyMap()
         observeJob = viewModelScope.launch {
             repo.observeSessionDetails(id).collect { list ->
                 _details.value = list
                 _loaded.value = true
+                loadPrevious(list)
             }
         }
-        viewModelScope.launch { _session.value = repo.getSession(id) }
+        viewModelScope.launch {
+            _session.value = repo.getSession(id)
+            // 会话和明细谁先到都有可能，两边都试着补一次；
+            // 时间边界要用会话自己的开始时刻，所以先拿到会话才算得准
+            loadPrevious(_details.value)
+        }
         viewModelScope.launch { _bodyweight.value = repo.latestWeightKg() }
+    }
+
+    /**
+     * 补查「上次这个动作练了多少」。
+     *
+     * 只查没查过的动作，查完记进 [compared]。放在 IO 上执行：
+     * 有多少个动作就是多少次单行查询，不该占用主线程。
+     */
+    private fun loadPrevious(items: List<SessionExerciseWithSets>) {
+        val session = _session.value ?: return
+        val before = session.activeStartedAt ?: session.startTime
+        val missing = items.map { it.exercise.id }.distinct().filter { it !in compared }
+        if (missing.isEmpty()) return
+        compared += missing
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                missing.mapNotNull { exerciseId ->
+                    runCatching {
+                        repo.previousBestSet(exerciseId, before, session.id)
+                    }.getOrNull()?.let { exerciseId to it }
+                }.toMap()
+            }
+            if (found.isNotEmpty()) _previous.value = _previous.value + found
+        }
     }
 
     /** 改重量 / 次数：只动这一组，完成状态与所属会话都不变 */
@@ -200,6 +253,7 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     val session by vm.session.collectAsStateWithLifecycle()
     val loaded by vm.loaded.collectAsStateWithLifecycle()
     val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
+    val previous by vm.previous.collectAsStateWithLifecycle()
     var showDelete by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -213,11 +267,25 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
         item.sets.filter { it.completed && !it.isWarmup }
             .sumOf {
                 // 自重动作的 weightKg 是额外负重，容量要把体重算进去
-                (com.yfantasyxx.data.Load
-                    .effectiveKg(it.weightKg, item.exercise.equipment, bodyweight) * it.reps).toDouble()
+                (Load.effectiveKg(it.weightKg, item.exercise.equipment, bodyweight) * it.reps)
+                    .toDouble()
             }
     }.toFloat()
-    val totalSets = details.sumOf { item -> item.sets.count { it.completed } }
+    // 组数分两种口径：热身组不算进「完成组数」，否则 20 组的训练里
+    // 有 6 组热身时会显得练得比实际多
+    val warmupSets = details.sumOf { item -> item.sets.count { it.completed && it.isWarmup } }
+    val workingSets = details.sumOf { item -> item.sets.count { it.completed && !it.isWarmup } }
+    val prSets = details.sumOf { item -> item.sets.count { it.completed && it.isPr } }
+    // 「动作数」只数真的练过的：加进来又一组没做的动作不该算
+    val trainedExercises = details.count { item -> item.sets.any { it.completed } }
+
+    val startedAt = session?.let { it.activeStartedAt ?: it.startTime }
+    val endedAt = session?.endTime
+    val durationMs = if (startedAt != null && endedAt != null) {
+        (endedAt - startedAt).coerceAtLeast(0L)
+    } else {
+        0L
+    }
 
     // 分享卡片：画图 + PNG 压缩放到 IO 线程，点一下不会卡住界面
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -232,8 +300,9 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                 date = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.CHINA).format(Date(s.startTime)),
                 durationMinutes = (((s.endTime ?: System.currentTimeMillis()) -
                     (s.activeStartedAt ?: s.startTime)) / 60000).toInt(),
-                exerciseCount = details.count { item -> item.sets.any { it.completed } },
-                setCount = totalSets,
+                exerciseCount = trainedExercises,
+                // 与详情页口径一致：热身组不算进组数（整场只有热身时再退回总数）
+                setCount = if (workingSets > 0) workingSets else warmupSets,
                 volumeKg = totalVolume,
                 // 亮点按每个动作最强的一组取，最多三条
                 highlights = details
@@ -343,8 +412,38 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                 item {
                     Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            InfoRow("动作数", "${details.size} 个")
-                            InfoRow("完成组数", "$totalSets 组")
+                            // 以前这里只有动作数/组数/容量：几点练的、练了多久
+                            // 都要退回列表去看，或者自己拿开始时刻减
+                            if (startedAt != null) {
+                                InfoRow(
+                                    label = "时间",
+                                    value = buildString {
+                                        append(SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(startedAt)))
+                                        append(" – ")
+                                        append(
+                                            endedAt?.let {
+                                                SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(it))
+                                            } ?: "进行中"
+                                        )
+                                    },
+                                )
+                                // 没结束的会话没有时长可言，别显示成「不到 1 分钟」
+                                if (endedAt != null) {
+                                    InfoRow("训练时长", formatSessionDuration(durationMs))
+                                }
+                            }
+                            InfoRow("动作数", "$trainedExercises 个")
+                            InfoRow(
+                                label = "完成组数",
+                                value = if (warmupSets > 0) {
+                                    "$workingSets 组（热身 $warmupSets 组）"
+                                } else {
+                                    "$workingSets 组"
+                                },
+                            )
+                            if (prSets > 0) {
+                                InfoRow("PR", "$prSets 组")
+                            }
                             InfoRow("总容量", "${formatVolume(totalVolume)} kg")
                             session?.note?.takeIf { it.isNotBlank() }?.let {
                                 InfoRow("备注", it)
@@ -377,6 +476,16 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                             )
                                         }
+                                    // 与上一次练同一个动作的对照：翻历史时最想知道的就是
+                                    // 「这次比上次强了还是弱了」，不该让人自己逐个去翻
+                                    previous[item.exercise.id]?.let { prev ->
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = previousLabel(prev, item.exercise.equipment),
+                                            style = MiuixTheme.textStyles.footnote1,
+                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        )
+                                    }
                                 }
                                 if (editing) {
                                     IconButton(onClick = { removeTarget = item }) {
@@ -524,7 +633,12 @@ private fun ReadOnlySetRow(set: SetLog) {
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text = "第 ${set.setNumber} 组" + if (set.isWarmup) "（热身）" else "",
+            // PR 组单独标出来：同一行里数字看起来差不多，但它代表的意义不一样
+            text = buildString {
+                append("第 ${set.setNumber} 组")
+                if (set.isWarmup) append("（热身）")
+                if (set.isPr) append("（PR）")
+            },
             style = MiuixTheme.textStyles.paragraph,
             color = if (set.completed) {
                 MiuixTheme.colorScheme.onSurface
@@ -546,7 +660,36 @@ private fun ReadOnlySetRow(set: SetLog) {
 }
 
 /**
- * 可编辑的一组：重量、次数各一个步进器，右侧删除。
+ * 「上次 60 kg × 8 次 · 3 天前」。
+ *
+ * 自重动作的 weightKg 存的是额外负重，直接写「0 kg」会让人以为没练，
+ * 所以换成「自重」或「自重 +20 kg」。
+ */
+private fun previousLabel(row: PreviousSetRow, equipment: String): String {
+    val set = row.set
+    val weight = if (Load.isBodyweight(equipment)) {
+        if (set.weightKg > 0f) "自重 +${set.weightKg.toInt()} kg" else "自重"
+    } else {
+        "${set.weightKg.toInt()} kg"
+    }
+    return "上次 $weight × ${set.reps} 次 · ${relativeDay(row.sessionStart)}"
+}
+
+/** 一周以内说「几天前」，更久直接给日期——「43 天前」读起来没有意义 */
+private fun relativeDay(millis: Long): String {
+    val zone = ZoneId.systemDefault()
+    val date = Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
+    val days = ChronoUnit.DAYS.between(date, LocalDate.now(zone))
+    return when {
+        days <= 0L -> "今天"
+        days == 1L -> "昨天"
+        days < 7L -> "$days 天前"
+        else -> "${date.monthValue}月${date.dayOfMonth}日"
+    }
+}
+
+/**
+ * 可编辑的一组：重量、次数各自一个步进器，右侧删除。
  *
  * 改动即时落库（和训练页同一套做法）：没有「保存」按钮，退出编辑态就是保存，
  * 用户不需要理解草稿与已确认的区别。本地值用 remember(set.id) 持有，

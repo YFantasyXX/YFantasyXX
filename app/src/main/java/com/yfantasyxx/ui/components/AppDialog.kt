@@ -56,7 +56,13 @@ fun AppDialog(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     title?.let {
-                        Text(text = it, style = MiuixTheme.textStyles.subtitle)
+                        // 显式给颜色：Compose 原生 Dialog 的默认 content color 是黑色，
+                        // 暗色主题下会变成「黑字落在深色卡片上」，标题整条看不见
+                        Text(
+                            text = it,
+                            style = MiuixTheme.textStyles.subtitle,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
                         Spacer(Modifier.height(6.dp))
                     }
                     summary?.let {

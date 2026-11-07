@@ -1,5 +1,10 @@
 package com.yfantasyxx.ui.workout
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +55,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
+import com.yfantasyxx.ui.theme.Motion
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.zIndex
@@ -614,14 +620,39 @@ private fun RestBarHost(
     onSkip: () -> Unit,
 ) {
     val state by vm.restTimer.collectAsStateWithLifecycle()
-    if (!state.running) return
-    RestBar(
-        state = state,
-        modifier = modifier,
-        onAdjust = onAdjust,
-        onExtend = onExtend,
-        onSkip = onSkip,
-    )
+
+    // 退场动画期间 running 已经是 false、数字也归零了，直接画 state 会闪一下
+    // 「0:00 · 休息中」。用一个普通对象记住最后一帧运行中的数据——它不是
+    // Compose 的 State，组合期写它不会额外触发重组，也就不会让这个每秒
+    // 变一次的地方再多一次无效帧。
+    val lastRunning = remember { LastRunningHolder() }
+    if (state.running) lastRunning.value = state
+    val shown = lastRunning.value ?: state
+
+    AnimatedVisibility(
+        visible = state.running,
+        // 出现：从底部托起半张卡的高度 + 淡入。它是浮在列表上的东西，被「推上来」
+        // 比凭空出现更容易让人理解「这是新出现的一条，不是列表里的一行」。
+        enter = slideInVertically(Motion.decelerate(Motion.DURATION_STANDARD)) { it / 2 } +
+            fadeIn(Motion.standard(Motion.DURATION_FAST)),
+        // 消失：更快、更干脆（加速曲线）。这时用户多半已经开始了下一组，
+        // 慢吞吞地留一块卡片在那儿只会挡视线。
+        exit = slideOutVertically(Motion.accelerate(Motion.DURATION_FAST)) { it / 3 } +
+            fadeOut(Motion.accelerate(Motion.DURATION_INSTANT)),
+    ) {
+        RestBar(
+            state = shown,
+            modifier = modifier,
+            onAdjust = onAdjust,
+            onExtend = onExtend,
+            onSkip = onSkip,
+        )
+    }
+}
+
+/** 记住休息条最后一次「正在运行」的样子，供退场动画期间显示 */
+private class LastRunningHolder {
+    var value: RestTimerState? = null
 }
 
 /**

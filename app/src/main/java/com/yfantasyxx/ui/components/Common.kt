@@ -1,5 +1,6 @@
 package com.yfantasyxx.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +55,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.ui.unit.Dp
+import com.yfantasyxx.ui.theme.Motion
+import com.yfantasyxx.ui.theme.Radius
+import com.yfantasyxx.ui.theme.Spacing
 import top.yukonga.miuix.kmp.basic.Surface
 import java.util.Locale
 
@@ -67,7 +72,10 @@ fun SectionHeader(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            // 左边距必须是 16（= Spacing.Gutter），和卡片对齐。
+            // 原来这里写 20，分组标题比下面的卡片多缩进 4dp，两行文字左边缘
+            // 差一点点，看起来就像没对齐——这种「差 4dp」比差 20dp 更刺眼。
+            .padding(horizontal = Spacing.Gutter, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -190,7 +198,7 @@ fun NumberStepper(
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(Radius.Control))
             .background(MiuixTheme.colorScheme.surfaceContainer)
             .padding(horizontal = 3.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -304,6 +312,9 @@ private fun StepButton(
             .size(30.dp)
             .clip(CircleShape)
             .background(MiuixTheme.colorScheme.surface)
+            // 按下时缩得更明显一点：加减号是训练时按得最多的按钮，
+            // 30dp 的圆上水波纹几乎看不清，得靠尺寸变化
+            .pressScale(pressedScale = 0.82f)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -325,17 +336,34 @@ fun FilterChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // 选中/取消原来是瞬间换色，一排标签连着点几个就像在闪。
+    // 底色与文字各走一段过渡；按下再缩到 0.96 弹回，给一个「确实按到了」
+    // 的实感——胶囊很小，只靠颜色变化反馈不够。
+    val background by animateColorAsState(
+        targetValue = if (selected) {
+            MiuixTheme.colorScheme.primary
+        } else {
+            MiuixTheme.colorScheme.surfaceContainer
+        },
+        animationSpec = Motion.snappy(),
+        label = "chipBackground",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) {
+            MiuixTheme.colorScheme.onPrimary
+        } else {
+            MiuixTheme.colorScheme.onSurfaceVariantSummary
+        },
+        animationSpec = Motion.snappy(),
+        label = "chipContent",
+    )
+
     // 用 Box 显式裁剪成胶囊，避免依赖组件默认 shape
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .background(
-                if (selected) {
-                    MiuixTheme.colorScheme.primary
-                } else {
-                    MiuixTheme.colorScheme.surfaceContainer
-                }
-            )
+            .pressScale(pressedScale = 0.94f)
+            .clip(RoundedCornerShape(percent = Radius.Pill))
+            .background(background)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
@@ -348,11 +376,7 @@ fun FilterChip(
             } else {
                 androidx.compose.ui.text.font.FontWeight.Normal
             },
-            color = if (selected) {
-                MiuixTheme.colorScheme.onPrimary
-            } else {
-                MiuixTheme.colorScheme.onSurfaceVariantSummary
-            },
+            color = contentColor,
             maxLines = 1,
         )
     }
@@ -366,14 +390,14 @@ fun SettingsCard(
     modifier: Modifier = Modifier,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
-    Card(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Card(modifier = modifier.fillMaxWidth().padding(horizontal = Spacing.Gutter)) {
         Column(modifier = Modifier.padding(vertical = 2.dp), content = content)
     }
 }
 
 /** 行内分隔线，默认从图标右侧开始，视觉上像一条被截断的细线 */
 @Composable
-fun SettingsDivider(startIndent: androidx.compose.ui.unit.Dp = 58.dp) {
+fun SettingsDivider(startIndent: Dp = 58.dp) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -392,7 +416,7 @@ fun SettingsIconBadge(
     Box(
         modifier = Modifier
             .size(30.dp)
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(Radius.Badge))
             .background(tint.copy(alpha = 0.13f)),
         contentAlignment = Alignment.Center,
     ) {
@@ -426,14 +450,24 @@ fun SettingsRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            // 按下时整行轻微缩小。设置页是全应用点击最频繁的地方，
+            // 原来只有水波纹，行高又大（水波纹几乎看不见），反馈非常弱。
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .pressScale(pressedScale = 0.985f)
+                        .clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
             .heightIn(min = 52.dp)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = Spacing.Gutter, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
             SettingsIconBadge(icon = icon, tint = iconTint)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Spacing.IconGap))
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(text = title, style = MiuixTheme.textStyles.main)
@@ -476,9 +510,9 @@ fun SettingsRow(
 fun SettingsHint(
     text: String,
     modifier: Modifier = Modifier,
-    top: androidx.compose.ui.unit.Dp = 0.dp,
-    bottom: androidx.compose.ui.unit.Dp = 12.dp,
-    startIndent: androidx.compose.ui.unit.Dp = 16.dp,
+    top: Dp = 0.dp,
+    bottom: Dp = 12.dp,
+    startIndent: Dp = Spacing.Gutter,
 ) {
     Text(
         text = text,
@@ -558,18 +592,29 @@ fun StatCard(
             text = title,
             style = MiuixTheme.textStyles.footnote1,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            // 窄屏（320dp）或大字体下不换行、不溢出：四张卡按权重平分宽度，
+            // 文字超出就省略，整行高度不会跳
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(2.dp))
         Text(
             text = value,
-            style = MiuixTheme.textStyles.title3,
+            // 等宽数字（tnum）：不然 9→10 这种位数变化会让整张卡重新排版，
+            // 一行四张卡时其余三张跟着左右挪，数字跳一下很显眼
+            style = MiuixTheme.textStyles.title3.copy(fontFeatureSettings = "tnum"),
             color = MiuixTheme.colorScheme.primary,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
         )
         if (subtitle.isNotEmpty()) {
             Text(
                 text = subtitle,
                 style = MiuixTheme.textStyles.footnote1,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = 1,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -583,6 +628,24 @@ fun formatVolume(kg: Float): String = when {
     kg >= 10000 -> String.format(Locale.CHINA, "%.1fw", kg / 10000)
     kg >= 1000 -> String.format(Locale.CHINA, "%.1fk", kg / 1000)
     else -> kg.toInt().toString()
+}
+
+/**
+ * 训练时长。
+ *
+ * 超过一小时写成「1 小时 12 分」而不是「72 分钟」——后者在列表里读起来
+ * 还要自己换算一次。不足一分钟单独给一句话，避免出现「0 分钟」这种像没练过的结果。
+ */
+fun formatSessionDuration(millis: Long): String {
+    val minutes = (millis / 60_000L).coerceAtLeast(0L)
+    if (minutes < 1L) return "不到 1 分钟"
+    val hours = minutes / 60L
+    val rest = minutes % 60L
+    return when {
+        hours == 0L -> "$rest 分钟"
+        rest == 0L -> "$hours 小时"
+        else -> "$hours 小时 $rest 分"
+    }
 }
 
 /**

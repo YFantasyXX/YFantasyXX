@@ -35,6 +35,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 安全模式：连续多次启动失败后进入，纯 View 实现，不进 Compose 渲染栈 -->
+        <activity
+            android:name=".SafeModeActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.YFantasyXX" />
+
         <receiver
             android:name=".service.RestAlarmReceiver"
             android:exported="false" />

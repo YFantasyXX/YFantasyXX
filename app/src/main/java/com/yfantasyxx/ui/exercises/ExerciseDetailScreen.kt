@@ -227,9 +227,9 @@ fun ExerciseDetailScreen(exerciseId: Long, onBack: () -> Unit) {
                                                 "${delta.toInt()} kg",
                                             style = MiuixTheme.textStyles.subtitle,
                                             color = if (delta >= 0) {
-                                                androidx.compose.ui.graphics.Color(0xFFFF3B30)
+                                                com.yfantasyxx.ui.theme.RiseRed
                                             } else {
-                                                androidx.compose.ui.graphics.Color(0xFF34C759)
+                                                com.yfantasyxx.ui.theme.LocalSuccessGreen.current
                                             },
                                         )
                                         Text(

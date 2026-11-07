@@ -17,14 +17,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -66,7 +70,7 @@ import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.InfoRow
 import com.yfantasyxx.ui.components.NumberStepper
-import com.yfantasyxx.ui.components.OptionPickerSheet
+import com.yfantasyxx.ui.components.OptionPickerDialog
 import com.yfantasyxx.ui.components.PickerOption
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.components.SettingsCard
@@ -642,11 +646,13 @@ fun SettingsScreen(
 
     // ---- 选择面板 ----
     when (picker) {
-        SettingPicker.THEME -> OptionPickerSheet(
+        SettingPicker.THEME -> OptionPickerDialog(
             title = "深色模式",
             options = listOf(
-                PickerOption(ThemeMode.SYSTEM, "跟随系统", "跟随手机的深色模式设置", Icons.Filled.DarkMode),
-                PickerOption(ThemeMode.LIGHT, "浅色", "始终使用浅色外观", Icons.Filled.DarkMode),
+                // 三个选项以前共用一个「月亮」图标，选哪一项都得靠文字认。
+                // 改成亮度自动 / 太阳 / 月亮，一眼能对上是哪一档
+                PickerOption(ThemeMode.SYSTEM, "跟随系统", "跟随手机的深色模式设置", Icons.Filled.BrightnessAuto),
+                PickerOption(ThemeMode.LIGHT, "浅色", "始终使用浅色外观", Icons.Filled.LightMode),
                 PickerOption(ThemeMode.DARK, "深色", "始终使用深色外观", Icons.Filled.DarkMode),
             ),
             selected = settings.themeMode,
@@ -654,7 +660,7 @@ fun SettingsScreen(
             onDismiss = { picker = null },
         )
 
-        SettingPicker.UNIT -> OptionPickerSheet(
+        SettingPicker.UNIT -> OptionPickerDialog(
             title = "重量单位",
             options = listOf(
                 PickerOption(WeightUnit.KG, "千克 (kg)", "配片按 25/20/15 这类公斤片计算", Icons.Filled.Scale),
@@ -665,7 +671,7 @@ fun SettingsScreen(
             onDismiss = { picker = null },
         )
 
-        SettingPicker.BOTTOM_BAR -> OptionPickerSheet(
+        SettingPicker.BOTTOM_BAR -> OptionPickerDialog(
             title = "底栏样式",
             options = listOf(
                 PickerOption(
@@ -686,20 +692,20 @@ fun SettingsScreen(
             onDismiss = { picker = null },
         )
 
-        SettingPicker.ALERT_SOUND -> OptionPickerSheet(
+        SettingPicker.ALERT_SOUND -> OptionPickerDialog(
             title = "结束提示音",
             options = listOf(
                 PickerOption(
                     AlertSound.ALARM,
                     "闹钟音量",
                     "走闹钟音量，手机静音也能听见（推荐）",
-                    Icons.Filled.NotificationsActive,
+                    Icons.Filled.Alarm,
                 ),
                 PickerOption(
                     AlertSound.NOTIFICATION,
                     "通知音量",
                     "跟普通通知一样，安静环境够用",
-                    Icons.Filled.NotificationsActive,
+                    Icons.Filled.Notifications,
                 ),
                 PickerOption(
                     AlertSound.SILENT,

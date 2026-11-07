@@ -20,11 +20,21 @@ class YFantasyXXApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        container = AppContainer(this)
+        // 崩溃日志要最早装上：安全模式判定本身也可能出意外，得留痕
         CrashLogger.install(this)
+        // 必须在任何界面、数据库、网络初始化之前：判断上一次是不是没活下来。
+        // 这一步只读一个 SharedPreferences 布尔量，不会抛异常，也不会碰渲染。
+        val safeMode = com.yfantasyxx.util.SafeModeGuard.recordLaunch(this)
+
+        container = AppContainer(this)
         com.yfantasyxx.util.AppVisibility.install(this)
         // 读回测试工具上次拨的时间偏移（正式版没有入口，永远是 0）
         com.yfantasyxx.util.Clock.install(this)
+
+        // 安全模式只保留日志能力：不建库、不灌内置动作库、不查更新。
+        // 连 Room 打不开这类启动崩溃也能绕过去——用户至少能进到诊断界面。
+        if (safeMode) return
+
         // 首次启动写入内置动作库；清理异常退出留下的重复草稿
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             container.workoutRepository.seedIfEmpty()

@@ -467,6 +467,14 @@ fun LiquidGlassBottomBar(
             ) {
                 tabs.forEachIndexed { index, tab ->
                     val selected = index == selectedIndex
+                    // 药丸是弹簧滑过去的（几百毫秒），图标与文字如果瞬间换色，
+                    // 会先于药丸亮起来，看着像「点错了自己跳过去」。让颜色跟药丸
+                    // 一起渐变，到达时才完全变亮。
+                    val tabTint by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (selected) accent else idleTint,
+                        animationSpec = com.yfantasyxx.ui.theme.Motion.smooth(),
+                        label = "liquidTabTint",
+                    )
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -493,7 +501,7 @@ fun LiquidGlassBottomBar(
                             Icon(
                                 imageVector = tab.icon,
                                 contentDescription = tab.label,
-                                tint = if (selected) accent else idleTint,
+                                tint = tabTint,
                                 modifier = Modifier.size(21.dp),
                             )
                             TabBadgeDot(
@@ -507,7 +515,7 @@ fun LiquidGlassBottomBar(
                         Text(
                             text = tab.label,
                             fontSize = 10.sp,
-                            color = if (selected) accent else idleTint,
+                            color = tabTint,
                             maxLines = 1,
                         )
                     }

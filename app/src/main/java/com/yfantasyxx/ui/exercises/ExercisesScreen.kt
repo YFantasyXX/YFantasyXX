@@ -39,6 +39,7 @@ import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.rememberAppContainer
 import com.yfantasyxx.ui.components.ActionText
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.yfantasyxx.ui.components.pressScale
 import com.yfantasyxx.ui.components.FilterChip
 import com.yfantasyxx.ui.components.AddExerciseDialog
 
@@ -157,7 +158,11 @@ fun ExercisesScreen(onOpenExercise: (Long) -> Unit) {
                     items(exercises, key = { it.id }) { exercise ->
                         Card(
                             modifier = Modifier
+                                // 搜索 / 切分类时留下的卡片滑到新位置，筛掉的淡出
+                                .animateItem()
                                 .fillMaxWidth()
+                                // 按下时轻微缩小，给一个「确实按到了」的实感
+                                .pressScale()
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             onClick = { onOpenExercise(exercise.id) },
                         ) {

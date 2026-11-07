@@ -73,7 +73,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.foundation.shape.CircleShape
 
-private val WarmupOrange = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
+private val WarmupOrange = com.yfantasyxx.ui.theme.AccentAmber
 
 @Composable
 fun TemplatesScreen(

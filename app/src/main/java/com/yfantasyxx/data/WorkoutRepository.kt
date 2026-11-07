@@ -8,6 +8,7 @@ import com.yfantasyxx.data.db.Exercise
 import com.yfantasyxx.data.db.ExercisePr
 import com.yfantasyxx.data.db.PlanDay
 import com.yfantasyxx.data.db.PlanEntity
+import com.yfantasyxx.data.db.PreviousSetRow
 import com.yfantasyxx.data.db.SessionExercise
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SessionVolumeRow
@@ -1138,6 +1139,19 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      */
     suspend fun lastPerformance(exerciseId: Long): List<SetLog> =
         sessionDao.lastSessionSets(exerciseId)
+
+    /**
+     * 历史详情里「上次这个动作」的对照值。
+     *
+     * 训练页的 [lastPerformance] 取的是「此刻之前最近一次」，看历史时这个口径是错的：
+     * 打开最近一次训练，它会把这场自己当成「上次」。所以这里显式带上
+     * 本次会话的 id 与开始时刻，只往前找。
+     */
+    suspend fun previousBestSet(
+        exerciseId: Long,
+        before: Long,
+        excludeSessionId: Long,
+    ): PreviousSetRow? = sessionDao.previousBestSet(exerciseId, before, excludeSessionId)
 
     /**
      * 预填用的「上次参考组」。

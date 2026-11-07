@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Scale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import top.yukonga.miuix.kmp.basic.Button
@@ -46,9 +47,11 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import com.yfantasyxx.data.db.SessionSummary
 import com.yfantasyxx.ui.components.InfoRow
+import com.yfantasyxx.ui.components.pressScale
 import com.yfantasyxx.ui.components.NumberStepper
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.components.StatCard
+import com.yfantasyxx.ui.components.formatSessionDuration
 import com.yfantasyxx.ui.components.formatVolume
 import com.yfantasyxx.ui.plans.TrainingPlanDialog
 import com.yfantasyxx.ui.rememberAppContainer
@@ -99,7 +102,9 @@ fun HomeScreen(
     ) { padding ->
         LazyColumn(
             modifier = Modifier
-                .fillMaxWidth()
+                // 必须 fillMaxSize：只写 fillMaxWidth 时高度等于内容高度，
+                // 键盘 inset 缩不到，而且短列表会被压到底部留白里
+                .fillMaxSize()
                 .padding(padding),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 bottom = 24.dp + com.yfantasyxx.ui.LocalBottomBarSpace.current
@@ -216,12 +221,23 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                         ) {
-                            StatCard("训练次数", state.weekSessionCount.toString(), "次")
+                            // 四张卡按权重平分：窄屏和大字体下靠省略号收掉，
+                            // 而不是把最后一个数字挤出卡片外面
+                            StatCard(
+                                "训练次数", state.weekSessionCount.toString(), "次",
+                                modifier = Modifier.weight(1f),
+                            )
                             // 容量一律按 kg 显示：库里的 totalVolume 就是 kg，
                             // 而 formatVolume 只做万/千分档、不做单位换算。
                             // 原来这里跟着设置写「lb」，数字还是 kg，等于报了个假单位
-                            StatCard("训练容量", formatVolume(state.weekVolume), "kg")
-                            StatCard("连续周数", state.streakWeeks.toString(), "周")
+                            StatCard(
+                                "训练容量", formatVolume(state.weekVolume), "kg",
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatCard(
+                                "连续周数", state.streakWeeks.toString(), "周",
+                                modifier = Modifier.weight(1f),
+                            )
                             StatCard(
                                 "当前体重",
                                 latestWeight?.let {
@@ -233,6 +249,7 @@ fun HomeScreen(
                                     )
                                 } ?: "--",
                                 state.weightUnitLabel,
+                                modifier = Modifier.weight(1f),
                             )
                         }
 
@@ -304,7 +321,9 @@ fun HomeScreen(
             // ---- 开始训练 ----
             item {
                 SectionHeader("开始训练", trailing = {
-                    Button(onClick = onOpenTemplates) { Text("管理模板", style = MiuixTheme.textStyles.button) }
+                    // 用文字按钮而不是实心 Button：分组标题旁边放一个填充主色的
+                    // 按钮，会和这一屏真正的主操作（按计划开练）抢注意力
+                    ActionText(text = "管理模板", onClick = onOpenTemplates)
                 })
                 Card(
                     modifier = Modifier
@@ -323,7 +342,6 @@ fun HomeScreen(
                             contentDescription = null,
                             tint = MiuixTheme.colorScheme.primary,
                         )
-                        Spacer(Modifier.height(0.dp))
                         Column(modifier = Modifier.padding(start = 12.dp)) {
                             Text("空训练", style = MiuixTheme.textStyles.main)
                             Text(
@@ -392,7 +410,12 @@ fun HomeScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("⚖️", fontSize = 20.sp)
+                        Icon(
+                            imageVector = Icons.Filled.Scale,
+                            contentDescription = null,
+                            tint = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
                         Column(modifier = Modifier.padding(start = 12.dp)) {
                             Text("记录今日体重", style = MiuixTheme.textStyles.main)
                             Text(
@@ -415,7 +438,12 @@ fun HomeScreen(
                 }
             } else {
                 items(state.recentSessions, key = { it.id }) { session ->
-                    SessionRow(session = session, unitLabel = "kg", onClick = { onOpenSession(session.id) })
+                    SessionRow(
+                        session = session,
+                        unitLabel = "kg",
+                        modifier = Modifier.animateItem(),
+                        onClick = { onOpenSession(session.id) },
+                    )
                 }
             }
         }
@@ -466,7 +494,7 @@ fun HomeScreen(
                     Button(onClick = { showWeightDialog = false }) {
                         Text("取消", style = MiuixTheme.textStyles.button)
                     }
-                    Spacer(Modifier.height(0.dp))
+                    Spacer(Modifier.width(12.dp))
                     Button(onClick = {
                         // 空着 / 0 / 非法输入都不写库，避免把当天记录覆盖成 0
                         val entered = weightValue ?: return@Button
@@ -712,10 +740,13 @@ private fun SessionRow(
     session: SessionSummary,
     unitLabel: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            // 按下时轻微缩小，给一个「确实按到了」的实感
+            .pressScale()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         onClick = onClick,
     ) {
@@ -737,6 +768,7 @@ private fun SessionRow(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "${session.exerciseCount} 个动作 · ${session.setCount} 组 · " +
+                    "${formatSessionDuration(session.durationMs)} · " +
                     "容量 ${formatVolume(session.totalVolume)} $unitLabel",
                 style = MiuixTheme.textStyles.footnote1,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,

@@ -47,6 +47,7 @@ import com.yfantasyxx.data.ProgressionMode
 import com.yfantasyxx.data.RepRange
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SetLog
+import com.yfantasyxx.ui.components.pressScale
 import com.yfantasyxx.ui.components.ActionText
 import com.yfantasyxx.ui.components.AppDialog
 import com.yfantasyxx.ui.components.NumberStepper
@@ -170,7 +171,7 @@ internal fun ExerciseBlock(
                                 color = androidx.compose.ui.graphics.Color.White,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
-                                    .background(androidx.compose.ui.graphics.Color(0xFFFF9F0A))
+                                    .background(com.yfantasyxx.ui.theme.AccentAmber)
                                     .padding(horizontal = 7.dp, vertical = 2.dp),
                             )
                         }
@@ -217,6 +218,9 @@ internal fun ExerciseBlock(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50))
                                     .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f))
+                                    // 按下时轻微缩小：这是训练中最高频的可点区域，
+                                    // 没有反馈的话每次都要低头确认有没有点到
+                                    .pressScale(pressedScale = 0.9f)
                                     .clickable(onClick = onOpenHistory)
                                     .padding(horizontal = 8.dp, vertical = 2.dp),
                             )
@@ -252,6 +256,8 @@ internal fun ExerciseBlock(
                         .size(32.dp)
                         .clip(CircleShape)
                         .background(MiuixTheme.colorScheme.surfaceContainer)
+                        // 按下时轻微缩小：折叠按钮很小，只靠水波纹几乎察觉不到
+                        .pressScale(pressedScale = 0.85f)
                         .clickable(onClick = onToggleCollapse),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -529,14 +535,14 @@ private fun SetRow(
     }
 
     val completed = set.completed
-    val prGold = androidx.compose.ui.graphics.Color(0xFFFF9F0A)
+    val prGold = com.yfantasyxx.ui.theme.AccentAmber
     val background by androidx.compose.animation.animateColorAsState(
         targetValue = when {
             set.isPr -> prGold.copy(alpha = 0.18f)
             completed -> MiuixTheme.colorScheme.primaryContainer
             else -> MiuixTheme.colorScheme.surfaceContainer
         },
-        animationSpec = androidx.compose.animation.core.tween(220),
+        animationSpec = com.yfantasyxx.ui.theme.Motion.standard(),
         label = "setRowBackground",
     )
     val badgeColor by androidx.compose.animation.animateColorAsState(
@@ -545,7 +551,7 @@ private fun SetRow(
             completed -> MiuixTheme.colorScheme.primary
             else -> MiuixTheme.colorScheme.surface
         },
-        animationSpec = androidx.compose.animation.core.tween(220),
+        animationSpec = com.yfantasyxx.ui.theme.Motion.standard(),
         label = "setBadge",
     )
 

@@ -1,6 +1,7 @@
 package com.yfantasyxx
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -17,6 +18,8 @@ import androidx.lifecycle.lifecycleScope
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.ui.YFantasyXXApp
 import com.yfantasyxx.ui.theme.YFantasyXXTheme
+import com.yfantasyxx.util.SafeModeGuard
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -39,10 +42,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 安全模式：整个 Compose 树都不装配，直接跳到纯 View 的诊断界面。
+        // 必须在 setContent 之前 return —— 一旦装了 Compose，就又会走到
+        // 那条可能崩掉的渲染路径上，安全模式就失去意义了。
+        if (SafeModeGuard.isActive(this)) {
+            startActivity(Intent(this, SafeModeActivity::class.java))
+            finish()
+            return
+        }
+
         requestHighestRefreshRate()
         requestNotificationPermissionIfNeeded()
 
         val app = application as YFantasyXXApplication
+
+        // 「这次启动算成功」的判定：活过 4 秒才算数。
+        //
+        // 不能用 onResume 当成功：渲染层崩溃发生在首帧提交之后的 RenderThread 上，
+        // 那时主线程早就跑完 onResume 了，标记会误判成健康，安全模式永远触发不了。
+        lifecycleScope.launch {
+            delay(SafeModeGuard.HEALTHY_AFTER_MS)
+            SafeModeGuard.markHealthy(applicationContext)
+        }
+
         // 触摸分发路径上每次点击都要读这个值，只关心一个布尔量。
         // 不 distinct 的话，设置里任何一次写入（备份时间、组间休息秒数…）
         // 都会重新跑一遍 collect，白白唤醒主线程。

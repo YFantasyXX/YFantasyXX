@@ -348,13 +348,22 @@ data class SessionSummary(
     val id: Long,
     val name: String,
     val templateId: Long?,
+    /** 真正开始计时的时刻（COALESCE(activeStartedAt, startTime)） */
     val startTime: Long,
     val endTime: Long?,
     val exerciseCount: Int,
     val setCount: Int,
     /** 总容量 kg*reps */
     val totalVolume: Float,
-)
+    /** 训练备注：列表里显示一行，搜索也会匹配它 */
+    val note: String = "",
+    /** 这次练出了几组 PR（冲极限组），列表上给个标记 */
+    val prCount: Int = 0,
+) {
+    /** 训练时长（毫秒）。没点过「开始」的旧记录按创建时间算，至少不会显示成负数 */
+    val durationMs: Long
+        get() = ((endTime ?: startTime) - startTime).coerceAtLeast(0L)
+}
 
 /** 训练中草稿用的摘要 */
 data class ActiveSessionSummary(
@@ -364,6 +373,16 @@ data class ActiveSessionSummary(
     val exerciseCount: Int,
     val completedSetCount: Int,
     val plannedSetCount: Int,
+)
+
+/**
+ * 历史详情里「上次这个动作练了多少」：
+ * 本次之前、最近一次训练里最强的一组，外加那次训练的开始时间。
+ */
+data class PreviousSetRow(
+    @Embedded val set: SetLog,
+    /** 上一次训练的开始时刻，用来算「几天前」 */
+    val sessionStart: Long,
 )
 
 /** 统计：某分类的容量 */
