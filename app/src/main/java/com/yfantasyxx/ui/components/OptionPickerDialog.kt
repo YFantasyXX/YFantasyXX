@@ -154,7 +154,11 @@ fun <T> OptionPickerDialog(
                         spotColor = Color.Black.copy(alpha = 0.30f),
                     )
                     .clip(shape)
-                    .background(MiuixTheme.colorScheme.surface)
+                    // 和 AppDialog 的 Miuix Card 用同一层底色：surface 是页面底色，
+                    // 深色下是纯黑，弹窗会比身后的卡片还暗一档，看起来像挖了个洞；
+                    // 浅色下又比卡片灰一档。统一成 surfaceContainer 后两套主题下
+                    // 都和普通弹窗一致。
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
                     // 暗色主题下卡片和遮罩后的页面颜色接近，补一道极淡的描边把边界勾出来
                     .border(
                         width = 0.6.dp,

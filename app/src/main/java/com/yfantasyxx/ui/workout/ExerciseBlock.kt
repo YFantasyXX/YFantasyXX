@@ -92,6 +92,11 @@ internal fun ExerciseBlock(
     /** 模板里的进阶策略；关闭时不显示建议 */
     progressionMode: ProgressionMode = ProgressionMode.OFF,
     onApplyProgression: (Float, Int) -> Unit = { _, _ -> },
+    /** 主组 id → 递减段（没有段的组查不到，按空处理） */
+    segments: Map<Long, List<com.yfantasyxx.data.db.SetSegment>> = emptyMap(),
+    onAddSegment: (SetLog) -> Unit = {},
+    onUpdateSegment: (com.yfantasyxx.data.db.SetSegment, Float, Int) -> Unit = { _, _, _ -> },
+    onDeleteSegment: (com.yfantasyxx.data.db.SetSegment) -> Unit = {},
 ) {
     val completed = item.sets.count { it.completed }
     // 自重动作的重量栏是「额外负重」：0 就是纯徒手，显示成「自重×10」而不是「0×10」
@@ -363,9 +368,9 @@ internal fun ExerciseBlock(
                     style = MiuixTheme.textStyles.footnote1,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.width(26.dp),
+                    modifier = Modifier.width(46.dp),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 Text(
                     // 自重动作填的是额外负重，标签要说清楚，否则会被当成总重量
                     text = if (isBodyweight) "负重($unitLabel)" else "重量($unitLabel)",
@@ -405,13 +410,26 @@ internal fun ExerciseBlock(
                 )
             }
             item.sets.sortedBy { it.setNumber }.forEach { set ->
+                val drops = segments[set.id].orEmpty().sortedBy { it.seq }
                 SetRow(
                     set = set,
+                    segmentCount = drops.size,
                     onUpdateSet = onUpdateSet,
                     onToggleSet = onToggleSet,
                     onDeleteSet = onDeleteSet,
                     onTogglePr = onTogglePr,
+                    onAddSegment = { onAddSegment(set) },
                 )
+                // 递减段紧贴主行下面：矮一档、缩进、没有勾选框，
+                // 视觉上就是「这一组里的第二、第三段」，而不是新的一组
+                drops.forEach { segment ->
+                    DropSetRow(
+                        setNumber = set.setNumber,
+                        segment = segment,
+                        onUpdate = onUpdateSegment,
+                        onDelete = onDeleteSegment,
+                    )
+                }
             }
             Spacer(Modifier.height(4.dp))
             Row(
@@ -500,13 +518,17 @@ private fun MenuItem(
 private fun fmtWeight(v: Float): String =
     if (v == v.toInt().toFloat()) v.toInt().toString() else String.format("%.1f", v)
 
+
 @Composable
 private fun SetRow(
     set: SetLog,
+    /** 已经有几段递减：>0 时在组号旁点一个小标记，滑开按钮也会变 */
+    segmentCount: Int = 0,
     onUpdateSet: (SetLog, Float, Int) -> Unit,
     onToggleSet: (SetLog) -> Unit,
     onDeleteSet: (SetLog) -> Unit,
     onTogglePr: (SetLog) -> Unit,
+    onAddSegment: () -> Unit = {},
 ) {
     var weight by remember(set.id) { mutableStateOf(set.weightKg) }
     var reps by remember(set.id) { mutableStateOf(set.reps) }
@@ -555,9 +577,10 @@ private fun SetRow(
         label = "setBadge",
     )
 
-    // 左滑露出删除
+    // 左滑露出「递减 / PR / 删除」
     val density = LocalDensity.current
-    val maxSwipe = with(density) { 112.dp.toPx() }
+    // 48 + 50 + 52 三个按钮 + 4*2 间距 + 6 右边距 = 164，留 4dp 余量
+    val maxSwipe = with(density) { 168.dp.toPx() }
     val haptics = LocalHapticFeedback.current
     // 按组 id 记忆：LazyColumn 复用行槽位时，上一行没走完的回弹位移会带到下一行，
     // 表现是删掉一组之后，新顶上来的那组莫名其妙歪着
@@ -572,10 +595,11 @@ private fun SetRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MiuixTheme.colorScheme.surface),
+            // 只裁形状不画底色：滑开后露出的那块要跟卡片同色，
+            // 铺一层 surface 会在深色主题下露出一条比卡片更黑的底
+            .clip(RoundedCornerShape(16.dp)),
     ) {
-        // 底层：PR + 删除（被上层组行完全遮住，滑开才露出）
+        // 底层：递减 + PR + 删除（被上层组行完全遮住，滑开才露出）
         Row(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -583,6 +607,29 @@ private fun SetRow(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 递减：在最左边，因为它是这一排里最常用的一个（降重量续做几乎每次都点），
+            // 滑开幅度最小的时候先露出来的就是它
+            Box(
+                modifier = Modifier
+                    .width(48.dp)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MiuixTheme.colorScheme.primary)
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        rawOffset = 0f
+                        onAddSegment()
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    // 已经有一段了就写「再递减」：再点是继续往下加第三段
+                    text = if (segmentCount > 0) "再减" else "递减",
+                    fontSize = 11.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onPrimary,
+                )
+            }
             Box(
                 modifier = Modifier
                     .width(50.dp)
@@ -653,25 +700,46 @@ private fun SetRow(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .background(badgeColor),
-                contentAlignment = Alignment.Center,
+            // 组号 + 这一组做了多久。
+            //
+            // 用时叠在组号下面，而不是在右边单开一列：这一行里两个数字步进器
+            // 各要 124dp（30 圆钮 + 58 数字 + 30 圆钮），再插一列 38dp 实测会把
+            // 两个「＋」各挤掉近 20dp（被行的圆角裁掉）。
+            // 竖着叠只多占 20dp 宽，行高仍由步进器决定，完成后也不会跳高度。
+            Column(
+                modifier = Modifier.width(46.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(badgeColor),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = set.setNumber.toString(),
+                        fontSize = 11.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = when {
+                            set.isPr -> androidx.compose.ui.graphics.Color.White
+                            completed -> MiuixTheme.colorScheme.onPrimary
+                            else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        },
+                    )
+                }
+                // 「这一组做了多久」= 打勾时刻 − 上一次休息结束（见 SetClock）。
+                // 没做的组、以及 v15 之前的老记录没有这个值，只留一个空行 ——
+                // 不能整块不渲染，否则打勾那一刻组号会往上跳半个字高
                 Text(
-                    text = set.setNumber.toString(),
-                    fontSize = 12.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = when {
-                        set.isPr -> androidx.compose.ui.graphics.Color.White
-                        completed -> MiuixTheme.colorScheme.onPrimary
-                        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    },
+                    text = com.yfantasyxx.ui.components.formatSetDuration(set.durationMs).ifEmpty { " " },
+                    fontSize = 10.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    maxLines = 1,
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             NumberStepper(
                 value = weight,
                 onValueChange = { weight = it },
@@ -697,6 +765,156 @@ private fun SetRow(
                 },
                 onClick = { onToggleSet(set) },
             )
+        }
+    }
+}
+
+/**
+ * 递减段：主组下面「降重量接着做」的那一段，比正常组矮一档。
+ *
+ * 没有勾选框 —— 完成状态挂在上面那个主组上，勾主组 = 整组（含所有段）做完，
+ * 组数也只算一组。左滑露出删除，和主行同一套手势；删掉一段后面的段号会自动补上。
+ */
+@Composable
+private fun DropSetRow(
+    setNumber: Int,
+    segment: com.yfantasyxx.data.db.SetSegment,
+    onUpdate: (com.yfantasyxx.data.db.SetSegment, Float, Int) -> Unit,
+    onDelete: (com.yfantasyxx.data.db.SetSegment) -> Unit,
+) {
+    var weight by remember(segment.id) { mutableStateOf(segment.weightKg) }
+    var reps by remember(segment.id) { mutableStateOf(segment.reps) }
+    LaunchedEffect(weight, reps) {
+        if (weight != segment.weightKg || reps != segment.reps) onUpdate(segment, weight, reps)
+    }
+    // 反向同步：库里的值被程序改了（比如以后做「整组一起改重量」）时要跟得上，
+    // 但本地有没写回去的改动时不能覆盖 —— 和 SetRow 同一套判据
+    var lastDbWeight by remember(segment.id) { mutableStateOf(segment.weightKg) }
+    var lastDbReps by remember(segment.id) { mutableStateOf(segment.reps) }
+    LaunchedEffect(segment.weightKg) {
+        if (segment.weightKg != lastDbWeight) {
+            if (weight == lastDbWeight) weight = segment.weightKg
+            lastDbWeight = segment.weightKg
+        }
+    }
+    LaunchedEffect(segment.reps) {
+        if (segment.reps != lastDbReps) {
+            if (reps == lastDbReps) reps = segment.reps
+            lastDbReps = segment.reps
+        }
+    }
+
+    val density = LocalDensity.current
+    // 只需露出一个「删除」，滑一点点就够
+    val maxSwipe = with(density) { 56.dp.toPx() }
+    var rawOffset by remember(segment.id) { mutableStateOf(0f) }
+    val animatedOffset by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = rawOffset,
+        animationSpec = androidx.compose.animation.core.tween(180),
+        label = "dropSwipe",
+    )
+    val haptics = LocalHapticFeedback.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            // 缩进 + 上下留白只有主行的一半：一眼看出它挂在上面那一组，
+            // 而不是又开了一组
+            .padding(start = 12.dp)
+            .padding(vertical = 1.dp)
+            // 同上：不铺底色，滑开后直接露卡片本体
+            .clip(RoundedCornerShape(14.dp)),
+    ) {
+        // 底层：删除
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 6.dp)
+                .width(48.dp)
+                .height(32.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MiuixTheme.colorScheme.error)
+                .clickable {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    rawOffset = 0f
+                    onDelete(segment)
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "删除",
+                fontSize = 11.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                color = MiuixTheme.colorScheme.onError,
+            )
+        }
+
+        // 上层：小一号的组行
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(animatedOffset.roundToInt(), 0) }
+                .clip(RoundedCornerShape(14.dp))
+                // 必须不透明：半透明会把底下的红色「删除」透出来，
+                // 看起来像按钮漏了一角在行尾
+                .background(MiuixTheme.colorScheme.surfaceContainer)
+                .pointerInput(segment.id) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            rawOffset = (rawOffset + dragAmount).coerceIn(-maxSwipe, 0f)
+                        },
+                        onDragEnd = {
+                            rawOffset = if (rawOffset < -maxSwipe / 3f) -maxSwipe else 0f
+                        },
+                        onDragCancel = { rawOffset = 0f },
+                    )
+                }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 和主行同样的列宽：46dp 标号列 + 6 间隔 + 两个 1f + 26 勾选框位，
+            // 少留一格的话两个数字会跟上面那一行错开
+            Row(
+                modifier = Modifier.width(46.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 一小截竖线：把「这一行挂在上面那一组」画出来
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(15.dp)
+                        .clip(RoundedCornerShape(1.dp))
+                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = "$setNumber${segment.label}",
+                    fontSize = 11.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            NumberStepper(
+                value = weight,
+                onValueChange = { weight = it },
+                step = 2.5f,
+                rememberKey = segment.id,
+                compact = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
+            NumberStepper(
+                value = reps.toFloat(),
+                onValueChange = { reps = it.toInt() },
+                step = 1f,
+                rememberKey = segment.id,
+                compact = true,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(26.dp))
         }
     }
 }

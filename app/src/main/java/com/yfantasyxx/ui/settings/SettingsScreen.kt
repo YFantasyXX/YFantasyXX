@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Rule
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BlurOn
@@ -27,14 +28,19 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Scale
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Vibration
@@ -63,6 +69,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yfantasyxx.data.prefs.AlertSound
 import com.yfantasyxx.data.prefs.BottomBarStyle
+import com.yfantasyxx.data.prefs.ManualPrefill
+import com.yfantasyxx.data.prefs.TemplateStartMode
 import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
 import com.yfantasyxx.ui.LocalBottomBarSpace
@@ -101,7 +109,7 @@ import java.util.Date
 import java.util.Locale
 
 /** 设置页里用底部面板选择的三项 */
-private enum class SettingPicker { THEME, UNIT, BOTTOM_BAR, ALERT_SOUND }
+private enum class SettingPicker { THEME, UNIT, BOTTOM_BAR, ALERT_SOUND, TEMPLATE_START, PREFILL }
 
 /**
  * 悬浮窗权限状态。
@@ -284,6 +292,31 @@ fun SettingsScreen(
                     icon = Icons.Filled.FitnessCenter,
                     showChevron = true,
                     onClick = onOpenTemplates,
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "从模板开始",
+                    subtitle = when (settings.templateStartMode) {
+                        TemplateStartMode.LAST -> "组数、重量、次数都照上次"
+                        TemplateStartMode.TEMPLATE -> "严格按模板的目标组数与次数"
+                    },
+                    value = settings.templateStartMode.label,
+                    icon = Icons.Filled.Sync,
+                    showChevron = true,
+                    onClick = { picker = SettingPicker.TEMPLATE_START },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "加动作时预填",
+                    subtitle = when (settings.manualPrefill) {
+                        ManualPrefill.LAST -> "照上次练的组数、重量、次数"
+                        ManualPrefill.BEST -> "照练得最好的那次填"
+                        ManualPrefill.EMPTY -> "不预填，从零填"
+                    },
+                    value = settings.manualPrefill.label,
+                    icon = Icons.Filled.PlaylistAdd,
+                    showChevron = true,
+                    onClick = { picker = SettingPicker.PREFILL },
                 )
                 SettingsDivider()
                 SettingsRow(
@@ -716,6 +749,54 @@ fun SettingsScreen(
             ),
             selected = settings.restAlertSound,
             onSelect = vm::setRestAlertSound,
+            onDismiss = { picker = null },
+        )
+
+        SettingPicker.TEMPLATE_START -> OptionPickerDialog(
+            title = "从模板开始",
+            options = listOf(
+                PickerOption(
+                    TemplateStartMode.LAST,
+                    "同步上次训练",
+                    "组数、每组重量与次数都照这个模板上次实际练的填",
+                    Icons.Filled.Refresh,
+                ),
+                PickerOption(
+                    TemplateStartMode.TEMPLATE,
+                    "按模板设置",
+                    "按模板的目标组数与目标次数填，不受上次临时调整影响",
+                    Icons.AutoMirrored.Filled.Rule,
+                ),
+            ),
+            selected = settings.templateStartMode,
+            onSelect = vm::setTemplateStartMode,
+            onDismiss = { picker = null },
+        )
+
+        SettingPicker.PREFILL -> OptionPickerDialog(
+            title = "加动作时预填",
+            options = listOf(
+                PickerOption(
+                    ManualPrefill.LAST,
+                    "上一次",
+                    "照这个动作上次练的组数、重量、次数填",
+                    Icons.Filled.History,
+                ),
+                PickerOption(
+                    ManualPrefill.BEST,
+                    "历史最好",
+                    "照练得最好的那次填（按单组重量×次数挑）",
+                    Icons.Filled.Star,
+                ),
+                PickerOption(
+                    ManualPrefill.EMPTY,
+                    "留空",
+                    "不预填，自己从零填",
+                    Icons.Filled.Remove,
+                ),
+            ),
+            selected = settings.manualPrefill,
+            onSelect = vm::setManualPrefill,
             onDismiss = { picker = null },
         )
 

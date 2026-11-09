@@ -224,7 +224,7 @@ class LocalRemoteStore(
                     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
             )
             // schema 版本对齐当前 App，确保被拦的理由只会是「空库」而不是「版本太新」
-            db.execSQL("PRAGMA user_version = 15")
+            db.execSQL("PRAGMA user_version = 18")
         }
         val bytes = probe.readBytes()
         sidecars.forEach { runCatching { File(probe.path + it).delete() } }

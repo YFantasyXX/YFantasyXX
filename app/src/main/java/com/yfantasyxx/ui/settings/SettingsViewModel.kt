@@ -9,7 +9,9 @@ import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.prefs.AlertSound
 import com.yfantasyxx.data.prefs.AppSettings
 import com.yfantasyxx.data.prefs.BottomBarStyle
+import com.yfantasyxx.data.prefs.ManualPrefill
 import com.yfantasyxx.data.prefs.SettingsRepository
+import com.yfantasyxx.data.prefs.TemplateStartMode
 import com.yfantasyxx.data.prefs.ThemeMode
 import com.yfantasyxx.data.prefs.WeightUnit
 import com.yfantasyxx.sync.BackupManager
@@ -79,6 +81,14 @@ class SettingsViewModel(
 
     fun setRestAlertSound(sound: AlertSound) {
         viewModelScope.launch { settingsRepo.setRestAlertSound(sound) }
+    }
+
+    fun setTemplateStartMode(mode: TemplateStartMode) {
+        viewModelScope.launch { settingsRepo.setTemplateStartMode(mode) }
+    }
+
+    fun setManualPrefill(prefill: ManualPrefill) {
+        viewModelScope.launch { settingsRepo.setManualPrefill(prefill) }
     }
 
     // ────────────────────────── 应用更新 ──────────────────────────

@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.CreateNewFolder
 import com.yfantasyxx.ui.components.RestSecondsPickerDialog
 import com.yfantasyxx.ui.components.AddExerciseDialog
+import com.yfantasyxx.ui.components.cardInsetColor
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.foundation.shape.CircleShape
@@ -552,8 +553,10 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
             SectionHeader("动作安排（${state.items.size}）")
             // 拖动排序状态
             val density = LocalDensity.current
-            // 卡片 158dp + 上下各 4dp 间距
-            val rowHeightPx = with(density) { 166.dp.toPx() }
+            // 卡片 196dp + 上下各 4dp 间距。
+            // 原来是 158dp，后来加了「进阶策略」那一排胶囊，卡片没跟着长高，
+            // 胶囊被卡片底边裁掉，只剩选中项顶上一道蓝线露在外面
+            val rowHeightPx = with(density) { 204.dp.toPx() }
             val haptics = LocalHapticFeedback.current
             var draggingKey by remember { mutableStateOf<Long?>(null) }
             var dragOffsetY by remember { mutableStateOf(0f) }
@@ -565,7 +568,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .height(158.dp)
+                            .height(196.dp)
                             .zIndex(if (isDragging) 1f else 0f)
                             .graphicsLayer {
                                 translationY = if (isDragging) dragOffsetY else 0f
@@ -649,7 +652,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(50))
-                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                            .background(cardInsetColor())
                                             .clickable { restPickerKey = item.key }
                                             .padding(horizontal = 8.dp, vertical = 4.dp),
                                     ) {
@@ -670,7 +673,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                             .clip(RoundedCornerShape(50))
                                             .background(
                                                 if (item.isWarmup) WarmupOrange
-                                                else MiuixTheme.colorScheme.surfaceContainer
+                                                else cardInsetColor()
                                             )
                                             .clickable { vm.toggleWarmup(item.key) }
                                             .padding(horizontal = 10.dp, vertical = 4.dp),
@@ -747,7 +750,7 @@ fun TemplateEditScreen(templateId: Long?, folderId: Long? = null, onBack: () -> 
                                             .weight(1f)
                                             .height(34.dp)
                                             .clip(RoundedCornerShape(10.dp))
-                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                            .background(cardInsetColor())
                                             .padding(horizontal = 10.dp),
                                         contentAlignment = Alignment.CenterStart,
                                     ) {

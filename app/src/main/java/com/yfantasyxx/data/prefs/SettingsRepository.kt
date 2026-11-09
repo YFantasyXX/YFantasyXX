@@ -63,6 +63,42 @@ enum class AlertSound(val value: String, val label: String, val hint: String) {
     }
 }
 
+/**
+ * 从模板开始训练时，组内容从哪来。
+ *
+ * - [LAST]：同步这个模板上次实际练的样子（组数、每组重量次数都照上次）。
+ *   临时加练了一组、把重量调低过，下次回来还是那个样子，接着练最省事。
+ * - [TEMPLATE]：严格按模板里写的目标组数 / 目标次数 / 目标重量。
+ *   适合「模板就是计划本身」，不希望上次的临时调整污染下次。
+ */
+enum class TemplateStartMode(val value: String, val label: String, val hint: String) {
+    LAST("last", "同步上次训练", "组数和每组的重量次数都照上次练的填，接着上次继续"),
+    TEMPLATE("template", "按模板设置", "严格用模板里的目标组数和目标次数，重量取模板目标重量"),
+    ;
+
+    companion object {
+        fun from(v: String?) = entries.firstOrNull { it.value == v } ?: LAST
+    }
+}
+
+/**
+ * 训练中手动加动作（含首页空训练）时，初始组数与重量次数从哪来。
+ *
+ * [BEST] 取的是「单组容量最大」的那次训练，不是单看重量：
+ * 10kg×20 和 20kg×10 容量一样，但前者更可能是高次数耐力组，
+ * 用容量排序能挑出真正练得最狠的那一次。
+ */
+enum class ManualPrefill(val value: String, val label: String, val hint: String) {
+    LAST("last", "上一次", "照这个动作上次练的组数、重量、次数填"),
+    BEST("best", "历史最好", "照这个动作练得最好的那次填（按单组容量挑）"),
+    EMPTY("empty", "留空", "不预填，自己从零填"),
+    ;
+
+    companion object {
+        fun from(v: String?) = entries.firstOrNull { it.value == v } ?: LAST
+    }
+}
+
 enum class WeightUnit(val label: String, val factor: Float) {
     KG("kg", 1f),
     LB("lb", 2.20462f);
@@ -112,6 +148,10 @@ data class AppSettings(
      * 查到之后在「我的 → 应用更新」里提示，用户点了才下。
      */
     val autoCheckUpdate: Boolean = true,
+    /** 从模板开始训练时，预填「上次练的」还是「模板设定的」 */
+    val templateStartMode: TemplateStartMode = TemplateStartMode.LAST,
+    /** 手动加动作时的预填来源 */
+    val manualPrefill: ManualPrefill = ManualPrefill.LAST,
 )
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -142,6 +182,8 @@ private object Keys {
     val REST_OVERLAY_PERSISTENT = booleanPreferencesKey("rest_overlay_persistent")
     val REST_ALERT_SOUND = stringPreferencesKey("rest_alert_sound")
     val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
+    val TEMPLATE_START_MODE = stringPreferencesKey("template_start_mode")
+    val MANUAL_PREFILL = stringPreferencesKey("manual_prefill")
 }
 
 /**
@@ -223,6 +265,8 @@ class SettingsRepository(
                 restOverlayPersistent = prefs[Keys.REST_OVERLAY_PERSISTENT] ?: false,
                 restAlertSound = AlertSound.from(prefs[Keys.REST_ALERT_SOUND]),
                 autoCheckUpdate = prefs[Keys.AUTO_CHECK_UPDATE] ?: true,
+                templateStartMode = TemplateStartMode.from(prefs[Keys.TEMPLATE_START_MODE]),
+                manualPrefill = ManualPrefill.from(prefs[Keys.MANUAL_PREFILL]),
             )
         }
         // 解密 WebDAV 密码要走 Keystore（跨进程），不能在主线程做
@@ -308,5 +352,13 @@ class SettingsRepository(
 
     suspend fun setAutoCheckUpdate(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTO_CHECK_UPDATE] = enabled }
+    }
+
+    suspend fun setTemplateStartMode(mode: TemplateStartMode) {
+        context.dataStore.edit { it[Keys.TEMPLATE_START_MODE] = mode.value }
+    }
+
+    suspend fun setManualPrefill(prefill: ManualPrefill) {
+        context.dataStore.edit { it[Keys.MANUAL_PREFILL] = prefill.value }
     }
 }

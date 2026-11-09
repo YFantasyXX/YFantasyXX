@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.yfantasyxx.service.RestTimerService
 import com.yfantasyxx.util.RestTimerStore
+import com.yfantasyxx.util.SetClock
 
 data class RestTimerState(
     val running: Boolean = false,
@@ -68,6 +69,17 @@ class WorkoutViewModel(
 
     private val _session = MutableStateFlow<WorkoutSession?>(null)
     val session: StateFlow<WorkoutSession?> = _session.asStateFlow()
+
+    /**
+     * 主组 id → 递减段。
+     *
+     * 单独一路 Flow：段不在 [SessionExerciseWithSets] 里（那是实体关系类，
+     * 加字段会牵动历史页 / 分享卡片所有调用点）。没有段的组在这张表里查不到，
+     * 界面按空列表处理，行为和以前完全一样。
+     */
+    private val _segments = MutableStateFlow<Map<Long, List<com.yfantasyxx.data.db.SetSegment>>>(emptyMap())
+    val segments: StateFlow<Map<Long, List<com.yfantasyxx.data.db.SetSegment>>> =
+        _segments.asStateFlow()
 
     private val _restTimer = MutableStateFlow(RestTimerState())
     val restTimer: StateFlow<RestTimerState> = _restTimer.asStateFlow()
@@ -198,6 +210,7 @@ class WorkoutViewModel(
     private var tickerJob: Job? = null
     private var restTickerJob: Job? = null
     private var observeJob: Job? = null
+    private var segmentJob: Job? = null
 
     /** 确保有一个进行中的训练（没有就创建）。空草稿（无动作）也必须能正常进入。 */
     fun ensureSession(onReady: () -> Unit = {}) {
@@ -224,6 +237,8 @@ class WorkoutViewModel(
     private suspend fun startObserving(id: Long) {
         _sessionId.value = id
         _session.value = repo.getSession(id)
+        // 组计时的起点：没有锚点就从现在算（进程被杀后重进，等待时间不往上一组上赖）
+        if (SetClock.anchorAt(context, id) == null) SetClock.mark(context, id)
         refreshDefaultName()
         loadProgressionModes()
         localOrderLock = false
@@ -285,6 +300,13 @@ class WorkoutViewModel(
                 }
             }
         }
+
+        // 递减段：和明细同时开始观察，加一段 / 改一段立刻上屏
+        segmentJob?.cancel()
+        _segments.value = runCatching { repo.getSegments(id) }.getOrDefault(emptyMap())
+        segmentJob = viewModelScope.launch {
+            repo.observeSegments(id).collectLatest { _segments.value = it }
+        }
     }
 
     private var loadedPerformanceIds: List<Long> = emptyList()
@@ -344,7 +366,8 @@ class WorkoutViewModel(
             return
         }
         viewModelScope.launch {
-            runCatching { repo.addExerciseToSession(id, exerciseId) }
+            val prefill = settingsRepo.awaitSettings().manualPrefill
+            runCatching { repo.addExerciseToSession(id, exerciseId, prefill = prefill) }
                 .onFailure { e ->
                     _error.value = "添加动作失败：${e.javaClass.simpleName} ${e.message.orEmpty()}"
                 }
@@ -426,7 +449,8 @@ class WorkoutViewModel(
         viewModelScope.launch {
             runCatching {
                 val exerciseId = repo.addCustomExercise(name, category, equipment, muscle)
-                repo.addExerciseToSession(sessionId, exerciseId)
+                val prefill = settingsRepo.awaitSettings().manualPrefill
+                repo.addExerciseToSession(sessionId, exerciseId, prefill = prefill)
             }.onFailure { e ->
                 _error.value = "新建动作失败：${e.message.orEmpty()}"
             }
@@ -586,9 +610,22 @@ class WorkoutViewModel(
                     return@withLock
                 }
                 val willComplete = !fresh.completed
+                val now = System.currentTimeMillis()
+                val sessionIdNow = _sessionId.value
+                // 这一组做了多久 = 现在 − 上一次休息结束（锚点）。
+                // 取消勾选时清零：这一组不算做过，留着一个长度只会误导。
+                val durationMs = if (willComplete) {
+                    SetClock.elapsed(context, sessionIdNow, now)
+                } else {
+                    0L
+                }
                 // 只改完成这一列。整行写回会用这一行的旧快照，
                 // 把刚填进去的重量/次数覆盖成旧值（表现就是「打勾后数值归零」）。
-                repo.setSetCompleted(fresh.id, willComplete)
+                repo.setSetCompleted(fresh.id, willComplete, durationMs, at = now)
+                // 下一组的起点先推到这一刻：超级组交替、休息没等完就做下一组时
+                // 没有「休息结束」这个事件，只能从上一组结束算起；
+                // 真去休息了的话，休息结束会把锚点再推一次。
+                SetClock.mark(context, sessionIdNow, now)
                 if (willComplete) {
                     // 第一组完成时才真正开始计时（空训练/模板进入时不立即计时）
                     val sessionId = _sessionId.value
@@ -653,6 +690,33 @@ class WorkoutViewModel(
         viewModelScope.launch {
             runCatching { repo.deleteSetAndRenumber(set.id) }
                 .onFailure { e -> _error.value = "删除该组失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    /**
+     * 追加一段递减：默认沿用这一组的重量次数，用户只需要把重量改小。
+     *
+     * 段不算一组、也不单独打勾 —— 勾的是主组，整组仍然算 1 组。
+     */
+    fun addSegment(set: SetLog) {
+        viewModelScope.launch {
+            runCatching { repo.addSegment(set.id, set.weightKg, set.reps) }
+                .onFailure { e -> _error.value = "添加递减段失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    fun updateSegment(segment: com.yfantasyxx.data.db.SetSegment, weightKg: Float, reps: Int) {
+        if (segment.weightKg == weightKg && segment.reps == reps) return
+        viewModelScope.launch {
+            runCatching { repo.updateSegment(segment.id, weightKg, reps) }
+                .onFailure { e -> _error.value = "修改递减段失败：${e.message.orEmpty()}" }
+        }
+    }
+
+    fun deleteSegment(segment: com.yfantasyxx.data.db.SetSegment) {
+        viewModelScope.launch {
+            runCatching { repo.deleteSegmentAndRenumber(segment.id) }
+                .onFailure { e -> _error.value = "删除递减段失败：${e.message.orEmpty()}" }
         }
     }
 
@@ -769,6 +833,8 @@ class WorkoutViewModel(
                         label = snapshot.label,
                     )
                     _restFinished.value = true
+                    // 休息一结束，下一组的表就开始走 —— 这就是「两次休息中间的间隔」
+                    SetClock.mark(context, _sessionId.value)
                     com.yfantasyxx.service.RestNotifier.vibrate(context)
                     break
                 } else {
@@ -795,6 +861,8 @@ class WorkoutViewModel(
         restTickerJob?.cancel()
         restLabel = null
         _restTimer.value = RestTimerState()
+        // 跳过休息等于「我现在就开始做下一组」
+        SetClock.mark(context, _sessionId.value)
     }
 
     fun extendRestTimer(extraSeconds: Int) {
@@ -810,6 +878,18 @@ class WorkoutViewModel(
      */
     private val _finishing = MutableStateFlow(false)
     val finishing: StateFlow<Boolean> = _finishing.asStateFlow()
+
+    /**
+     * 最后一组打勾的时刻；一组都没完成返回 0。
+     *
+     * 只给完成对话框显示提示用，所以直接从当前页面的数据里读，不再查库。
+     * 取 completed 且 completedAt>0 的最大值：取消勾选过的组 completedAt 已清零。
+     */
+    fun lastCompletedSetAt(): Long = _exercises.value
+        .asSequence()
+        .flatMap { it.sets.asSequence() }
+        .filter { it.completed && it.completedAt > 0L }
+        .maxOfOrNull { it.completedAt } ?: 0L
 
     fun finishWorkout(name: String, note: String, onDone: () -> Unit) {
         if (!_finishing.compareAndSet(expect = false, update = true)) return
@@ -830,6 +910,7 @@ class WorkoutViewModel(
             tickerJob?.cancel()
             restTickerJob?.cancel()
             RestTimerService.skip(context)
+            SetClock.clear(context)
             onDone()
             // 训练完成后按设置自动备份（独立协程，不阻塞导航）
             autoBackupAfterFinish()
@@ -872,6 +953,7 @@ class WorkoutViewModel(
             tickerJob?.cancel()
             restTickerJob?.cancel()
             RestTimerService.skip(context)
+            SetClock.clear(context)
             _sessionId.value = null
             onDone()
         }

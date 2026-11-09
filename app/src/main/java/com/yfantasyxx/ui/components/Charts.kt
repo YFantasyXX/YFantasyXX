@@ -202,7 +202,8 @@ fun DistributionRow(
                 .fillMaxWidth()
                 .height(8.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(MiuixTheme.colorScheme.surfaceContainer)
+                // 轨道要能看见：surfaceContainer 和卡片同色，占比 0 的那一段会整条消失
+                .background(cardInsetColor(0.08f))
         ) {
             Box(
                 modifier = Modifier

@@ -84,8 +84,11 @@ class AppContainer(context: Context) {
             AppDatabase.MIGRATION_12_13,
             AppDatabase.MIGRATION_13_14,
             AppDatabase.MIGRATION_14_15,
+            AppDatabase.MIGRATION_15_16,
+            AppDatabase.MIGRATION_16_17,
+            AppDatabase.MIGRATION_17_18,
         )
-        // 迁移链已验证到 v15；这里保留兜底只为「宁可少几列也别打不开」，
+        // 迁移链已验证到 v18；这里保留兜底只为「宁可少几列也别打不开」，
         // 参数 false = 只清 Room 自己管理的表，行为与旧无参版一致
         .fallbackToDestructiveMigration(false)
         .build()

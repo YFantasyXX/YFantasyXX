@@ -43,12 +43,14 @@ import com.yfantasyxx.data.WorkoutRepository
 import com.yfantasyxx.data.db.PreviousSetRow
 import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SetLog
+import com.yfantasyxx.data.db.SetSegment
 import com.yfantasyxx.data.db.WorkoutSession
 import com.yfantasyxx.ui.components.EmptyState
 import com.yfantasyxx.ui.components.InfoRow
 import com.yfantasyxx.ui.components.NumberStepper
 import com.yfantasyxx.ui.components.SectionHeader
 import com.yfantasyxx.ui.components.formatSessionDuration
+import com.yfantasyxx.ui.components.formatSetDuration
 import com.yfantasyxx.ui.components.formatVolume
 import com.yfantasyxx.ui.rememberAppContainer
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +97,10 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     private val _previous = MutableStateFlow<Map<Long, PreviousSetRow>>(emptyMap())
     val previous: StateFlow<Map<Long, PreviousSetRow>> = _previous.asStateFlow()
 
+    /** 主组 id → 递减段 */
+    private val _segments = MutableStateFlow<Map<Long, List<SetSegment>>>(emptyMap())
+    val segments: StateFlow<Map<Long, List<SetSegment>>> = _segments.asStateFlow()
+
     /**
      * 已经查过「上次」的动作。
      *
@@ -104,6 +110,7 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     private val compared = HashSet<Long>()
 
     private var observeJob: kotlinx.coroutines.Job? = null
+    private var segmentJob: kotlinx.coroutines.Job? = null
     private var sessionId: Long? = null
 
     /**
@@ -129,6 +136,11 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
             loadPrevious(_details.value)
         }
         viewModelScope.launch { _bodyweight.value = repo.latestWeightKg() }
+        // 递减段单独一路：不在关系类里（见 SetSegment 的注释）
+        segmentJob?.cancel()
+        segmentJob = viewModelScope.launch {
+            repo.observeSegments(id).collect { _segments.value = it }
+        }
     }
 
     /**
@@ -172,6 +184,26 @@ class SessionDetailViewModel(private val repo: WorkoutRepository) : ViewModel() 
     fun deleteSet(id: Long) {
         viewModelScope.launch {
             runCatching { repo.deleteSetAndRenumber(id) }
+        }
+    }
+
+    /** 补一段递减（沿用这一组的重量次数，改完就生效） */
+    fun addSegment(set: SetLog) {
+        viewModelScope.launch {
+            runCatching { repo.addSegment(set.id, set.weightKg, set.reps) }
+        }
+    }
+
+    fun updateSegment(segment: SetSegment, weightKg: Float, reps: Int) {
+        if (segment.weightKg == weightKg && segment.reps == reps) return
+        viewModelScope.launch {
+            runCatching { repo.updateSegment(segment.id, weightKg, reps) }
+        }
+    }
+
+    fun deleteSegment(segment: SetSegment) {
+        viewModelScope.launch {
+            runCatching { repo.deleteSegmentAndRenumber(segment.id) }
         }
     }
 
@@ -254,6 +286,7 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
     val loaded by vm.loaded.collectAsStateWithLifecycle()
     val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
     val previous by vm.previous.collectAsStateWithLifecycle()
+    val segments by vm.segments.collectAsStateWithLifecycle()
     var showDelete by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -265,10 +298,16 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
 
     val totalVolume = details.sumOf { item ->
         item.sets.filter { it.completed && !it.isWarmup }
-            .sumOf {
+            .sumOf { set ->
                 // 自重动作的 weightKg 是额外负重，容量要把体重算进去
-                (Load.effectiveKg(it.weightKg, item.exercise.equipment, bodyweight) * it.reps)
+                val main = (Load.effectiveKg(set.weightKg, item.exercise.equipment, bodyweight) * set.reps)
                     .toDouble()
+                // 递减段各算各的：这一组练了两个重量，只算主组会把量记少
+                val drops = segments[set.id].orEmpty().sumOf { sg ->
+                    (Load.effectiveKg(sg.weightKg, item.exercise.equipment, bodyweight) * sg.reps)
+                        .toDouble()
+                }
+                main + drops
             }
     }.toFloat()
     // 组数分两种口径：热身组不算进「完成组数」，否则 20 组的训练里
@@ -499,6 +538,7 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                             }
                             Spacer(Modifier.height(8.dp))
                             item.sets.sortedBy { it.setNumber }.forEach { set ->
+                                val drops = segments[set.id].orEmpty().sortedBy { it.seq }
                                 if (editing) {
                                     EditableSetRow(
                                         set = set,
@@ -508,10 +548,33 @@ fun SessionDetailScreen(sessionId: Long, onBack: () -> Unit) {
                                 } else {
                                     ReadOnlySetRow(set)
                                 }
+                                // 递减段：缩进、小一号，跟在主组下面
+                                drops.forEach { segment ->
+                                    if (editing) {
+                                        EditableSegmentRow(
+                                            setNumber = set.setNumber,
+                                            segment = segment,
+                                            onUpdate = { w, r -> vm.updateSegment(segment, w, r) },
+                                            onDelete = { vm.deleteSegment(segment) },
+                                        )
+                                    } else {
+                                        ReadOnlySegmentRow(set.setNumber, segment)
+                                    }
+                                }
                             }
                             if (editing) {
                                 Spacer(Modifier.height(4.dp))
-                                ActionText(text = "+ 添加一组", onClick = { vm.addSet(item) })
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    ActionText(text = "+ 添加一组", onClick = { vm.addSet(item) })
+                                    // 补递减段挂在最后一组下面：力竭后降重量续做，
+                                    // 几乎都发生在最后那一组
+                                    item.sets.maxByOrNull { it.setNumber }?.let { last ->
+                                        ActionText(
+                                            text = "+ 递减",
+                                            onClick = { vm.addSegment(last) },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -631,6 +694,7 @@ private fun ReadOnlySetRow(set: SetLog) {
             .fillMaxWidth()
             .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             // PR 组单独标出来：同一行里数字看起来差不多，但它代表的意义不一样
@@ -646,16 +710,130 @@ private fun ReadOnlySetRow(set: SetLog) {
                 MiuixTheme.colorScheme.disabledOnSurface
             },
         )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${set.weightKg.toInt()} kg × ${set.reps} 次" +
+                    (set.rpe?.let { " · RPE ${it.toInt()}" } ?: ""),
+                style = MiuixTheme.textStyles.paragraph,
+                color = if (set.completed) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.disabledOnSurface
+                },
+                modifier = Modifier.alignByBaseline(),
+            )
+            // 组内用时（两次休息之间隔了多久，见 util/SetClock）。和训练页同一套写法：
+            // 小一号的次要色跟在后面，不抢重量次数的注意力。
+            // 0 表示没记录：还没做的组，以及 v15 及更早练的（那时候根本没记），
+            // 这时候整格不画 —— 写「0s」会被当成「一秒做完了」
+            if (set.durationMs > 0L) {
+                Text(
+                    text = formatSetDuration(set.durationMs),
+                    // 按基线对齐：小字号用居中会对齐到行盒中心，
+                    // 数字看起来比旁边的中文矮半截，像掉在下面
+                    modifier = Modifier
+                        .alignByBaseline()
+                        .padding(start = 8.dp),
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 递减段（只读）：缩进 + 小一号，挂在主组下面。
+ *
+ * 组号写成 3a / 3b，和训练页一致 —— 「3 组降重量续做了一次」，
+ * 组数仍然只算一组。
+ */
+@Composable
+private fun ReadOnlySegmentRow(setNumber: Int, segment: SetSegment) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
-            text = "${set.weightKg.toInt()} kg × ${set.reps} 次" +
-                (set.rpe?.let { " · RPE ${it.toInt()}" } ?: ""),
-            style = MiuixTheme.textStyles.paragraph,
-            color = if (set.completed) {
-                MiuixTheme.colorScheme.primary
-            } else {
-                MiuixTheme.colorScheme.disabledOnSurface
-            },
+            text = "$setNumber${segment.label}",
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.primary,
+            modifier = Modifier.width(28.dp),
         )
+        Text(
+            text = "${segment.weightKg.toInt()} kg × ${segment.reps} 次",
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+    }
+}
+
+/**
+ * 递减段（编辑）：两个小一号步进器 + 删除。
+ *
+ * 改动即时落库，和组行同一套做法：没有保存按钮，退出编辑态就是保存。
+ */
+@Composable
+private fun EditableSegmentRow(
+    setNumber: Int,
+    segment: SetSegment,
+    onUpdate: (Float, Int) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var weight by remember(segment.id) { mutableStateOf(segment.weightKg) }
+    var reps by remember(segment.id) { mutableStateOf(segment.reps.toFloat()) }
+
+    LaunchedEffect(weight, reps) {
+        val r = reps.toInt()
+        if (weight != segment.weightKg || r != segment.reps) onUpdate(weight, r)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "$setNumber${segment.label}",
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.primary,
+            modifier = Modifier.width(28.dp),
+        )
+        NumberStepper(
+            value = weight,
+            onValueChange = { weight = it },
+            step = 2.5f,
+            rememberKey = segment.id,
+            compact = true,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(6.dp))
+        NumberStepper(
+            value = reps,
+            onValueChange = { reps = it },
+            step = 1f,
+            rememberKey = segment.id,
+            compact = true,
+            modifier = Modifier.weight(1f),
+        )
+        // 用 22dp 小圆点：一行里已经有两个步进器，标准按钮会把数字挤扁
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .clickable(onClick = onDelete),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "删除第 $setNumber${segment.label} 段",
+                tint = MiuixTheme.colorScheme.error,
+                modifier = Modifier.size(14.dp),
+            )
+        }
     }
 }
 
@@ -719,13 +897,16 @@ private fun EditableSetRow(
             modifier = Modifier
                 .size(26.dp)
                 .clip(androidx.compose.foundation.shape.CircleShape)
-                .background(MiuixTheme.colorScheme.primaryContainer),
+                // 和训练页的组号一致：实心主色 + onPrimary 的白字。
+                // 以前是 primaryContainer 底 + primary 字，两色太接近，
+                // 截图里组号几乎看不见（浅蓝字压在浅蓝底上）
+                .background(MiuixTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = set.setNumber.toString(),
                 style = MiuixTheme.textStyles.footnote1,
-                color = MiuixTheme.colorScheme.primary,
+                color = MiuixTheme.colorScheme.onPrimary,
             )
         }
         Spacer(Modifier.width(8.dp))

@@ -392,13 +392,17 @@ class DevToolsViewModel(
                         val isPr = offset == 0 && n == setCount
                         sqlite.execSQL(
                             "INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, rpe, " +
-                                "isWarmup, isPr, completed, loggedAt) VALUES (?, ?, ?, ?, NULL, 0, ?, 1, ?)",
+                                "isWarmup, isPr, completed, durationMs, completedAt, loggedAt) " +
+                                "VALUES (?, ?, ?, ?, NULL, 0, ?, 1, 0, ?, ?)",
                             arrayOf<Any?>(
                                 seId,
                                 n,
                                 weight,
                                 reps,
                                 if (isPr) 1 else 0,
+                                // 造的数据也让「哪一刻做完的」和 loggedAt 对齐，
+                                // 免得以后按最后一组时刻算出来的时间对不上
+                                start + n * 4 * 60_000L,
                                 start + n * 4 * 60_000L,
                             ),
                         )
@@ -544,13 +548,15 @@ class DevToolsViewModel(
                     }
                     sqlite.execSQL(
                         "INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, rpe, " +
-                            "isWarmup, isPr, completed, loggedAt) VALUES (?, ?, ?, ?, NULL, 0, ?, 1, ?)",
+                            "isWarmup, isPr, completed, durationMs, completedAt, loggedAt) " +
+                            "VALUES (?, ?, ?, ?, NULL, 0, ?, 1, 0, ?, ?)",
                         arrayOf<Any?>(
                             seId,
                             n,
                             weight,
                             reps,
                             if (n == FAKE_SETS) 1 else 0,
+                            start + n * 5 * 60_000L,
                             start + n * 5 * 60_000L,
                         ),
                     )

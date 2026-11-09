@@ -33,6 +33,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 internal fun FinishDialog(
     defaultName: String,
+    /**
+     * 最后一组打勾的时刻；0 表示还没有任何一组完成。
+     *
+     * 结束时间按这一刻记（见 `WorkoutRepository.finishSession`），
+     * 所以练完隔了很久才点「完成」时要把这件事说出来，否则用户会以为
+     * 历史里少记了一截时长。
+     */
+    lastCompletedSetAt: Long,
     onDismiss: () -> Unit,
     onConfirm: (String, String) -> Unit,
 ) {
@@ -62,6 +70,20 @@ internal fun FinishDialog(
                 label = "备注（可选）",
             )
             Spacer(Modifier.height(16.dp))
+            // 最后一组做完已经超过一分钟：说明用户是隔了一会儿才点完成的，
+            // 先把「结束时间记在哪一刻」讲清楚，免得以为时长记少了
+            if (lastCompletedSetAt > 0L &&
+                System.currentTimeMillis() - lastCompletedSetAt > 60_000L
+            ) {
+                Text(
+                    text = "结束时间按最后一组完成时记 · " +
+                        java.text.SimpleDateFormat("HH:mm", java.util.Locale.CHINA)
+                            .format(java.util.Date(lastCompletedSetAt)),
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,

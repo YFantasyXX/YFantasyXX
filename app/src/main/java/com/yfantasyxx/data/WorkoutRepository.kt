@@ -14,12 +14,15 @@ import com.yfantasyxx.data.db.SessionExerciseWithSets
 import com.yfantasyxx.data.db.SessionVolumeRow
 import com.yfantasyxx.data.db.SessionSummary
 import com.yfantasyxx.data.db.SetLog
+import com.yfantasyxx.data.db.SetSegment
 import com.yfantasyxx.data.db.TemplateExercise
 import com.yfantasyxx.data.db.TemplateWithExercises
 import com.yfantasyxx.data.db.WorkoutSession
 import com.yfantasyxx.data.db.WorkoutTemplate
 import androidx.room.withTransaction
 import com.yfantasyxx.data.seed.ExerciseSeed
+import com.yfantasyxx.data.prefs.ManualPrefill
+import com.yfantasyxx.data.prefs.TemplateStartMode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,6 +63,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     private val sessionDao get() = db.sessionDao()
     private val sessionExerciseDao get() = db.sessionExerciseDao()
     private val setLogDao get() = db.setLogDao()
+    private val setSegmentDao get() = db.setSegmentDao()
     private val bodyMetricDao get() = db.bodyMetricDao()
     private val planDao get() = db.planDao()
 
@@ -548,8 +552,16 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      *
      * 「清空旧草稿 + 按新模板重建」必须是一个事务：中途失败会留下一个
      * 半空的草稿——旧动作删了、新动作没进来，用户看到的是空白训练页。
+     *
+     * [templateStart] 只影响「从模板带动作」这一步：
+     * - [TemplateStartMode.LAST] 同步上次训练（组数、每组重量次数）
+     * - [TemplateStartMode.TEMPLATE] 严格按模板的目标组数与目标次数
      */
-    suspend fun startSession(templateId: Long? = null, name: String = ""): Long =
+    suspend fun startSession(
+        templateId: Long? = null,
+        name: String = "",
+        templateStart: TemplateStartMode = TemplateStartMode.LAST,
+    ): Long =
         db.withTransaction {
             val existing = sessionDao.getActiveDraft()
             if (existing != null) {
@@ -558,14 +570,14 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                 if (hasCompleted || sameTemplate || templateId == null) {
                     // 继续上次未完成的训练
                     if (templateId != null && existing.exercises.isEmpty()) {
-                        applyTemplate(existing.session.id, templateId)
+                        applyTemplate(existing.session.id, templateId, templateStart)
                     }
                     return@withTransaction existing.session.id
                 }
                 // 上次只是打开没练，且这次换了个模板：清空旧内容按新模板重建
                 existing.exercises.forEach { sessionExerciseDao.delete(it.sessionExercise.id) }
                 sessionDao.setTemplateId(existing.session.id, templateId)
-                applyTemplate(existing.session.id, templateId)
+                applyTemplate(existing.session.id, templateId, templateStart)
                 invalidateStats()
                 return@withTransaction existing.session.id
             }
@@ -577,12 +589,16 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                     endTime = null,
                 )
             )
-            if (templateId != null) applyTemplate(sessionId, templateId)
+            if (templateId != null) applyTemplate(sessionId, templateId, templateStart)
             sessionId
         }
 
     /** 把模板中的动作（含目标组数）写入训练 */
-    private suspend fun applyTemplate(sessionId: Long, templateId: Long) {
+    private suspend fun applyTemplate(
+        sessionId: Long,
+        templateId: Long,
+        templateStart: TemplateStartMode = TemplateStartMode.LAST,
+    ) {
         val tpl = templateDao.getWithExercises(templateId) ?: return
         tpl.items.forEach { item ->
             val range = item.templateExercise.let {
@@ -601,16 +617,32 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                     supersetGroup = item.templateExercise.supersetGroup,
                 )
             )
-            // 重量次数逐组照上次练的（PR 组不算）；模板写了目标重量时以模板为准
-            setLogDao.insertAll(
-                referenceSets(
-                    sessionExerciseId = seId,
-                    count = item.templateExercise.targetSets,
-                    reference = lastReferenceSets(item.exercise.id),
-                    weightOverride = item.templateExercise.targetWeightKg,
-                    isWarmup = item.templateExercise.isWarmup,
+            val last = lastReferenceSets(item.exercise.id)
+            when (templateStart) {
+                // 同步上次：组数也照上次实际做了几组（临时加练的一组不会丢）
+                TemplateStartMode.LAST -> setLogDao.insertAll(
+                    referenceSets(
+                        sessionExerciseId = seId,
+                        count = last.size.takeIf { it > 0 } ?: item.templateExercise.targetSets,
+                        reference = last,
+                        weightOverride = item.templateExercise.targetWeightKg,
+                        isWarmup = item.templateExercise.isWarmup,
+                    )
                 )
-            )
+                // 按模板：组数是模板的目标组数，次数取目标区间下限
+                // （先做到下限，做得动再往上加；重量仍以模板目标重量优先）
+                TemplateStartMode.TEMPLATE -> setLogDao.insertAll(
+                    referenceSets(
+                        sessionExerciseId = seId,
+                        count = item.templateExercise.targetSets,
+                        reference = emptyList(),
+                        weightOverride = item.templateExercise.targetWeightKg
+                            ?: last.firstOrNull()?.weightKg,
+                        repsOverride = range.min,
+                        isWarmup = item.templateExercise.isWarmup,
+                    )
+                )
+            }
         }
     }
 
@@ -620,23 +652,31 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      * [completed] 只对「编辑已完成的训练」有意义：那时候补录的动作不是草稿，
      * 新加的组直接算作已完成，否则会以灰色「未完成」的样子混在历史里，
      * 既不进容量也不进 PR。
+     *
+     * [targetSets] 传了就按它来（测试工具造数据用），否则按 [prefill] 的来源决定：
+     * 上次 / 历史最好那次的组数，都没有就 3 组。
      */
     suspend fun addExerciseToSession(
         sessionId: Long,
         exerciseId: Long,
-        targetSets: Int = 3,
+        targetSets: Int? = null,
         completed: Boolean = false,
+        prefill: ManualPrefill = ManualPrefill.LAST,
     ): Long = db.withTransaction {
         val order = sessionExerciseDao.nextSortOrder(sessionId)
         val seId = sessionExerciseDao.insert(
             SessionExercise(sessionId = sessionId, exerciseId = exerciseId, sortOrder = order)
         )
-        // 沿用该动作上次练的重量与次数（逐组对齐，PR 组不算），省得从 0 开始调
+        val reference = when (prefill) {
+            ManualPrefill.LAST -> lastReferenceSets(exerciseId)
+            ManualPrefill.BEST -> bestReferenceSets(exerciseId)
+            ManualPrefill.EMPTY -> emptyList()
+        }
         setLogDao.insertAll(
             referenceSets(
                 sessionExerciseId = seId,
-                count = targetSets,
-                reference = lastReferenceSets(exerciseId),
+                count = targetSets ?: reference.size.takeIf { it > 0 } ?: 3,
+                reference = reference,
                 completed = completed,
             )
         )
@@ -717,8 +757,15 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      * 打勾时不能用整行 [updateSet]：界面手里的那行快照可能还没拿到刚填的重量，
      * 整行写回会把重量/次数覆盖成旧值（「打勾后数值归零」就是这么来的）。
      */
-    suspend fun setSetCompleted(id: Long, completed: Boolean) {
-        setLogDao.updateCompleted(id, completed)
+    suspend fun setSetCompleted(
+        id: Long,
+        completed: Boolean,
+        durationMs: Long = 0L,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        // 取消勾选时把完成时刻清回 0：这一组不算做过，留着旧时刻会让
+        // 「训练结束时间」还停在这一组上
+        setLogDao.updateCompleted(id, completed, durationMs, if (completed) at else 0L)
         invalidateStats()
     }
 
@@ -735,6 +782,9 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     }
 
     suspend fun deleteSet(id: Long) {
+        // 显式清一遍递减段：外键是 CASCADE，但依赖 pragma 是否开启，
+        // 自己删一次不吃亏，也不会因为关掉外键就留孤儿行
+        setSegmentDao.deleteForSet(id)
         setLogDao.delete(id)
         invalidateStats()
     }
@@ -743,6 +793,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun deleteSetAndRenumber(id: Long) = db.withTransaction {
         val target = setLogDao.getById(id) ?: return@withTransaction
         val sessionExerciseId = target.sessionExerciseId
+        setSegmentDao.deleteForSet(id)
         setLogDao.delete(id)
         val remaining = setLogDao.getForSessionExercise(sessionExerciseId).sortedBy { it.setNumber }
         remaining.forEachIndexed { index, item ->
@@ -756,19 +807,69 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
 
     suspend fun getSet(id: Long): SetLog? = setLogDao.getById(id)
 
-    /** 完成训练 */
+    // ---------- 递减组 ----------
+
+    /**
+     * 这次训练的全部递减段，按主组 id 分组。
+     *
+     * 不塞进 [SessionExerciseWithSets]：那个关系类被训练页、历史页、分享卡片到处用，
+     * 给它加一个 List 字段会让所有调用点都要改，而且 [SetLog] 是实体、塞不进关系字段。
+     */
+    fun observeSegments(sessionId: Long): Flow<Map<Long, List<SetSegment>>> =
+        setSegmentDao.observeForSession(sessionId).map { list -> list.groupBy { it.setLogId } }
+
+    suspend fun getSegments(sessionId: Long): Map<Long, List<SetSegment>> =
+        setSegmentDao.getForSession(sessionId).groupBy { it.setLogId }
+
+    /**
+     * 给某一组追加一段递减（默认沿用这一组的重量次数，界面只改重量）。
+     *
+     * 段不参与组数统计，也不单独打勾：勾的是主组，整组算一组。
+     */
+    suspend fun addSegment(setLogId: Long, weightKg: Float, reps: Int) {
+        setSegmentDao.appendSegment(setLogId, weightKg, reps)
+        // 容量变了，统计要重算
+        invalidateStats()
+    }
+
+    suspend fun updateSegment(id: Long, weightKg: Float, reps: Int) {
+        setSegmentDao.updateValues(id, weightKg, reps)
+        invalidateStats()
+    }
+
+    /** 删一段，并把后面的段号补上，避免出现 a、c */
+    suspend fun deleteSegmentAndRenumber(id: Long) = db.withTransaction {
+        val target = setSegmentDao.getById(id) ?: return@withTransaction
+        setSegmentDao.delete(id)
+        setSegmentDao.getForSet(target.setLogId).sortedBy { it.seq }.forEachIndexed { index, item ->
+            if (item.seq != index + 1) {
+                setSegmentDao.updateSeq(item.id, index + 1)
+            }
+        }
+        invalidateStats()
+    }
+
     /** 第一组完成时记录实际开始计时时刻 */
     suspend fun markSessionStarted(id: Long, time: Long = System.currentTimeMillis()) =
         sessionDao.markStarted(id, time)
 
+    /**
+     * 完成训练。
+     *
+     * 结束时刻记的是**最后一组打勾的时刻**，不是点「完成训练」的那一刻：
+     * 练完最后一组先去洗澡、收拾东西，十几分钟后才想起点完成，中间那段空闲
+     * 不该算进训练时长（历史里的时长 = endTime − startTime）。
+     * 一组都没打过勾（空训练、或者计划组一个没做）才退回「现在」。
+     */
     suspend fun finishSession(id: Long, name: String, note: String) {
         // 结束 + 推进计划必须一起成功：中途失败会留下「训练已结束、游标没动」，
         // 用户下次进来还看到今天该练这一天，再练一次等于同一天练两遍
         db.withTransaction {
-            sessionDao.finish(id, System.currentTimeMillis(), name.trim(), note.trim())
+            val session = sessionDao.getById(id)
+            sessionDao.finish(id, endTimeOf(id, session), name.trim(), note.trim())
             // 结束一次训练才推进计划：这才是「这一轮练到哪」的权威时刻，
             // 中途放弃的草稿不该让计划往前走一天
-            sessionDao.getById(id)?.let { advancePlanAfter(it) }
+            session?.let { advancePlanAfter(it) }
         }
         // endTime 从 null 变成有值，周容量 / 分类容量的统计口径会跟着变
         invalidateStats()
@@ -778,6 +879,22 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
     suspend fun discardSession(id: Long) {
         sessionDao.delete(id)
         invalidateStats()
+    }
+
+    /**
+     * 这次训练该记成哪一刻结束：最后一组打勾的时刻，夹在 [开始, 现在] 之间。
+     *
+     * 夹上界只为兜住「系统时间被往回调过」；夹下界是因为早于开始时刻的话
+     * 历史里的时长会变成负数。没有可用的组时刻（v16 及更早的老数据、
+     * 一组都没打勾）就记「现在」，跟以前一样。
+     */
+    private suspend fun endTimeOf(sessionId: Long, session: WorkoutSession?): Long {
+        val now = System.currentTimeMillis()
+        val start = (session?.activeStartedAt ?: session?.startTime) ?: return now
+        val lastSetAt = setLogDao.lastCompletedAt(sessionId) ?: return now
+        // coerceIn 要求下界 ≤ 上界，时钟被调回去时先自己挡住
+        if (start >= now) return now
+        return lastSetAt.coerceIn(start, now)
     }
 
     /**
@@ -1164,17 +1281,28 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
             .ifEmpty { sessionDao.lastSessionSetsWithPr(exerciseId) }
 
     /**
+     * 预填用的「历史最好参考组」。
+     *
+     * 取单组容量最大的那次训练的完整组序列（口径见 [SetLogDao.bestSessionSets]），
+     * 这样每组都能对齐到「状态最好那天第 n 组做了多少」。
+     */
+    suspend fun bestReferenceSets(exerciseId: Long): List<SetLog> =
+        sessionDao.bestSessionSets(exerciseId)
+
+    /**
      * 按组号把上次的重量次数铺进新加的 [count] 组：
      * 第 n 组对齐上次第 n 组，上次没有这一组就沿用它之前最后一组。
      *
      * 这样练的时候每组都是「上次这一组练了什么」，不用自己回想；
      * [weightOverride] 非空（模板里写了目标重量）时重量统一用它，次数仍照上次填。
+     * [repsOverride] 非空时次数也统一用它——「按模板设置」就是把目标次数铺满每一组。
      */
     private fun referenceSets(
         sessionExerciseId: Long,
         count: Int,
         reference: List<SetLog>,
         weightOverride: Float? = null,
+        repsOverride: Int? = null,
         completed: Boolean = false,
         isWarmup: Boolean = false,
     ): List<SetLog> {
@@ -1187,7 +1315,7 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                 sessionExerciseId = sessionExerciseId,
                 setNumber = n,
                 weightKg = weightOverride ?: ref?.weightKg ?: 0f,
-                reps = ref?.reps ?: 0,
+                reps = repsOverride ?: ref?.reps ?: 0,
                 completed = completed,
                 isWarmup = isWarmup,
             )
@@ -1305,11 +1433,14 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
      */
     suspend fun buildCsvExport(): String {
         val sb = StringBuilder()
-        sb.append("date,exercise,category,sets,reps,weight_kg,volume_kg\n")
+        // segment 列：主组留空，递减段写 a/b/c（和界面上「3a」对应）——
+        // 组号列保持纯数字，不然整列会变成文本，用户在表格里没法算
+        sb.append("date,exercise,category,sets,segment,reps,weight_kg,volume_kg\n")
         // limit = -1 是 SQLite 的「不限条数」；用历史页那套默认值会静默截断
         val bodyweight = latestWeightKg()
         sessionDao.observeSummaries(limit = -1).first().forEach { summary ->
             val details = sessionDao.getWithDetails(summary.id) ?: return@forEach
+            val segments = setSegmentDao.getForSession(summary.id).groupBy { it.setLogId }
             val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
                 .format(java.util.Date(summary.startTime))
             details.exercises.sortedBySessionOrder().forEach { item ->
@@ -1318,17 +1449,37 @@ class WorkoutRepository(private val dbProvider: () -> AppDatabase) {
                         Load.effectiveKg(set.weightKg, item.exercise.equipment, bodyweight) * set.reps
                     sb.append(
                         // Locale.US：默认 Locale 是德语/法语时小数点会变成逗号，整列错位
-                        "%s,%s,%s,%d,%d,%.1f,%.1f\n".format(
+                        "%s,%s,%s,%d,%s,%d,%.1f,%.1f\n".format(
                             java.util.Locale.US,
                             date,
                             escapeCsv(item.exercise.name),
                             item.exercise.category,
                             set.setNumber,
+                            "",
                             set.reps,
                             set.weightKg,
                             volume,
                         )
                     )
+                    // 递减段各自一行，容量各算各的（和统计口径一致）
+                    segments[set.id].orEmpty().sortedBy { it.seq }.forEach { segment ->
+                        val segmentVolume =
+                            Load.effectiveKg(segment.weightKg, item.exercise.equipment, bodyweight) *
+                                segment.reps
+                        sb.append(
+                            "%s,%s,%s,%d,%s,%d,%.1f,%.1f\n".format(
+                                java.util.Locale.US,
+                                date,
+                                escapeCsv(item.exercise.name),
+                                item.exercise.category,
+                                set.setNumber,
+                                segment.label,
+                                segment.reps,
+                                segment.weightKg,
+                                segmentVolume,
+                            )
+                        )
+                    }
                 }
             }
         }

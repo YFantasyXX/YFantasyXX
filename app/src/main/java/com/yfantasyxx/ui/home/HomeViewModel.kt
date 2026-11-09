@@ -101,7 +101,10 @@ class HomeViewModel(
         if (starting) return
         starting = true
         viewModelScope.launch {
-            runCatching { repo.startSession(templateId = templateId) }
+            // 冷启动后立刻点「开始」时，settings 可能还停在默认值上，
+            // 这里等它读到磁盘那份（有 3 秒兜底，读不出来就用当前值）
+            val mode = settingsRepo.awaitSettings().templateStartMode
+            runCatching { repo.startSession(templateId = templateId, templateStart = mode) }
                 .onSuccess { id ->
                     onReady(id)
                     starting = false

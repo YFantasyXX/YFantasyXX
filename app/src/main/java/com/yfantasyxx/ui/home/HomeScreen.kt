@@ -357,7 +357,11 @@ fun HomeScreen(
             // ---- 模板快捷开始 ----
             if (state.templates.isNotEmpty()) {
                 item { SectionHeader("从模板开始") }
-                items(state.templates.take(6), key = { it.id }) { tpl ->
+                // key 必须带类型前缀：首页这条 LazyColumn 里同时有模板和训练记录，
+                // 两者的 id 各自从 1 开始，直接用 it.id 会在「新建的第一个模板」
+                // 遇到「第一条训练记录」时撞成同一个 key（Key "1" already used），
+                // 直接把首页重组打崩。
+                items(state.templates.take(6), key = { "tpl_${it.id}" }) { tpl ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -437,7 +441,7 @@ fun HomeScreen(
                     )
                 }
             } else {
-                items(state.recentSessions, key = { it.id }) { session ->
+                items(state.recentSessions, key = { "session_${it.id}" }) { session ->
                     SessionRow(
                         session = session,
                         unitLabel = "kg",

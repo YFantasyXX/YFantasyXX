@@ -1,5 +1,6 @@
 package com.yfantasyxx.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.ForeignKey
@@ -326,8 +327,66 @@ data class SetLog(
     val isPr: Boolean = false,
     /** 是否已完成 */
     val completed: Boolean = false,
+    /**
+     * 这一组实际做了多久（毫秒）：从**上一次休息结束**打勾的那一刻算起。
+     *
+     * 记录的是「两次休息中间隔了多久」，不含休息本身，所以能直接看出
+     * 一组做得多快/多慢。0 表示没有记录：v15 及更早的历史、还没做的组。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val durationMs: Long = 0L,
+    /**
+     * 打勾（真正做完这一组）的时刻。
+     *
+     * 训练结束时间按「最后一组打勾的时刻」记，而不是按点「完成训练」的时刻：
+     * 练完最后一组先去洗澡、收拾东西，十几分钟后才想起来点完成，中间那段
+     * 空闲不该算进训练时长。取消勾选时清回 0，这一组就不算了。
+     *
+     * 0 表示没有记录：v16 及更早的历史、还没做的组。注意不能用 [loggedAt]
+     * 反推 —— 那是建行（排组）的时刻，早于真正做这一组。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val completedAt: Long = 0L,
     val loggedAt: Long = System.currentTimeMillis(),
 )
+
+/**
+ * 递减组里的一段（主组之外的那些续做）。
+ *
+ * 主组本身仍然是一行 [SetLog]（重量、次数就是第一段），这张表只放**后面降重量续做**的段：
+ * 100 kg × 6 做完直接降到 80 kg 又做 6 个，那就是主组 + 一段 80×6。
+ *
+ * 为什么不把每一段都做成一行 set_logs：
+ * - 组数、勾选、休息计时、「上次这个动作」全是按「一行 = 一组」写的，多插行会把它们全部搞乱；
+ * - 递减段没有独立的完成状态，勾的是主组；单独成组还会让组号跳号。
+ *
+ * 所以口径是：**主组 + 所有段 = 1 组**。容量把各段相加（见 [com.yfantasyxx.data.EffectiveVolume]），
+ * 但「上次/历史最好」的参考只看主组 —— 否则 100×6+80×6 会被当成 1080 kg，下次预填直接飞天。
+ */
+@Entity(
+    tableName = "set_segments",
+    foreignKeys = [
+        ForeignKey(
+            entity = SetLog::class,
+            parentColumns = ["id"],
+            childColumns = ["setLogId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("setLogId")]
+)
+data class SetSegment(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val setLogId: Long,
+    /** 段序号，1 起：1 -> a、2 -> b（主组本身不占号） */
+    val seq: Int,
+    val weightKg: Float = 0f,
+    val reps: Int = 0,
+) {
+    /** 界面上的小标号：3 组下面的第一段叫 3a */
+    val label: String get() = ('a' + (seq - 1).coerceIn(0, 25)).toString()
+}
 
 /**
  * 身体数据记录（体重等）

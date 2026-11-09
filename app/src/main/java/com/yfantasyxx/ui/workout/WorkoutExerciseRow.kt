@@ -65,6 +65,11 @@ internal fun WorkoutExerciseRow(
     canSupersetWithNext: Boolean,
     progressionMode: com.yfantasyxx.data.ProgressionMode,
     onApplyProgression: (Float, Int) -> Unit,
+    /** 主组 id → 递减段 */
+    segments: Map<Long, List<com.yfantasyxx.data.db.SetSegment>>,
+    onAddSegment: (SetLog) -> Unit,
+    onUpdateSegment: (com.yfantasyxx.data.db.SetSegment, Float, Int) -> Unit,
+    onDeleteSegment: (com.yfantasyxx.data.db.SetSegment) -> Unit,
 ) {
     val id = item.sessionExercise.id
     val isDragging = drag.draggingId == id
@@ -202,6 +207,10 @@ internal fun WorkoutExerciseRow(
                 onOpenPlateCalculator = onOpenPlateCalculator,
                 progressionMode = progressionMode,
                 onApplyProgression = onApplyProgression,
+                segments = segments,
+                onAddSegment = onAddSegment,
+                onUpdateSegment = onUpdateSegment,
+                onDeleteSegment = onDeleteSegment,
             )
         }
 

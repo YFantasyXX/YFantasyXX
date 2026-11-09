@@ -33,8 +33,8 @@ android {
         applicationId = "com.yfantasyxx"
         minSdk = 32
         targetSdk = 36
-        versionCode = 134
-        versionName = "1.7"
+        versionCode = 142
+        versionName = "1.8"
     }
 
     androidResources {

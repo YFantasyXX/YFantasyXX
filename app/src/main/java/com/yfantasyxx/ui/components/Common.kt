@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -62,10 +63,21 @@ import com.yfantasyxx.ui.theme.Spacing
 import top.yukonga.miuix.kmp.basic.Surface
 import java.util.Locale
 
+/**
+ * 卡片内部的「凹槽」底色：输入框、迷你胶囊、进度条轨道。
+ *
+ * 不能直接用 surfaceContainer —— Card 本身就是 surfaceContainer，画上去等于没画
+ * （模板编辑里「休息」「设为热身」曾经看起来像两段普通文字）；也不能用 surface，
+ * 那是页面色，深色下比卡片还黑，会像挖了个洞。用 onSurface 的极低透明度叠一层，
+ * 深浅两套主题下都能稳定看出边界，且不需要再记一套色值。
+ */
+@Composable
+fun cardInsetColor(alpha: Float = 0.07f): Color =
+    MiuixTheme.colorScheme.onSurface.copy(alpha = alpha)
+
 /** 页面分组标题 */
 @Composable
-fun SectionHeader(
-    title: String,
+fun SectionHeader(    title: String,
     modifier: Modifier = Modifier,
     trailing: @Composable (() -> Unit)? = null,
 ) {
@@ -152,6 +164,11 @@ fun NumberStepper(
      * —— 表现就是「勾完一组，页面自己滚到别处」。
      */
     rememberKey: Any? = null,
+    /**
+     * 小一号。递减段那种从属行用：24dp 圆钮 + 更窄的数字位 + 12.5sp。
+     * 主行的加减号维持 30dp —— 训练时按得最多，缩小了不好按。
+     */
+    compact: Boolean = false,
 ) {
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
@@ -200,13 +217,15 @@ fun NumberStepper(
         modifier = modifier
             .clip(RoundedCornerShape(Radius.Control))
             .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 3.dp, vertical = 3.dp),
+            .padding(horizontal = if (compact) 2.dp else 3.dp, vertical = if (compact) 2.dp else 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         StepButton(
             icon = Icons.Filled.Remove,
             description = "减少",
+            buttonSize = if (compact) 24.dp else 30.dp,
+            iconSize = if (compact) 12.dp else 15.dp,
             onClick = {
                 val base = if (editing) commit() else value
                 val next = base - step
@@ -217,7 +236,7 @@ fun NumberStepper(
         // 数字区：点击进入输入态
         Box(
             modifier = Modifier
-                .width(58.dp)
+                .width(if (compact) 46.dp else 58.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .then(
                     if (!editing) {
@@ -246,7 +265,7 @@ fun NumberStepper(
                     },
                     textStyle = TextStyle(
                         color = MiuixTheme.colorScheme.onSurface,
-                        fontSize = 15.sp,
+                        fontSize = if (compact) 12.5.sp else 15.sp,
                         textAlign = TextAlign.Center,
                         fontWeight = FontWeight.Medium,
                     ),
@@ -281,11 +300,11 @@ fun NumberStepper(
                     text = displayText,
                     style = MiuixTheme.textStyles.main,
                     color = MiuixTheme.colorScheme.onSurface,
-                    fontSize = 15.sp,
+                    fontSize = if (compact) 12.5.sp else 15.sp,
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    modifier = Modifier.padding(vertical = 5.dp),
+                    modifier = Modifier.padding(vertical = if (compact) 3.dp else 5.dp),
                 )
             }
         }
@@ -293,6 +312,8 @@ fun NumberStepper(
         StepButton(
             icon = Icons.Filled.Add,
             description = "增加",
+            buttonSize = if (compact) 24.dp else 30.dp,
+            iconSize = if (compact) 12.dp else 15.dp,
             onClick = {
                 val base = if (editing) commit() else value
                 onValueChange(base + step)
@@ -305,11 +326,13 @@ fun NumberStepper(
 private fun StepButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     description: String,
+    buttonSize: androidx.compose.ui.unit.Dp = 30.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 15.dp,
     onClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
-            .size(30.dp)
+            .size(buttonSize)
             .clip(CircleShape)
             .background(MiuixTheme.colorScheme.surface)
             // 按下时缩得更明显一点：加减号是训练时按得最多的按钮，
@@ -321,7 +344,7 @@ private fun StepButton(
         Icon(
             imageVector = icon,
             contentDescription = description,
-            modifier = Modifier.size(15.dp),
+            modifier = Modifier.size(iconSize),
             tint = MiuixTheme.colorScheme.onSurface,
         )
     }
@@ -645,6 +668,23 @@ fun formatSessionDuration(millis: Long): String {
         hours == 0L -> "$rest 分钟"
         rest == 0L -> "$hours 小时"
         else -> "$hours 小时 $rest 分"
+    }
+}
+
+/**
+ * 组内用时：两次休息之间的间隔（见 util/SetClock）。
+ *
+ * 不过 1 分钟直接给秒 —— 「45s」比「0 分钟」有意义；超过 1 小时退成 h:mm。
+ * 0 表示没记录（还没做的组、v15 及更早的老记录），返回空串，
+ * 由调用方决定是留白还是整格不画：不能显示成「0s」。
+ */
+fun formatSetDuration(millis: Long): String {
+    if (millis <= 0L) return ""
+    val s = (millis / 1000L).coerceAtLeast(1L)
+    return when {
+        s < 60L -> "${s}s"
+        s < 3600L -> "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+        else -> "${s / 3600}h${((s % 3600) / 60).toString().padStart(2, '0')}"
     }
 }
 

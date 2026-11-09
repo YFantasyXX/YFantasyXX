@@ -271,10 +271,18 @@ interface SessionDao {
                         -- 有效负荷：自重动作的重量栏是「额外负重」，容量要把体重算进去。
                         -- 不改 weightKg 本身，因为次数/RPE/PR 都还要用原始值。
                         -- 与 data/Load.kt 的 effectiveKg 保持一致
+                        -- 递减段同样要算进来：100×6 + 80×6 是一组练了两个重量，
+                        -- 只算主组会把练过的量记少
                         CASE WHEN e2.equipment = '自重'
                              THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
                                              ORDER BY bm.date DESC LIMIT 1), 0) + sl2.weightKg) * sl2.reps
-                             ELSE sl2.weightKg * sl2.reps END)
+                                  + COALESCE((SELECT SUM(
+                                        (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                                   ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                                        FROM set_segments sg WHERE sg.setLogId = sl2.id), 0)
+                             ELSE sl2.weightKg * sl2.reps
+                                  + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                                        FROM set_segments sg WHERE sg.setLogId = sl2.id), 0) END)
                     FROM set_logs sl2
                     INNER JOIN session_exercises se3 ON sl2.sessionExerciseId = se3.id
                     INNER JOIN exercises e2 ON se3.exerciseId = e2.id
@@ -373,7 +381,14 @@ interface SessionDao {
             CASE WHEN e.equipment = '自重'
                  THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
                                  ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
-                 ELSE sl.weightKg * sl.reps END) AS volume
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END) AS volume
         FROM sessions s
         INNER JOIN session_exercises se ON se.sessionId = s.id
         INNER JOIN set_logs sl ON sl.sessionExerciseId = se.id
@@ -392,7 +407,14 @@ interface SessionDao {
             CASE WHEN e.equipment = '自重'
                  THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
                                  ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
-                 ELSE sl.weightKg * sl.reps END) AS volume
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END) AS volume
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
@@ -464,7 +486,14 @@ interface SessionDao {
             CASE WHEN e.equipment = '自重'
                  THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
                                  ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
-                 ELSE sl.weightKg * sl.reps END), 0)
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END), 0)
         FROM set_logs sl
         INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
         INNER JOIN sessions s ON se.sessionId = s.id
@@ -573,6 +602,47 @@ interface SessionDao {
         """
     )
     suspend fun lastSessionSetsWithPr(exerciseId: Long): List<SetLog>
+
+    /**
+     * 某动作「练得最好」那一次训练里的全部工作组（设置里「历史最好」预填用）。
+     *
+     * 「最好」按单组容量 `重量 × 次数` 排，不是单看重量：
+     * 20kg×10 和 10kg×20 容量相同，但后者更像耐力组，
+     * 真按重量挑会漏掉高次数那次的完成度。容量相同时先比重、再比次数：
+     * 自重动作（重量栏是额外负重，纯自重时记 0）容量恒为 0，
+     * 这时唯一有意义的「更好」就是那次做了更多下。
+     * 最后按时间倒序，保证结果稳定（不然每次查询可能挑出不同的一次）。
+     *
+     * 排除热身与 PR 组，口径和 [lastSessionSets] 一致；
+     * 一次训练里同一动作出现两次（分在两个 sessionExercise 里）时
+     * 会一起返回，按组号排序对使用方来说正好是「接着练」。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId
+          AND s.endTime IS NOT NULL
+          AND sl.completed = 1 AND sl.isWarmup = 0
+          AND se.sessionId = (
+              SELECT se2.sessionId FROM set_logs sl2
+              INNER JOIN session_exercises se2 ON sl2.sessionExerciseId = se2.id
+              INNER JOIN sessions s2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId
+                AND s2.endTime IS NOT NULL
+                AND sl2.completed = 1 AND sl2.isWarmup = 0
+              GROUP BY se2.sessionId
+              ORDER BY MAX(sl2.weightKg * sl2.reps) DESC,
+                       MAX(sl2.weightKg) DESC,
+                       MAX(sl2.reps) DESC,
+                       s2.startTime DESC
+              LIMIT 1
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun bestSessionSets(exerciseId: Long): List<SetLog>
 
     /**
      * 历史详情用：某动作在「这次训练之前」最近一次训练里的最强工作组。
@@ -738,8 +808,26 @@ interface SetLogDao {
      * 用整行 @Update 写回会把刚填的重量/次数一起覆盖掉（表现为「打勾后数值归零」）。
      * 所以打勾、打 PR 这类单列操作一律走列级 UPDATE。
      */
-    @Query("UPDATE set_logs SET completed = :completed WHERE id = :id")
-    suspend fun updateCompleted(id: Long, completed: Boolean)
+    @Query(
+        "UPDATE set_logs SET completed = :completed, durationMs = :durationMs, " +
+            "completedAt = :completedAt WHERE id = :id"
+    )
+    suspend fun updateCompleted(id: Long, completed: Boolean, durationMs: Long, completedAt: Long)
+
+    /**
+     * 这次训练里最后一组打勾的时刻；一组都没打过勾返回 null。
+     *
+     * set_logs 只挂 sessionExerciseId，所以要 join 回 session_exercises 才能按训练过滤。
+     * 只认 completedAt > 0：v16 及更早的历史没有这个字段，返回 null 让调用方退回「现在」。
+     */
+    @Query(
+        """
+        SELECT MAX(s.completedAt) FROM set_logs s
+        INNER JOIN session_exercises se ON se.id = s.sessionExerciseId
+        WHERE se.sessionId = :sessionId AND s.completed = 1 AND s.completedAt > 0
+        """
+    )
+    suspend fun lastCompletedAt(sessionId: Long): Long?
 
     @Query("UPDATE set_logs SET isPr = :isPr WHERE id = :id")
     suspend fun updatePr(id: Long, isPr: Boolean)
@@ -777,10 +865,10 @@ interface SetLogDao {
      */
     @Query(
         """
-        INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, completed, isWarmup, isPr, loggedAt)
+        INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, completed, isWarmup, isPr, durationMs, loggedAt)
         SELECT :sessionExerciseId,
                COALESCE(MAX(setNumber), 0) + 1,
-               :weightKg, :reps, :completed, 0, 0, :loggedAt
+               :weightKg, :reps, :completed, 0, 0, 0, :loggedAt
         FROM set_logs WHERE sessionExerciseId = :sessionExerciseId
         """
     )
@@ -791,6 +879,85 @@ interface SetLogDao {
         completed: Boolean,
         loggedAt: Long,
     )
+}
+
+/**
+ * 递减组的续做段（主组之外的第二、第三段）。
+ *
+ * 主组自己在 set_logs 里，这里只放「降重量接着做」的那些段；
+ * 一段都没有时，这一组就是普通组，行为与以前完全一致。
+ */
+@Dao
+interface SetSegmentDao {
+    /**
+     * 这次训练的全部递减段，按主组 + 段号排好。
+     *
+     * set_segments 只挂 setLogId，要 join 两层才能按训练过滤（和 [SetLogDao.lastCompletedAt] 同样的做法）。
+     * 界面按 setLogId 分组挂到对应组行下面。
+     */
+    @Query(
+        """
+        SELECT sg.* FROM set_segments sg
+        INNER JOIN set_logs sl ON sl.id = sg.setLogId
+        INNER JOIN session_exercises se ON se.id = sl.sessionExerciseId
+        WHERE se.sessionId = :sessionId
+        ORDER BY sg.setLogId, sg.seq
+        """
+    )
+    fun observeForSession(sessionId: Long): Flow<List<SetSegment>>
+
+    @Query(
+        """
+        SELECT sg.* FROM set_segments sg
+        INNER JOIN set_logs sl ON sl.id = sg.setLogId
+        INNER JOIN session_exercises se ON se.id = sl.sessionExerciseId
+        WHERE se.sessionId = :sessionId
+        ORDER BY sg.setLogId, sg.seq
+        """
+    )
+    suspend fun getForSession(sessionId: Long): List<SetSegment>
+
+    @Query("SELECT * FROM set_segments WHERE setLogId = :setLogId ORDER BY seq")
+    suspend fun getForSet(setLogId: Long): List<SetSegment>
+
+    @Query("SELECT * FROM set_segments WHERE id = :id")
+    suspend fun getById(id: Long): SetSegment?
+
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM set_segments WHERE setLogId = :setLogId")
+    suspend fun maxSeq(setLogId: Long): Int
+
+    @Insert
+    suspend fun insert(segment: SetSegment): Long
+
+    /**
+     * 追加一段，段号在同一条语句里算。
+     *
+     * 和 [SetLogDao.appendSet] 同样的坑：先 `MAX(seq)` 再 INSERT 是两次调用、
+     * 中间有挂起点，连点两下会插出两段同号。
+     */
+    @Query(
+        """
+        INSERT INTO set_segments (setLogId, seq, weightKg, reps)
+        VALUES (:setLogId,
+                (SELECT COALESCE(MAX(seq), 0) + 1 FROM set_segments WHERE setLogId = :setLogId),
+                :weightKg, :reps)
+        """
+    )
+    suspend fun appendSegment(setLogId: Long, weightKg: Float, reps: Int)
+
+    /** 和组行一样只写数值列：界面手里的快照可能已经过期 */
+    @Query("UPDATE set_segments SET weightKg = :weightKg, reps = :reps WHERE id = :id")
+    suspend fun updateValues(id: Long, weightKg: Float, reps: Int)
+
+    @Query("UPDATE set_segments SET seq = :seq WHERE id = :id")
+    suspend fun updateSeq(id: Long, seq: Int)
+
+    @Query("DELETE FROM set_segments WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    /** 主组被删时兜底清一遍；正常路径由外键级联负责 */
+    @Query("DELETE FROM set_segments WHERE setLogId = :setLogId")
+    suspend fun deleteForSet(setLogId: Long)
 }
 
 @Dao
@@ -877,11 +1044,12 @@ interface PlanDao {
         WorkoutSession::class,
         SessionExercise::class,
         SetLog::class,
+        SetSegment::class,
         BodyMetric::class,
         PlanEntity::class,
         PlanDay::class,
     ],
-    version = 15,
+    version = 18,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -890,6 +1058,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
     abstract fun sessionExerciseDao(): SessionExerciseDao
     abstract fun setLogDao(): SetLogDao
+    abstract fun setSegmentDao(): SetSegmentDao
     abstract fun bodyMetricDao(): BodyMetricDao
     abstract fun planDao(): PlanDao
 
@@ -998,6 +1167,64 @@ abstract class AppDatabase : RoomDatabase() {
          * 老数据搬一次：第一个开了 rotation 的文件夹 → 一个激活的计划，
          * 模板按原顺序排成训练日，restDays 接在末尾。
          */
+        /**
+         * v17 -> v18：递减组。
+         *
+         * 主组仍然是 set_logs 的一行，这张表只存「降重量接着做」的那些段。
+         * 单独成表而不是往 set_logs 里多插行：组数、勾选、休息计时、
+         * 「上次这个动作」全是按「一行 = 一组」写的，多插行会把它们全都搞乱。
+         *
+         * 外键用 CASCADE：删掉主组时，它的段跟着消失，不留孤儿行。
+         * 建表语句必须与 Room 生成的 schema 完全一致，否则打开库时校验不过。
+         */
+        val MIGRATION_17_18 = object : androidx.room.migration.Migration(17, 18) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `set_segments` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`setLogId` INTEGER NOT NULL, " +
+                        "`seq` INTEGER NOT NULL, " +
+                        "`weightKg` REAL NOT NULL, " +
+                        "`reps` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`setLogId`) REFERENCES `set_logs`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_set_segments_setLogId` " +
+                        "ON `set_segments` (`setLogId`)"
+                )
+            }
+        }
+
+        /**
+         * v16 -> v17：每组补「这一组是哪一刻打完勾的」。
+         *
+         * 训练结束时间要按最后一组的完成时刻算（见 [WorkoutSession.endTime]），
+         * 光有 durationMs 推不出来 —— 那只记了组内时长，没有绝对时刻。
+         * 旧数据统一 0（未知），完成训练时退回「现在」。
+         */
+        val MIGRATION_16_17 = object : androidx.room.migration.Migration(16, 17) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE set_logs ADD COLUMN completedAt INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        /**
+         * v15 -> v16：每组补「这一组做了多久」。
+         *
+         * 旧数据没记过时间，统一 0（未知），组行上就不显示这一格；
+         * 不能拿 loggedAt 去反推 —— 那是建行（排计划组）的时刻，不是做完的时刻。
+         */
+        val MIGRATION_15_16 = object : androidx.room.migration.Migration(15, 16) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE set_logs ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         val MIGRATION_14_15 = object : androidx.room.migration.Migration(14, 15) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL(

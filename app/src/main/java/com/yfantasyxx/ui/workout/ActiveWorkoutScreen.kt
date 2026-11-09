@@ -67,6 +67,7 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
     val container = rememberAppContainer()
     val vm: WorkoutViewModel = viewModel(factory = WorkoutViewModel.factory(container))
     val exercises by vm.exercises.collectAsStateWithLifecycle()
+    val segments by vm.segments.collectAsStateWithLifecycle()
     val lastPerformance by vm.lastPerformance.collectAsStateWithLifecycle()
     val bodyweight by vm.bodyweight.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
@@ -443,6 +444,10 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
                         onApplyProgression = { weight, reps ->
                             vm.applyProgression(item, weight, reps)
                         },
+                        segments = segments,
+                        onAddSegment = vm::addSegment,
+                        onUpdateSegment = vm::updateSegment,
+                        onDeleteSegment = vm::deleteSegment,
                     )
                 }
 
@@ -572,6 +577,8 @@ fun ActiveWorkoutScreen(onBack: () -> Unit) {
         if (showFinishDialog) {
             FinishDialog(
                 defaultName = defaultSessionName,
+                // 打开对话框这一刻取一次：对话框里的提示不该跟着背后列表动
+                lastCompletedSetAt = remember { vm.lastCompletedSetAt() },
                 onDismiss = { showFinishDialog = false },
                 onConfirm = { name, note ->
                     showFinishDialog = false
