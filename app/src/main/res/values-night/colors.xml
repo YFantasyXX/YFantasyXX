@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      暗色模式下的图标底色。
+
+      浅色是品牌红 #F8114E，暗色换成纯黑，让同一份前景图案看起来像「黑底图标」。
+      只影响 mipmap-anydpi-v26 里 adaptive-icon 的 background 层：
+      ic_launcher.xml / ic_launcher_round.xml 都引用 @color/ic_launcher_background，
+      这里按 night 限定符覆盖，不用改那两份 XML。
+    -->
+    <color name="ic_launcher_background">#000000</color>
+</resources>

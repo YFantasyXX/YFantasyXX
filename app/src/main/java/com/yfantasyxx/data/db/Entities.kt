@@ -1,0 +1,583 @@
+package com.yfantasyxx.data.db
+
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+/** 动作分类 */
+object ExerciseCategory {
+    const val CHEST = "胸"
+    const val BACK = "背"
+    const val LEGS = "腿"
+    const val SHOULDERS = "肩"
+    const val ARMS = "手臂"
+    const val CORE = "核心"
+    const val CARDIO = "有氧"
+    const val FULL_BODY = "全身"
+
+    val all = listOf(CHEST, BACK, LEGS, SHOULDERS, ARMS, CORE, CARDIO, FULL_BODY)
+}
+
+/** 器械类型 */
+object Equipment {
+    const val BARBELL = "杠铃"
+    const val DUMBBELL = "哑铃"
+    const val MACHINE = "器械"
+    const val CABLE = "绳索"
+    const val BODYWEIGHT = "自重"
+    const val KETTLEBELL = "壶铃"
+    const val BAND = "弹力带"
+    const val OTHER = "其他"
+
+    val all = listOf(BARBELL, DUMBBELL, MACHINE, CABLE, BODYWEIGHT, KETTLEBELL, BAND, OTHER)
+}
+
+/**
+ * 动作库
+ */
+@Entity(tableName = "exercises")
+data class Exercise(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    /** 分类，见 [ExerciseCategory] */
+    val category: String,
+    /** 器械，见 [Equipment] */
+    val equipment: String = Equipment.OTHER,
+    val primaryMuscle: String = "",
+    /**
+     * 次要肌群，逗号分隔（如「肱三头肌,三角肌前束」）。
+     *
+     * 热力图和疲劳度按「主肌群计 1 组、次肌群计 0.5 组」折算，
+     * 否则卧推只算胸、不算三头与前束，胸日看起来练了很多、手臂却永远是 0。
+     */
+    val secondaryMuscles: String = "",
+    /**
+     * rep-max 曲线分档，见 `LiftPattern`；0 表示通用（回落到七公式融合）。
+     *
+     * 换算是「1RM = 这组重量 / 该次数对应的比例」，比例表按动作类型分档——
+     * 同一次数下硬拉离 1RM 比卧推更远，一条曲线套所有动作会系统性低估硬拉。
+     */
+    val pattern: Int = 0,
+    val note: String = "",
+    /** 该动作的默认组间休息秒数；null 表示使用全局默认 */
+    val restSeconds: Int? = null,
+    /** 用户自定义动作 */
+    val isCustom: Boolean = false,
+    /** 归档（隐藏但保留历史关联） */
+    val archived: Boolean = false,
+)
+
+/**
+ * 训练模板
+ */
+@Entity(tableName = "templates")
+data class WorkoutTemplate(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val note: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    /** 所属文件夹；null 表示未分组 */
+    val folderId: Long? = null,
+    /** 同组内排序 */
+    val sortOrder: Int = 0,
+)
+
+/**
+ * 模板文件夹（用于给模板分类）
+ */
+@Entity(tableName = "template_folders")
+data class TemplateFolder(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val sortOrder: Int = 0,
+    /** 该文件夹下的模板是否在首页快捷开始区显示 */
+    val showOnHome: Boolean = true,
+    /**
+     * 计划轮换：把文件夹里勾了此项的模板当成 A/B/C 循环，
+     * 首页给出「练完 A 下一个是 B」的入口，而不是按星期几排。
+     */
+    val rotation: Boolean = false,
+    /**
+     * 每轮结束后休息几个自然日（三分化「练三休一」就是 3 个模板 + 1 天）。
+     *
+     * 只在轮换（[rotation]）开启时生效，且**不按周排**：练完这一轮的最后一个模板后，
+     * 从那天起往后数 [restDays] 天提醒休息，休满回到第一个模板。
+     * 中间断了几天也不惩罚——超过 [restDays] 直接算「今天可以练」。
+     */
+    val restDays: Int = 0,
+    /**
+     * 计划游标：下一个该练的模板 id。
+     *
+     * 存 **id 而不是下标**，是因为改计划不能动进度：把「腿日」拖到第一位之后，
+     * 「上次练到第 3 个 → 下一个第 1 个」这种按位置推的说法就全错了，
+     * 休息日还会凭空消失。存 id 则重排、加模板、减模板都不影响「该练哪个」。
+     * null 表示还没建立游标，按训练历史推一次。
+     */
+    val cycleNextTemplateId: Long? = null,
+    /**
+     * 本轮最后一个模板的完成时刻。休息天数从这里起算，和 [restDays] 配合。
+     *
+     * 只在「刚练完这一轮」时有值；推进到中间某天时清空。
+     * 存成绝对时间而不是「休息到哪天」：改休息天数时锚点不变，只重算还算几天。
+     */
+    val cycleEndedAt: Long? = null,
+)
+
+/**
+ * 训练计划。
+ *
+ * 一个计划就是一串「天」：[PlanDay] 按 [PlanDay.position] 排成循环，
+ * 每一天要么是一个模板（训练日），要么是 null 模板（休息日）。
+ * 三分化练三休一 = 推 / 拉 / 腿 / 休息 四条，练完休息日再回到推。
+ *
+ * 同时只有一个计划是激活的（[isActive]），首页只提示激活的那个。
+ */
+@Entity(tableName = "training_plans")
+data class PlanEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val isActive: Boolean = false,
+    /** 下一个该做的位置，对应 [PlanDay.position]；进度只存这一个数 */
+    val nextIndex: Int = 0,
+    /**
+     * 当前这一天从哪个本地零点开始。
+     *
+     * 休息日靠它按自然日流过：休息日占满一整天，第二天自动进入下一天。
+     * 训练日则一直停在这里，练完才推进——中间断了几天也不会错位。
+     */
+    val dayStartedAt: Long = 0L,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+/** 计划里的一天；[templateId] 为 null 表示休息日 */
+@Entity(
+    tableName = "plan_days",
+    foreignKeys = [
+        ForeignKey(
+            entity = PlanEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["planId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        // 模板被删掉时把这一天一起删掉：留着会变成一天「假休息日」，
+        // 比计划少一天更让人困惑
+        ForeignKey(
+            entity = WorkoutTemplate::class,
+            parentColumns = ["id"],
+            childColumns = ["templateId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("planId"), Index("templateId")]
+)
+data class PlanDay(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val planId: Long,
+    val position: Int,
+    val templateId: Long? = null,
+)
+
+/**
+ * 模板内的动作条目
+ */
+@Entity(
+    tableName = "template_exercises",
+    foreignKeys = [
+        ForeignKey(
+            entity = WorkoutTemplate::class,
+            parentColumns = ["id"],
+            childColumns = ["templateId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Exercise::class,
+            parentColumns = ["id"],
+            childColumns = ["exerciseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("templateId"), Index("exerciseId")]
+)
+data class TemplateExercise(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val templateId: Long,
+    val exerciseId: Long,
+    val sortOrder: Int = 0,
+    val targetSets: Int = 3,
+    /** 旧字段：自由文本（「8-12」）。只作为兼容保留，逻辑一律看 min/max */
+    val targetReps: String = "8-12",
+    /** 目标次数下限（含）。null 表示没有设定 */
+    val targetRepsMin: Int? = null,
+    /** 目标次数上限（含）。等于下限时表示固定次数 */
+    val targetRepsMax: Int? = null,
+    /** 目标重量（kg）；null 表示不指定，训练时用上次重量或手动填 */
+    val targetWeightKg: Float? = null,
+    /** 该动作是否作为热身动作 */
+    val isWarmup: Boolean = false,
+    /** 模板内为该动作指定的休息秒数；null 表示沿用动作默认/全局 */
+    val restSeconds: Int? = null,
+    /** 进阶策略，见 [com.yfantasyxx.data.ProgressionMode] */
+    val progression: Int = 0,
+    /** 超级组编号：相同非空值的相邻动作为一组，交替完成、只在组末休息 */
+    val supersetGroup: Int? = null,
+)
+
+/**
+ * 一次训练记录（endTime 为 null 表示进行中的草稿）
+ *
+ * startTime / endTime 都建了索引：
+ * 四条统计查询全部按 startTime 范围过滤，getActiveDraft 是
+ * 「WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1」，
+ * 没有索引时两者都是全表扫描。
+ */
+@Entity(
+    tableName = "sessions",
+    indices = [Index("startTime"), Index("endTime")]
+)
+data class WorkoutSession(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String = "",
+    val templateId: Long? = null,
+    val startTime: Long,
+    /** 真正开始计时的时刻：第一组完成时写入；null 表示还没开始练 */
+    val activeStartedAt: Long? = null,
+    val endTime: Long? = null,
+    val note: String = "",
+)
+
+/**
+ * 训练内的动作条目
+ */
+@Entity(
+    tableName = "session_exercises",
+    foreignKeys = [
+        ForeignKey(
+            entity = WorkoutSession::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Exercise::class,
+            parentColumns = ["id"],
+            childColumns = ["exerciseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("sessionId"), Index("exerciseId")]
+)
+data class SessionExercise(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val sessionId: Long,
+    val exerciseId: Long,
+    val sortOrder: Int = 0,
+    /** 本次训练该动作的休息秒数（来自模板设定）；null 表示沿用动作/全局 */
+    val restSeconds: Int? = null,
+    /** 模板计划的组数（快照，模板后续修改不影响历史记录）；null 表示手动添加 */
+    val plannedSets: Int? = null,
+    /** 模板设定的目标次数（如 8-12），快照保存。旧字段，仅兼容 */
+    val plannedReps: String? = null,
+    /** 目标次数下限快照 */
+    val plannedRepsMin: Int? = null,
+    /** 目标次数上限快照 */
+    val plannedRepsMax: Int? = null,
+    /** 超级组编号（来自模板或训练中手工编组） */
+    val supersetGroup: Int? = null,
+)
+
+/**
+ * 一组训练记录
+ */
+@Entity(
+    tableName = "set_logs",
+    foreignKeys = [
+        ForeignKey(
+            entity = SessionExercise::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionExerciseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("sessionExerciseId")]
+)
+data class SetLog(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val sessionExerciseId: Long,
+    val setNumber: Int,
+    /** 重量（kg），自重动作为 0 */
+    val weightKg: Float = 0f,
+    val reps: Int = 0,
+    /** 自觉费力程度 1-10，可空 */
+    val rpe: Float? = null,
+    /** 热身组 */
+    val isWarmup: Boolean = false,
+    /** 冲 PR 的极限组：计入 PR 榜，但不作为下次训练的参考重量 */
+    val isPr: Boolean = false,
+    /** 是否已完成 */
+    val completed: Boolean = false,
+    /**
+     * 这一组实际做了多久（毫秒）：从**上一次休息结束**打勾的那一刻算起。
+     *
+     * 记录的是「两次休息中间隔了多久」，不含休息本身，所以能直接看出
+     * 一组做得多快/多慢。0 表示没有记录：v15 及更早的历史、还没做的组。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val durationMs: Long = 0L,
+    /**
+     * 打勾（真正做完这一组）的时刻。
+     *
+     * 训练结束时间按「最后一组打勾的时刻」记，而不是按点「完成训练」的时刻：
+     * 练完最后一组先去洗澡、收拾东西，十几分钟后才想起来点完成，中间那段
+     * 空闲不该算进训练时长。取消勾选时清回 0，这一组就不算了。
+     *
+     * 0 表示没有记录：v16 及更早的历史、还没做的组。注意不能用 [loggedAt]
+     * 反推 —— 那是建行（排组）的时刻，早于真正做这一组。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val completedAt: Long = 0L,
+    val loggedAt: Long = System.currentTimeMillis(),
+)
+
+/**
+ * 递减组里的一段（主组之外的那些续做）。
+ *
+ * 主组本身仍然是一行 [SetLog]（重量、次数就是第一段），这张表只放**后面降重量续做**的段：
+ * 100 kg × 6 做完直接降到 80 kg 又做 6 个，那就是主组 + 一段 80×6。
+ *
+ * 为什么不把每一段都做成一行 set_logs：
+ * - 组数、勾选、休息计时、「上次这个动作」全是按「一行 = 一组」写的，多插行会把它们全部搞乱；
+ * - 递减段没有独立的完成状态，勾的是主组；单独成组还会让组号跳号。
+ *
+ * 所以口径是：**主组 + 所有段 = 1 组**。容量把各段相加（见 [com.yfantasyxx.data.EffectiveVolume]），
+ * 但「上次/历史最好」的参考只看主组 —— 否则 100×6+80×6 会被当成 1080 kg，下次预填直接飞天。
+ */
+@Entity(
+    tableName = "set_segments",
+    foreignKeys = [
+        ForeignKey(
+            entity = SetLog::class,
+            parentColumns = ["id"],
+            childColumns = ["setLogId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("setLogId")]
+)
+data class SetSegment(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val setLogId: Long,
+    /** 段序号，1 起：1 -> a、2 -> b（主组本身不占号） */
+    val seq: Int,
+    val weightKg: Float = 0f,
+    val reps: Int = 0,
+) {
+    /** 界面上的小标号：3 组下面的第一段叫 3a */
+    val label: String get() = ('a' + (seq - 1).coerceIn(0, 25)).toString()
+}
+
+/**
+ * 身体数据记录（体重等）
+ */
+@Entity(tableName = "body_metrics", indices = [Index("date")])
+data class BodyMetric(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    /** 当天 0 点时间戳，用于 upsert */
+    val date: Long,
+    val weightKg: Float,
+    val bodyFatPercent: Float? = null,
+    val note: String = "",
+)
+
+/**
+ * 有氧运动记录。
+ *
+ * 单独一张表，不挂 sessionId：有氧是「训练计划之外」的模块，练完力量顺手做一段，
+ * 也可能单独做。强行并进 sessions 会把「这次训练练了多久 / 多少容量」的口径搅乱。
+ */
+@Entity(tableName = "cardio_sessions", indices = [Index("startedAt")])
+data class CardioSession(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    /** [com.yfantasyxx.data.CardioType.key]；存字符串，以后加类型不用迁移 */
+    val type: String,
+    val startedAt: Long,
+    /** 有效时长。暂停的那段不算，所以它和「结束时刻 - 开始时刻」不是一回事 */
+    val durationMs: Long,
+    /** 公里。0 = 没记距离（室内器械经常不看表） */
+    val distanceKm: Float = 0f,
+    val note: String = "",
+    /** 事后补录：没有实时计时的过程 */
+    val manual: Boolean = false,
+    /**
+     * 器械参数，JSON：`{"incline":6.0,"speed":9.5}`。
+     *
+     * 一个文本列装下所有类型的调整项（见 [com.yfantasyxx.data.CardioControl]）：
+     * 跑步机的坡度速度、骑行的阻力速度、椭圆机的阻力……以后加参数不用再迁移。
+     * 空串 = 没调过，老记录天然兼容。
+     */
+    val settings: String = "",
+)
+
+// ---------- 关系查询用（见 Relations.kt）----------
+data class SessionSummary(
+    val id: Long,
+    val name: String,
+    val templateId: Long?,
+    /** 真正开始计时的时刻（COALESCE(activeStartedAt, startTime)） */
+    val startTime: Long,
+    val endTime: Long?,
+    val exerciseCount: Int,
+    val setCount: Int,
+    /** 总容量 kg*reps */
+    val totalVolume: Float,
+    /** 训练备注：列表里显示一行，搜索也会匹配它 */
+    val note: String = "",
+    /** 这次练出了几组 PR（冲极限组），列表上给个标记 */
+    val prCount: Int = 0,
+) {
+    /** 训练时长（毫秒）。没点过「开始」的旧记录按创建时间算，至少不会显示成负数 */
+    val durationMs: Long
+        get() = ((endTime ?: startTime) - startTime).coerceAtLeast(0L)
+}
+
+/** 训练中草稿用的摘要 */
+data class ActiveSessionSummary(
+    val id: Long,
+    val name: String,
+    val startTime: Long,
+    val exerciseCount: Int,
+    val completedSetCount: Int,
+    val plannedSetCount: Int,
+)
+
+/**
+ * 历史详情里「上次这个动作练了多少」：
+ * 本次之前、最近一次训练里最强的一组，外加那次训练的开始时间。
+ */
+data class PreviousSetRow(
+    @Embedded val set: SetLog,
+    /** 上一次训练的开始时刻，用来算「几天前」 */
+    val sessionStart: Long,
+)
+
+/** 统计：某分类的容量 */
+data class CategoryVolume(
+    val category: String,
+    val volume: Float,
+)
+
+/**
+ * 统计：单个动作的 PR。
+ *
+ * 口径统一到「估算 1RM」，而不是最大重量：
+ * 100 kg × 10 的 e1RM ≈ 131，明显强于 110 kg × 3 的 e1RM ≈ 119，
+ * 但按最大重量排会把后者排到前面。
+ *
+ * [bestWeightKg] / [bestReps] 是产生 [estOneRm] 的那一组，
+ * 也就是说这两个数是**同一组里真实发生过的**，
+ * 而不是把「历史最大重量」和「历史最大次数」各自取极值拼出来。
+ */
+data class ExercisePr(
+    val exerciseId: Long,
+    val exerciseName: String,
+    /** 估算 1RM（kg）；该动作所有工作组都是 12 次以上时无法估算，为 null */
+    val estOneRm: Float?,
+    val bestWeightKg: Float,
+    val bestReps: Int,
+    /** 历史最大单组容量 weight × reps */
+    val bestVolume: Float,
+)
+
+/** PR 计算的原始行：只取需要的列，1RM 换算在 Kotlin 侧算 */
+data class PrSetRow(
+    val exerciseId: Long,
+    val exerciseName: String,
+    /** 该动作的 rep-max 分档，见 `LiftPattern` */
+    val pattern: Int,
+    /** 器械类型：自重动作的 weightKg 是「额外负重」，容量要把体重算进去 */
+    val equipment: String,
+    val weightKg: Float,
+    val reps: Int,
+)
+
+/**
+ * e1RM 曲线上的一个点：某次训练里该动作的最好一组。
+ *
+ * 按「每次训练一个点」而不是「每组一个点」：
+ * 一次训练里 4 组通常一路递减，全画出来是一串锯齿，趋势看不出来。
+ */
+data class E1rmPoint(
+    val sessionId: Long,
+    val startTime: Long,
+    val e1rm: Float,
+    val weightKg: Float,
+    val reps: Int,
+)
+
+/** 算 e1RM 曲线的原始行：一个动作的全部工作组 */
+data class E1rmRow(
+    val sessionId: Long,
+    val startTime: Long,
+    val weightKg: Float,
+    val reps: Int,
+)
+
+/**
+ * 校准 rep-max 曲线的一行：某动作在某个次数下举起过的最重重量。
+ *
+ * 取「最重」而不是「最近」或「平均」：校准要的是「这个次数下的能力上限」，
+ * 状态好的那一次才是有效信息，平均值会把疲劳日也算进去。
+ */
+data class RepMaxRow(
+    val exerciseId: Long,
+    /** 该动作的 [com.yfantasyxx.data.LiftPattern.value]，聚合时按档分组 */
+    val pattern: Int,
+    val reps: Int,
+    val weightKg: Float,
+    /** 该次数下一共练了多少组，用作加权中位数的权重 */
+    val setCount: Int,
+)
+
+/**
+ * 肌群负荷的一行原始数据：一个动作在窗口期内练了多少组。
+ * 次要肌群在 Kotlin 侧按 0.5 折算。
+ */
+data class MuscleSetRow(
+    val primaryMuscle: String,
+    val secondaryMuscles: String,
+    val sets: Int,
+    val lastTrainedAt: Long,
+)
+
+/**
+ * 动作历史的一行：某次已完成训练里的一组。
+ * 会话 id 与开始时间跟着每组一起查出来，分组时不用再查会话表。
+ */
+data class ExerciseHistoryRow(
+    @Embedded val log: SetLog,
+    val sessionId: Long,
+    val sessionStart: Long,
+)
+
+/** 热力图上的一个肌群 */
+data class MuscleLoad(
+    val muscle: String,
+    /** 折算后的有效组数（主 1.0 / 次 0.5） */
+    val sets: Float,
+    /** 最近一次练到的时间戳；0 表示窗口期内没练过 */
+    val lastTrainedAt: Long,
+)

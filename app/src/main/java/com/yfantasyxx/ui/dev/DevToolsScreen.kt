@@ -1,0 +1,1243 @@
+package com.yfantasyxx.ui.dev
+
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Rule
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yfantasyxx.BuildConfig
+import com.yfantasyxx.service.RestOverlayController
+import com.yfantasyxx.ui.components.ActionText
+import com.yfantasyxx.ui.components.AppDialog
+import com.yfantasyxx.ui.components.InfoRow
+import com.yfantasyxx.ui.components.NumberStepper
+import com.yfantasyxx.ui.components.REST_STEP_SECONDS
+import com.yfantasyxx.ui.components.SectionHeader
+import com.yfantasyxx.ui.components.SettingsCard
+import com.yfantasyxx.ui.components.SettingsDivider
+import com.yfantasyxx.ui.components.SettingsHint
+import com.yfantasyxx.ui.components.SettingsRow
+import com.yfantasyxx.ui.components.WheelPicker
+import com.yfantasyxx.ui.components.rememberWheelPickerState
+import com.yfantasyxx.ui.rememberAppContainer
+import java.io.File
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import com.yfantasyxx.ui.components.GlassButton
+import com.yfantasyxx.ui.components.GlassSwitch
+
+/** 需要二次确认的危险操作 */
+private enum class Pending {
+    CLEAR_WORKOUTS,
+    SEED_BODY,
+    REBUILD_DB,
+    FAKE_WORKOUT,
+    RESTORE_SNAPSHOT,
+    CLEAR_SNAPSHOTS,
+}
+
+/** 快照列表在页面上最多展开几行，再多就只给个提示 */
+private const val SNAPSHOT_ROWS = 6
+
+/**
+ * 测试工具。只在 lite 版有入口（见 `DevTools.enabled`）。
+ *
+ * 这里刻意把「倒计时」放在第一组：它是改完休息计时后最需要反复验的东西，
+ * 而且不用真的开始一次训练——训练页要走到「完成一组」才会起计时。
+ */
+@Composable
+fun DevToolsScreen(onBack: () -> Unit, onOpenWorkout: () -> Unit = {}) {
+    val container = rememberAppContainer()
+    val vm: DevToolsViewModel = viewModel(factory = DevToolsViewModel.factory(container))
+    val info by vm.info.collectAsStateWithLifecycle()
+    val snapshots by vm.snapshots.collectAsStateWithLifecycle()
+    val kernelCases by vm.kernelCases.collectAsStateWithLifecycle()
+    val clockOffset by vm.clockOffset.collectAsStateWithLifecycle()
+    val fakeRemote by vm.fakeRemote.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    var timerLabel by remember { mutableStateOf("") }
+    var customSeconds by remember { mutableStateOf("45") }
+    var useAlarm by remember { mutableStateOf(true) }
+
+    var seedDays by remember { mutableIntStateOf(28) }
+    var seedPerDay by remember { mutableIntStateOf(3) }
+    var seedSets by remember { mutableIntStateOf(3) }
+    var includeToday by remember { mutableStateOf(true) }
+    var bodyDays by remember { mutableIntStateOf(60) }
+
+    var pending by remember { mutableStateOf<Pending?>(null) }
+    /** 待还原的那份快照；Pending 是枚举装不下 File */
+    var pendingSnapshot by remember { mutableStateOf<File?>(null) }
+    var showCrash by remember { mutableStateOf(false) }
+    var showLongText by remember { mutableStateOf(false) }
+
+    // 波轮：默认停在 90 秒那一格；取值按钮记录「点下去那一刻」读到什么
+    val wheel = rememberWheelPickerState(1..20, 6)
+    var wheelRead by remember { mutableIntStateOf(6) }
+    val scope = rememberCoroutineScope()
+
+    var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
+    var overlayGranted by remember { mutableStateOf(RestOverlayController.canShow(context)) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { notificationsOn = notificationsEnabled(context) }
+
+    LaunchedEffect(Unit) {
+        vm.refreshInfo()
+        vm.refreshSnapshots()
+    }
+
+    Scaffold(
+        topBar = {
+            SmallTopAppBar(
+                title = "测试工具",
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { vm.refreshInfo() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "刷新信息",
+                            tint = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp),
+        ) {
+            message?.let { m ->
+                MessageBar(m, onDismiss = { vm.clearMessage() })
+            }
+
+            if (busy) {
+                SettingsHint(
+                    text = "处理中…",
+                    startIndent = 20.dp,
+                    top = 8.dp,
+                    bottom = 2.dp,
+                )
+            }
+
+            /* ───────── 倒计时 / 通知 ───────── */
+            SectionHeader("倒计时与通知")
+            SettingsCard {
+                SettingsHint(
+                    text = "走的是训练页同一条路径：前台服务 + 通知栏倒计时 + 到点横幅提醒 + 震动。" +
+                        "不用真的开始训练。",
+                    top = 12.dp,
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("5 秒", Modifier.weight(1f)) {
+                            vm.startTimer(5, timerLabel, useAlarm)
+                        }
+                        DevChip("10 秒", Modifier.weight(1f)) {
+                            vm.startTimer(10, timerLabel, useAlarm)
+                        }
+                        DevChip("30 秒", Modifier.weight(1f)) {
+                            vm.startTimer(30, timerLabel, useAlarm)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("60 秒", Modifier.weight(1f)) {
+                            vm.startTimer(60, timerLabel, useAlarm)
+                        }
+                        DevChip("3 分钟", Modifier.weight(1f)) {
+                            vm.startTimer(180, timerLabel, useAlarm)
+                        }
+                        DevChip("5 分钟", Modifier.weight(1f)) {
+                            vm.startTimer(300, timerLabel, useAlarm)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    TextField(
+                        value = timerLabel,
+                        onValueChange = { timerLabel = it },
+                        label = "通知标题（留空 = 组间休息）",
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextField(
+                            value = customSeconds,
+                            onValueChange = { customSeconds = it.filter(Char::isDigit).take(4) },
+                            label = "自定义秒数",
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.weight(0.15f))
+                        GlassButton(
+                            onClick = {
+                                vm.startTimer(
+                                    customSeconds.toIntOrNull() ?: 10,
+                                    timerLabel,
+                                    useAlarm,
+                                )
+                            },
+                        ) {
+                            Text("开始", style = MiuixTheme.textStyles.button)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                SettingsDivider(startIndent = 16.dp)
+                SettingsRow(
+                    title = "同时挂系统闹钟",
+                    subtitle = "关掉只测前台服务这条路径（App 被冻结时不会响）",
+                    trailing = {
+                        GlassSwitch(checked = useAlarm, onCheckedChange = { useAlarm = it })
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "立即弹「休息结束」",
+                    subtitle = "不用等倒计时：直接验通知渠道、提示音和震动",
+                    icon = Icons.Filled.NotificationsActive,
+                    showChevron = true,
+                    onClick = { vm.fireRestFinished() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "强制显示结束悬浮窗",
+                    subtitle = if (overlayGranted) {
+                        "忽略「App 在前台就不显示」，直接看大卡片；常驻开着就 12 秒后收成小球"
+                    } else {
+                        "未授予悬浮窗权限 · 点下面的「悬浮窗权限设置」开启"
+                    },
+                    icon = Icons.Filled.PictureInPictureAlt,
+                    showChevron = true,
+                    onClick = {
+                        overlayGranted = RestOverlayController.canShow(context)
+                        vm.forceShowOverlay()
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "预览倒计时气泡",
+                    subtitle = "只画那个圆形气泡，不启动计时；看完从下面的「收掉悬浮窗」清",
+                    icon = Icons.Filled.Timer,
+                    showChevron = true,
+                    onClick = {
+                        overlayGranted = RestOverlayController.canShow(context)
+                        vm.previewCountdownBubble()
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "直接看常驻小球",
+                    subtitle = "跳过结束卡片的 12 秒，立刻看它收成满环 + 勾的小气泡",
+                    icon = Icons.Filled.PushPin,
+                    showChevron = true,
+                    onClick = {
+                        overlayGranted = RestOverlayController.canShow(context)
+                        vm.previewPersistentBall()
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "收掉悬浮窗",
+                    subtitle = "预览出来的气泡 / 常驻小球都从这里收；正式路径是去设置里关「悬浮窗常驻」",
+                    icon = Icons.Filled.Close,
+                    iconTint = MiuixTheme.colorScheme.error,
+                    showChevron = true,
+                    onClick = { vm.dismissPersistentBall() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "悬浮窗权限设置",
+                    subtitle = if (overlayGranted) {
+                        "已授予 · 点这里可以去系统里撤销，用来验「没权限时静默降级」"
+                    } else {
+                        "未授予 · 悬浮窗、结束卡片都不会出现，只会有通知和震动"
+                    },
+                    icon = Icons.Filled.Settings,
+                    showChevron = true,
+                    onClick = {
+                        runCatching { context.startActivity(RestOverlayController.permissionIntent(context)) }
+                        overlayGranted = RestOverlayController.canShow(context)
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "只震一下（4 段波形）",
+                    subtitle = "绕过 2.6 秒去重，连点也能每次都震",
+                    icon = Icons.Filled.Vibration,
+                    showChevron = true,
+                    onClick = { vm.testVibrate() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "震动被打断",
+                    subtitle = "120ms 后插一条 900ms 震动（等同别的应用顶掉）：后面几段应该照样震",
+                    icon = Icons.Filled.Vibration,
+                    showChevron = true,
+                    onClick = { vm.testVibrateInterrupted() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "停止计时并清通知",
+                    icon = Icons.Filled.Close,
+                    showChevron = true,
+                    onClick = { vm.stopTimer() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "杀掉进程",
+                    subtitle = "先发起倒计时再点这里：到点仍应收到提醒，用来验证后台存活",
+                    icon = Icons.Filled.Timer,
+                    iconTint = MiuixTheme.colorScheme.error,
+                    showChevron = true,
+                    onClick = { vm.killProcess() },
+                )
+            }
+
+            /* ───────── 假的训练中 ───────── */
+            SectionHeader("假的训练中")
+            SettingsCard {
+                SettingsHint(
+                    text = "造一次进行中的训练（7 个动作 × 3 组）并直接进训练页。" +
+                        "会顺手造一次「上次训练」：每组重量次数都不同、最后一组是更重的 PR，" +
+                        "用来看预填有没有抄错组、有没有把 PR 也抄进去。" +
+                        "进页面时第一个动作已完成 2 组，顶部应显示「7 个动作 · 已完成 2/21 组」。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "生成并进入训练页",
+                    subtitle = "会丢掉当前未完成的草稿（动手前自动存一份快照）",
+                    icon = Icons.Filled.FitnessCenter,
+                    showChevron = true,
+                    onClick = { pending = Pending.FAKE_WORKOUT },
+                )
+            }
+
+            /* ───────── 假数据 ───────── */
+            SectionHeader("造数据")
+            SettingsCard {
+                SettingsHint(
+                    text = "从空 App 直接铺到能用的状态：3 个模板（推 / 拉 / 腿）+ 一个 5 天计划，" +
+                        "重复点也不会造第二份。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "一键铺好测试环境",
+                    subtitle = "模板 + 计划，之后直接去首页点「开始」",
+                    icon = Icons.Filled.Add,
+                    showChevron = true,
+                    onClick = { vm.plantTestSetup() },
+                )
+                SettingsDivider(startIndent = 16.dp)
+                SettingsHint(
+                    text = "按天写历史训练（重量随周数递增、最近一天带 PR）。" +
+                        "不会碰你的模板和计划结构。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "生成天数",
+                    trailing = {
+                        NumberStepper(
+                            value = seedDays.toFloat(),
+                            onValueChange = { seedDays = it.toInt().coerceIn(1, 365) },
+                            step = 7f,
+                            unit = " 天",
+                        )
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "每天动作数",
+                    trailing = {
+                        NumberStepper(
+                            value = seedPerDay.toFloat(),
+                            onValueChange = { seedPerDay = it.toInt().coerceIn(1, 8) },
+                            step = 1f,
+                            unit = " 个",
+                        )
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "每个动作组数",
+                    trailing = {
+                        NumberStepper(
+                            value = seedSets.toFloat(),
+                            onValueChange = { seedSets = it.toInt().coerceIn(1, 10) },
+                            step = 1f,
+                            unit = " 组",
+                        )
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "包含今天",
+                    subtitle = "关掉就只造昨天及更早，用来对比「今天没练」的首页状态",
+                    trailing = {
+                        GlassSwitch(checked = includeToday, onCheckedChange = { includeToday = it })
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "生成历史训练",
+                    subtitle = "约 ${seedDays * seedPerDay * seedSets} 组记录",
+                    icon = Icons.Filled.Add,
+                    showChevron = true,
+                    onClick = {
+                        vm.seedHistory(seedDays, seedPerDay, seedSets, includeToday)
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "补全动作库",
+                    subtitle = "只补缺的，不会重复",
+                    icon = Icons.Filled.Refresh,
+                    showChevron = true,
+                    onClick = { vm.seedExercises() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "生成体重曲线",
+                    subtitle = "$bodyDays 天，会先清空现有体重记录（先存快照）",
+                    icon = Icons.Filled.Add,
+                    trailing = {
+                        ActionText(text = "生成", onClick = { pending = Pending.SEED_BODY })
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "清空所有训练记录",
+                    subtitle = "训练、组数、PR 一起删，动作/模板/计划保留（删前自动存快照）",
+                    icon = Icons.Filled.Delete,
+                    iconTint = MiuixTheme.colorScheme.error,
+                    showChevron = true,
+                    onClick = { pending = Pending.CLEAR_WORKOUTS },
+                )
+            }
+
+            /* ───────── 数据快照 ───────── */
+            SectionHeader("数据快照")
+            SettingsCard {
+                SettingsHint(
+                    text = "上面那些造数据入口都会先自动存一份快照，还原前也会再存一份。" +
+                        "快照用 VACUUM INTO 写，和「备份」走同一条路径：文件自包含，" +
+                        "选错了还能沿着 restore 前那份退回来。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "现在存一份快照",
+                    subtitle = if (snapshots.isEmpty()) {
+                        "还没有快照 · 最多保留 ${DevSnapshots.MAX_KEEP} 份"
+                    } else {
+                        "已有 ${snapshots.size} 份 · 合计 " +
+                            DevSnapshots.sizeLabel(snapshots.sumOf { it.bytes })
+                    },
+                    icon = Icons.Filled.Save,
+                    showChevron = true,
+                    onClick = { vm.snapshotNow() },
+                )
+                snapshots.take(SNAPSHOT_ROWS).forEach { snap ->
+                    SettingsDivider()
+                    SettingsRow(
+                        title = DevSnapshots.stampOf(snap.file),
+                        subtitle = buildString {
+                            append(DevSnapshots.reasonLabel(snap.reason))
+                            if (snap.sessions >= 0) {
+                                append(" · ")
+                                append(snap.sessions)
+                                append(" 次训练")
+                            }
+                            append(" · ")
+                            append(DevSnapshots.sizeLabel(snap.bytes))
+                        },
+                        trailing = {
+                            ActionText(
+                                text = "还原",
+                                onClick = {
+                                    pendingSnapshot = snap.file
+                                    pending = Pending.RESTORE_SNAPSHOT
+                                },
+                            )
+                        },
+                    )
+                }
+                if (snapshots.size > SNAPSHOT_ROWS) {
+                    SettingsHint(
+                        text = "只列最近 $SNAPSHOT_ROWS 份（共 ${snapshots.size} 份）。" +
+                            "更早的会在超过 ${DevSnapshots.MAX_KEEP} 份时自动删掉。",
+                        startIndent = 16.dp,
+                        top = 8.dp,
+                        bottom = 4.dp,
+                    )
+                }
+                if (snapshots.isNotEmpty()) {
+                    SettingsDivider()
+                    SettingsRow(
+                        title = "清空全部快照",
+                        subtitle = "释放约 ${DevSnapshots.sizeLabel(snapshots.sumOf { it.bytes })}",
+                        icon = Icons.Filled.Delete,
+                        iconTint = MiuixTheme.colorScheme.error,
+                        showChevron = true,
+                        onClick = { pending = Pending.CLEAR_SNAPSHOTS },
+                    )
+                }
+            }
+
+            /* ───────── 计划 ───────── */
+            SectionHeader("计划与时间")
+            SettingsCard {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    InfoRow("当前计划", info.planName ?: "没有启用的计划")
+                    InfoRow("进度", info.planDetail ?: "—")
+                }
+                SettingsHint(
+                    text = "「时间前进」= 假装过了 N 天：休息日会立刻流过去，训练日照旧停着等你。",
+                    startIndent = 16.dp,
+                    bottom = 4.dp,
+                )
+                SettingsRow(
+                    title = "时间前进 1 天",
+                    onClick = { vm.shiftPlanTime(1) },
+                    showChevron = true,
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "时间前进 3 天",
+                    onClick = { vm.shiftPlanTime(3) },
+                    showChevron = true,
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "时间后退 1 天",
+                    subtitle = "休息会被拉长，等同于「再休一天」的极端版",
+                    onClick = { vm.shiftPlanTime(-1) },
+                    showChevron = true,
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "跳到下一个训练日",
+                    subtitle = "跳过中间的休息格",
+                    onClick = { vm.jumpToNextTrainingDay() },
+                    showChevron = true,
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "重置到第 1 天",
+                    onClick = { vm.resetPlanProgress() },
+                    showChevron = true,
+                )
+            }
+
+            /* ───────── 波轮 ───────── */
+            SectionHeader("波轮")
+            SettingsCard {
+                SettingsHint(
+                    text = "休息时长用的就是这个波轮。拖到某一格后立刻点「取值」，读到的就是点确定会生效的值——" +
+                        "旧版要等惯性动画跑完才回填，手一松就点会拿到旧值。",
+                    top = 12.dp,
+                )
+                WheelPicker(
+                    state = wheel,
+                    values = 1..20,
+                    label = { "${it * REST_STEP_SECONDS} 秒" },
+                    visibleItemCount = 5,
+                    itemHeight = 36.dp,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    InfoRow("实时读数", "${wheel.currentValue() * REST_STEP_SECONDS} 秒")
+                    InfoRow("上次点「取值」", "${wheelRead * REST_STEP_SECONDS} 秒")
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DevChip("取值", Modifier.weight(1f)) {
+                        wheelRead = wheel.currentValue()
+                    }
+                    DevChip("回到 90 秒", Modifier.weight(1f)) {
+                        scope.launch { wheel.jumpTo(6) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            /* ───────── 计算内核 ───────── */
+            SectionHeader("计算内核")
+            SettingsCard {
+                SettingsHint(
+                    text = "1RM 估算、个人校准、进阶建议都是纯函数：算错了不会崩，" +
+                        "只会在训练页印一个偏了的数字——117.6 和 122.0 哪个对，肉眼看不出来。" +
+                        "下面把期望值写进代码里，一键全跑。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "跑一遍全部断言",
+                    subtitle = when {
+                        kernelCases.isEmpty() ->
+                            "还没跑过 · 覆盖分档 / 换算 / 拟合 / 进阶 / 计划游标"
+                        kernelCases.any { !it.passed } ->
+                            "${kernelCases.count { !it.passed }} 条未通过 / 共 ${kernelCases.size} 条"
+                        else -> "${kernelCases.size} 条全部通过"
+                    },
+                    icon = Icons.AutoMirrored.Filled.Rule,
+                    showChevron = true,
+                    onClick = { vm.runKernelAssertions() },
+                )
+                // 只摊开没过的：全绿时不该占一屏
+                kernelCases.filter { !it.passed }.take(8).forEach { case -> KernelCaseRow(case) }
+                if (kernelCases.isNotEmpty() && kernelCases.none { !it.passed }) {
+                    SettingsHint(
+                        text = "全绿：${kernelCases.size} 条断言都符合预期",
+                        startIndent = 20.dp,
+                        top = 4.dp,
+                        bottom = 8.dp,
+                    )
+                }
+                SettingsDivider()
+                SettingsRow(
+                    title = "看真实数据的校准结果",
+                    subtitle = "用库里全部已完成工作组跑一遍，看每档的 γ 和样本量",
+                    icon = Icons.Filled.Tune,
+                    showChevron = true,
+                    onClick = { vm.refreshCalibration() },
+                )
+            }
+
+            /* ───────── 时间旅行 ───────── */
+            SectionHeader("时间旅行")
+            SettingsCard {
+                SettingsHint(
+                    text = "统计页的 7 天热力图 / 30 天容量 / 9 周周桶全按「现在」算窗口，" +
+                        "以前只能靠真实时间流逝去等。这里把业务时间拨动，" +
+                        "就能看到一批数据放旧之后的样子。倒计时、日志、" +
+                        "已经落库的时间戳都不走这个钟。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "业务时间",
+                    subtitle = if (clockOffset == 0L) {
+                        "就是现在"
+                    } else {
+                        "已拨到 ${kotlin.math.abs(clockOffset) / 86_400_000L} 天" +
+                            if (clockOffset > 0) "后" else "前"
+                    },
+                    icon = Icons.Filled.Schedule,
+                    trailing = {
+                        if (clockOffset != 0L) {
+                            ActionText("复位", onClick = { vm.shiftClock(0) })
+                        }
+                    },
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("+1 天", Modifier.weight(1f)) { vm.shiftClock(1) }
+                        DevChip("+7 天", Modifier.weight(1f)) { vm.shiftClock(7) }
+                        DevChip("+30 天", Modifier.weight(1f)) { vm.shiftClock(30) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("+63 天", Modifier.weight(1f)) { vm.shiftClock(63) }
+                        DevChip("-1 天", Modifier.weight(1f)) { vm.shiftClock(-1) }
+                        DevChip("复位", Modifier.weight(1f)) { vm.shiftClock(0) }
+                    }
+                }
+                SettingsHint(
+                    text = "拨完回统计页看：热力图应该变空、周容量只剩后半段。" +
+                        "偏移量存在本地，杀进程重进仍然有效。",
+                    startIndent = 20.dp,
+                    top = 8.dp,
+                    bottom = 10.dp,
+                )
+            }
+
+            /* ───────── 备份链路演练 ───────── */
+            SectionHeader("备份链路演练")
+            SettingsCard {
+                SettingsHint(
+                    text = "拿本地目录当网盘，注入 401 / 507 / 超时 / 半截上传 / HTML 错误页 / 空库，" +
+                        "跑的是真实 BackupManager（VACUUM 快照、字节回查、旧备份清理一行没改）。" +
+                        "只演练「该被拦下」的分支——「恢复成功」会覆盖本地库，不拿真实记录冒险。",
+                    top = 12.dp,
+                )
+                SettingsRow(
+                    title = "假远端",
+                    subtitle = "${fakeRemote.first} 份 · ${DevBackupLab.sizeLabel(fakeRemote.second)}" +
+                        " · files/dev/remote/",
+                    icon = Icons.Filled.Cloud,
+                    trailing = {
+                        if (fakeRemote.first > 0) {
+                            ActionText("清空", onClick = { vm.clearFakeRemote() })
+                        }
+                    },
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    Text(
+                        text = "备份路径（能不能写进去）",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("正常备份", Modifier.weight(1f)) { vm.runDrill(BackupDrill.BACKUP_OK) }
+                        DevChip("507 配额", Modifier.weight(1f)) { vm.runDrill(BackupDrill.QUOTA) }
+                        DevChip("上传半截", Modifier.weight(1f)) { vm.runDrill(BackupDrill.PARTIAL) }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "恢复路径（该不该被拦下）",
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("401", Modifier.weight(1f)) { vm.runDrill(BackupDrill.AUTH) }
+                        DevChip("超时", Modifier.weight(1f)) { vm.runDrill(BackupDrill.TIMEOUT) }
+                        DevChip("文件已删", Modifier.weight(1f)) { vm.runDrill(BackupDrill.MISSING) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DevChip("HTML 错误页", Modifier.weight(1f)) { vm.runDrill(BackupDrill.CORRUPT) }
+                        DevChip("空库", Modifier.weight(1f)) { vm.runDrill(BackupDrill.EMPTY) }
+                        DevChip("慢速", Modifier.weight(1f)) { vm.runDrill(BackupDrill.SLOW) }
+                    }
+                }
+                SettingsHint(
+                    text = "结果显示在顶部提示条：通过与否、耗时、实际报错。" +
+                        "「未通过」说明某条防线没拦住，或者拦错了地方。",
+                    startIndent = 20.dp,
+                    top = 4.dp,
+                    bottom = 10.dp,
+                )
+            }
+
+            /* ───────── 数据库 ───────── */
+            SectionHeader("数据库")
+            SettingsCard {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    info.tables.forEach { TableRow(it) }
+                    Spacer(Modifier.height(6.dp))
+                    InfoRow("文件大小", "%.2f MB".format(info.dbBytes / 1024f / 1024f))
+                    InfoRow("schema 版本", "v${info.schemaVersion}")
+                }
+                SettingsDivider(startIndent = 16.dp)
+                SettingsRow(
+                    title = "WAL 合并到主库",
+                    subtitle = "备份前那一步，顺便看能省多少",
+                    icon = Icons.Filled.Storage,
+                    showChevron = true,
+                    onClick = { vm.checkpointWal() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "导出数据库文件",
+                    subtitle = "存到 Android/data/${BuildConfig.APPLICATION_ID}/files/dev/",
+                    icon = Icons.Filled.FileDownload,
+                    showChevron = true,
+                    onClick = { vm.exportDatabase() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "重建数据库实例",
+                    subtitle = "模拟「恢复备份」之后那一步",
+                    icon = Icons.Filled.Refresh,
+                    showChevron = true,
+                    onClick = { pending = Pending.REBUILD_DB },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "生成诊断包并分享",
+                    subtitle = "库快照 + 崩溃日志 + logs/ + 脱敏设置 + 机型与行数，打成一个 zip",
+                    icon = Icons.Filled.FolderZip,
+                    showChevron = true,
+                    onClick = { vm.shareDiagnostics() },
+                )
+            }
+
+            /* ───────── 崩溃 / 日志 ───────── */
+            SectionHeader("崩溃与日志")
+            SettingsCard {
+                SettingsRow(
+                    title = "抛一个测试异常",
+                    subtitle = "App 会立刻退出；重进后这里能看到刚记下的日志",
+                    icon = Icons.Filled.BugReport,
+                    iconTint = MiuixTheme.colorScheme.error,
+                    showChevron = true,
+                    onClick = { vm.crashNow() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "查看最近一次崩溃",
+                    subtitle = if (info.crashLog == null) "没有记录" else "有记录，点开看堆栈",
+                    icon = Icons.Filled.BugReport,
+                    trailing = {
+                        ActionText(
+                            text = "查看",
+                            onClick = { if (info.crashLog != null) showCrash = true },
+                        )
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "清空崩溃日志",
+                    subtitle = "last_crash.txt 和 logs/ 下的存档",
+                    icon = Icons.Filled.Delete,
+                    showChevron = true,
+                    onClick = { vm.clearCrashLogs() },
+                )
+            }
+
+            /* ───────── 应用更新 ───────── */
+            SectionHeader("应用更新")
+            SettingsCard {
+                SettingsRow(
+                    title = "模拟发现新版本",
+                    subtitle = "拉一次线上 Release 并伪装成更高版本，" +
+                        "验证下载 / 校验 / 安装这一整条链路",
+                    icon = Icons.Filled.SystemUpdate,
+                    showChevron = true,
+                    onClick = { vm.simulateUpdateAvailable() },
+                )
+                SettingsHint(
+                    text = "装的是真实的线上 APK。lite 包的包名是 com.yfantasyxx.debug，" +
+                        "与正式版不同，所以最后会停在「无法直接安装」——这是预期的，不是 bug。",
+                    bottom = 12.dp,
+                )
+            }
+
+            /* ───────── 界面 / 系统 ───────── */
+            SectionHeader("界面与系统")
+            SettingsCard {
+                SettingsRow(
+                    title = "通知权限",
+                    subtitle = if (notificationsOn) "已开启" else "已关闭，倒计时不会显示在通知栏",
+                    icon = Icons.Filled.NotificationsActive,
+                    trailing = {
+                        ActionText(
+                            text = if (notificationsOn) "去设置" else "去开启",
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    !notificationsOn
+                                ) {
+                                    notificationPermission.launch(
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    )
+                                } else {
+                                    openNotificationSettings(context)
+                                }
+                            },
+                        )
+                    },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "重建界面（Activity）",
+                    subtitle = "验主题切换 / 状态有没有在重建后丢掉",
+                    icon = Icons.Filled.Refresh,
+                    showChevron = true,
+                    onClick = { context.findActivity()?.recreate() },
+                )
+                SettingsDivider()
+                SettingsRow(
+                    title = "超长文本对话框",
+                    subtitle = "检查换行、省略和滚动有没有崩",
+                    showChevron = true,
+                    onClick = { showLongText = true },
+                )
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    InfoRow("包名", BuildConfig.APPLICATION_ID)
+                    InfoRow("版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    InfoRow("构建类型", BuildConfig.BUILD_TYPE)
+                    InfoRow("机型", "${Build.BRAND} ${Build.MODEL}")
+                    InfoRow("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                    InfoRow("内存", memoryLabel())
+                }
+            }
+
+            SettingsHint(
+                text = "这个页面只在 lite 版出现；正式版里入口和这段代码都会被优化掉。",
+                startIndent = 20.dp,
+                top = 8.dp,
+            )
+        }
+    }
+
+    /* ---- 确认弹窗 ---- */
+    pending?.let { action ->
+        val title: String
+        val summary: String
+        when (action) {
+            Pending.CLEAR_WORKOUTS -> {
+                title = "清空所有训练记录？"
+                summary = "训练历史、每组重量次数、PR 榜会一起删掉，无法撤销。动作库、模板、训练计划不受影响。"
+            }
+
+            Pending.SEED_BODY -> {
+                title = "重新生成体重曲线？"
+                summary = "会先清空现有的体重记录，再写入 $bodyDays 天的测试数据。"
+            }
+
+            Pending.REBUILD_DB -> {
+                title = "重建数据库实例？"
+                summary = "等价于「恢复备份」之后的那一步。各 Repository 还握着旧实例，建议重建完再重建一次界面。"
+            }
+
+            Pending.FAKE_WORKOUT -> {
+                title = "生成一次假训练？"
+                summary = "会先丢掉当前未完成的草稿，再造一次「上次训练」（最后一组是 PR）" +
+                    "和一次进行中的训练，然后直接进训练页。动手前会自动存一份快照。"
+            }
+
+            Pending.RESTORE_SNAPSHOT -> {
+                val snap = pendingSnapshot
+                title = "还原到这份快照？"
+                summary = if (snap == null) {
+                    "快照文件已经不见了。"
+                } else {
+                    "会用 ${DevSnapshots.stampOf(snap)} 的那份库文件覆盖当前数据库，" +
+                        "这之后产生的训练记录都会消失。还原前会自动把现在的状态再存一份，可以退回来。"
+                }
+            }
+
+            Pending.CLEAR_SNAPSHOTS -> {
+                title = "清空全部快照？"
+                summary = "所有存档点都会删掉，之后再造数据就没有回退点了。当前训练数据不受影响。"
+            }
+        }
+        AppDialog(
+            title = title,
+            summary = summary,
+            onDismissRequest = {
+                pending = null
+                pendingSnapshot = null
+            },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ActionText(
+                    text = "取消",
+                    onClick = {
+                        pending = null
+                        pendingSnapshot = null
+                    },
+                )
+                Spacer(Modifier.size(16.dp))
+                GlassButton(
+                    onClick = {
+                        val snap = pendingSnapshot
+                        pending = null
+                        pendingSnapshot = null
+                        when (action) {
+                            Pending.CLEAR_WORKOUTS -> vm.clearWorkouts()
+                            Pending.SEED_BODY -> vm.seedBodyMetrics(bodyDays)
+                            Pending.REBUILD_DB -> vm.rebuildDatabase()
+                            // 生成完直接进训练页：这一屏的意义就是看真实页面
+                            Pending.FAKE_WORKOUT -> vm.startFakeWorkout(onReady = onOpenWorkout)
+                            Pending.RESTORE_SNAPSHOT -> snap?.let { vm.restoreSnapshot(it) }
+                            Pending.CLEAR_SNAPSHOTS -> vm.clearSnapshots()
+                        }
+                    },
+                ) {
+                    Text("确定", style = MiuixTheme.textStyles.button)
+                }
+            }
+        }
+    }
+
+    if (showCrash) {
+        val log = info.crashLog
+        AppDialog(
+            title = "最近一次崩溃",
+            onDismissRequest = { showCrash = false },
+            fullWidth = true,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = log.orEmpty(),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ActionText(text = "关闭", onClick = { showCrash = false })
+            }
+        }
+    }
+
+    if (showLongText) {
+        AppDialog(
+            title = "超长文本测试",
+            onDismissRequest = { showLongText = false },
+            fullWidth = true,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(text = LONG_TEXT, style = MiuixTheme.textStyles.paragraph)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ActionText(text = "关闭", onClick = { showLongText = false })
+            }
+        }
+    }
+}
+
+/** 提示条：不自动消失，点 × 才关，方便看清导出路径这类长文本 */
+@Composable
+private fun MessageBar(message: DevMessage, onDismiss: () -> Unit) {
+    val color = if (message.error) {
+        MiuixTheme.colorScheme.error
+    } else {
+        MiuixTheme.colorScheme.primary
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.10f))
+            .padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = message.text,
+            fontSize = 12.sp,
+            color = color,
+            modifier = Modifier.weight(1f),
+        )
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "关闭提示",
+                tint = color,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DevChip(text: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .clickable(onClick = onClick)
+            .padding(vertical = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            fontSize = 14.sp,
+            color = MiuixTheme.colorScheme.primary,
+        )
+    }
+}
+
+/**
+ * 一条没通过的断言。
+ *
+ * 只在这个位置出现，所以不用做折叠：能看见就说明有东西坏了。
+ * 期望值和实际值必须并排放，否则「红了一条」等于没说。
+ */
+@Composable
+private fun KernelCaseRow(case: KernelCase) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
+    ) {
+        Text(
+            text = "${case.group} · ${case.name}",
+            style = MiuixTheme.textStyles.main,
+            color = MiuixTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = buildString {
+                append("期望 ")
+                append(case.expect)
+                append(" · 实际 ")
+                append(case.actual)
+                case.note?.let { append(" · ").append(it) }
+            },
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.error,
+        )
+    }
+}
+
+@Composable
+private fun TableRow(item: TableCount) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = item.table,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = item.rows.toString(),
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            color = MiuixTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+private fun notificationsEnabled(context: Context): Boolean =
+    NotificationManagerCompat.from(context).areNotificationsEnabled()
+
+private fun openNotificationSettings(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        )
+    }
+}
+
+private fun Context.findActivity(): Activity? {
+    var ctx: Context? = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
+
+private fun memoryLabel(): String {
+    val rt = Runtime.getRuntime()
+    val used = (rt.totalMemory() - rt.freeMemory()) / 1024 / 1024
+    val max = rt.maxMemory() / 1024 / 1024
+    return "$used / $max MB"
+}
+
+private val LONG_TEXT = buildString {
+    repeat(6) { i ->
+        appendLine(
+            "第 ${i + 1} 段：" +
+                "这是一段用来测试换行的长文本，包含中英文混排、标点符号（，。！？）、" +
+                "超长的英文单词 Supercalifragilisticexpialidocious 以及数字 1234567890。" +
+                "如果这段文字没有溢出卡片、没有被截断、并且可以正常滚动，说明布局没问题。"
+        )
+        appendLine()
+    }
+    append("结尾：没有换行符的超长句子" + "继续".repeat(120) + "。")
+}

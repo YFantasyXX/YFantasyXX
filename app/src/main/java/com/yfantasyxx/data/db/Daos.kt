@@ -1,0 +1,1657 @@
+package com.yfantasyxx.data.db
+
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Delete
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.RoomDatabase
+import androidx.room.Transaction
+import androidx.room.Update
+import androidx.room.Upsert
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface ExerciseDao {
+    @Query("SELECT * FROM exercises WHERE archived = 0 ORDER BY category, name")
+    fun observeAll(): Flow<List<Exercise>>
+
+    @Query(
+        """
+        SELECT * FROM exercises
+        WHERE archived = 0
+          AND (:category IS NULL OR category = :category)
+          AND (:equipment IS NULL OR equipment = :equipment)
+          AND (:keyword = '' OR name LIKE '%' || :keyword || '%' OR primaryMuscle LIKE '%' || :keyword || '%')
+        ORDER BY category, name
+        """
+    )
+    fun observeFiltered(
+        keyword: String,
+        category: String?,
+        equipment: String?,
+    ): Flow<List<Exercise>>
+
+    /** 数据库中实际存在的分类（用于筛选条动态生成） */
+    @Query(
+        "SELECT DISTINCT category FROM exercises WHERE archived = 0 AND category != '' ORDER BY category"
+    )
+    fun observeCategories(): Flow<List<String>>
+
+    /**
+     * 动作库总条数（不受搜索 / 筛选影响）。
+     *
+     * 界面上必须能直接看到这个数：动作库是「按名字差集增量补齐」的，
+     * 一旦某次补齐没跑成，用户的库会停在旧条数而没有任何提示——
+     * 只靠滑动列表是感觉不出来的。
+     */
+    @Query("SELECT COUNT(*) FROM exercises WHERE archived = 0")
+    fun observeCount(): Flow<Int>
+
+    /** 数据库中实际存在的器械；传入分类时只返回该分类下的器械 */
+    @Query(
+        """
+        SELECT DISTINCT equipment FROM exercises
+        WHERE archived = 0 AND equipment != ''
+          AND (:category IS NULL OR category = :category)
+        ORDER BY equipment
+        """
+    )
+    fun observeEquipments(category: String?): Flow<List<String>>
+
+    @Query("SELECT * FROM exercises WHERE id = :id")
+    suspend fun getById(id: Long): Exercise?
+
+    @Query("SELECT COUNT(*) FROM exercises")
+    suspend fun count(): Int
+
+    @Insert
+    suspend fun insert(exercise: Exercise): Long
+
+    @Insert
+    suspend fun insertAll(exercises: List<Exercise>)
+
+    @Update
+    suspend fun update(exercise: Exercise)
+
+    @Query("DELETE FROM exercises WHERE id = :id AND isCustom = 1")
+    suspend fun deleteCustom(id: Long)
+
+    /**
+     * 归档（软删除）自定义动作。
+     *
+     * 硬删会顺着 session_exercises / set_logs 的 CASCADE 把历史训练记录一起带走，
+     * 容量、PR、e1RM 曲线全跟着变——用户以为只是删了个动作条目。
+     * 练过的动作只能归档：动作库里不再出现，历史记录原样保留。
+     */
+    @Query("UPDATE exercises SET archived = 1 WHERE id = :id AND isCustom = 1")
+    suspend fun archiveCustom(id: Long)
+
+    /** 这个动作在历史里有多少组记录（决定「真删」还是「归档」） */
+    @Query(
+        """
+        SELECT COUNT(*) FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        WHERE se.exerciseId = :exerciseId
+        """
+    )
+    suspend fun setCountOfExercise(exerciseId: Long): Int
+
+    @Query("SELECT * FROM exercises WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<Exercise>
+
+    /** 已有动作名（用于增量补齐内置动作库，按名字去重） */
+    @Query("SELECT name FROM exercises")
+    suspend fun allNames(): List<String>
+
+    /**
+     * 次肌群还是空的动作名。
+     *
+     * 回填只该对这些行跑：动作库扩到 775 条后，无条件回填等于每次冷启动
+     * 执行 775 次 no-op UPDATE，每条一次事务。
+     */
+    @Query("SELECT name FROM exercises WHERE secondaryMuscles = '' AND isCustom = 0")
+    suspend fun namesWithBlankSecondary(): List<String>
+
+    /**
+     * 老版本升级后补次要肌群：只动「内置动作且当前为空」的行，
+     * 用户自己改过的一律不覆盖。
+     */
+    @Query(
+        """
+        UPDATE exercises SET secondaryMuscles = :secondary
+        WHERE name = :name AND isCustom = 0 AND secondaryMuscles = ''
+        """
+    )
+    suspend fun backfillSecondaryMuscles(name: String, secondary: String)
+}
+
+@Dao
+interface TemplateDao {
+    @Query("SELECT * FROM templates ORDER BY sortOrder, createdAt DESC")
+    fun observeAll(): Flow<List<WorkoutTemplate>>
+
+    @Query("SELECT * FROM template_folders ORDER BY sortOrder, id")
+    fun observeFolders(): Flow<List<com.yfantasyxx.data.db.TemplateFolder>>
+
+    @Insert
+    suspend fun insertFolder(folder: com.yfantasyxx.data.db.TemplateFolder): Long
+
+    @Update
+    suspend fun updateFolder(folder: com.yfantasyxx.data.db.TemplateFolder)
+
+    @Query("UPDATE template_folders SET name = :name WHERE id = :id")
+    suspend fun renameFolder(id: Long, name: String)
+
+    @Query("DELETE FROM template_folders WHERE id = :id")
+    suspend fun deleteFolder(id: Long)
+
+    @Query("UPDATE templates SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: Long)
+
+    @Query("UPDATE templates SET folderId = :folderId, sortOrder = :order WHERE id = :id")
+    suspend fun updateTemplatePlacement(id: Long, folderId: Long?, order: Int)
+
+    /** 该分组末尾的下一个 sortOrder；空分组返回 0 */
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM templates WHERE folderId IS :folderId")
+    suspend fun nextSortOrder(folderId: Long?): Int
+
+    /** 首页只显示：未分组模板 + 勾选了「显示在首页」的文件夹内模板 */
+    @Query(
+        """
+        SELECT t.* FROM templates t
+        WHERE t.folderId IS NULL
+           OR EXISTS (
+               SELECT 1 FROM template_folders f
+               WHERE f.id = t.folderId AND f.showOnHome = 1
+           )
+        ORDER BY t.sortOrder, t.createdAt DESC
+        """
+    )
+    fun observeHomeTemplates(): Flow<List<WorkoutTemplate>>
+
+    @Query("UPDATE template_folders SET showOnHome = :show WHERE id = :id")
+    suspend fun setFolderShowOnHome(id: Long, show: Boolean)
+
+    @Query("UPDATE template_folders SET rotation = :rotation WHERE id = :id")
+    suspend fun setFolderRotation(id: Long, rotation: Boolean)
+
+    @Query("UPDATE template_folders SET restDays = :restDays WHERE id = :id")
+    suspend fun setFolderRestDays(id: Long, restDays: Int)
+
+    /** 写计划游标：下一个该练的模板 + 本轮完成时刻（不在轮末时传 null） */
+    @Query(
+        """
+        UPDATE template_folders SET cycleNextTemplateId = :nextTemplateId, cycleEndedAt = :cycleEndedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun setPlanProgress(id: Long, nextTemplateId: Long?, cycleEndedAt: Long?)
+
+    @Transaction
+    @Query("SELECT * FROM templates ORDER BY createdAt DESC")
+    fun observeAllWithExercises(): Flow<List<TemplateWithExercises>>
+
+    @Transaction
+    @Query("SELECT * FROM templates WHERE id = :id")
+    suspend fun getWithExercises(id: Long): TemplateWithExercises?
+
+    @Insert
+    suspend fun insert(template: WorkoutTemplate): Long
+
+    @Update
+    suspend fun update(template: WorkoutTemplate)
+
+    @Delete
+    suspend fun delete(template: WorkoutTemplate)
+
+    @Insert
+    suspend fun insertExercise(item: TemplateExercise): Long
+
+    @Update
+    suspend fun updateExercise(item: TemplateExercise)
+
+    @Query("DELETE FROM template_exercises WHERE id = :id")
+    suspend fun deleteExercise(id: Long)
+
+    @Query("DELETE FROM template_exercises WHERE templateId = :templateId")
+    suspend fun deleteExercisesOfTemplate(templateId: Long)
+}
+
+@Dao
+interface SessionDao {
+    /*
+     * 会话的「真实时刻」一律是 COALESCE(activeStartedAt, startTime)，**不要用裸 startTime**。
+     *
+     * startTime 是「这场训练被创建出来」的时刻：打开训练页就会建，只看看不练、或者当天
+     * 建好第二天才练，它都停在创建那一刻。activeStartedAt 才是第一组打勾的时刻。
+     * 两列混用会出现「最近一次训练」和列表里显示的时间对不上：11 月 17 日建、18 日练完
+     * 的那场，按 startTime 会被当成 17 日的，被 18 日的另一场盖掉，于是预填引到的是更旧
+     * 的一次数据 —— 表现就是「明明上次练得更好，却没引用」。
+     */
+
+    /** 进行中的草稿（最近一个） */
+    @Query(
+        """
+        SELECT s.id AS id, s.name AS name, COALESCE(s.activeStartedAt, s.startTime) AS startTime,
+               (SELECT COUNT(*) FROM session_exercises se WHERE se.sessionId = s.id) AS exerciseCount,
+               (SELECT COUNT(*) FROM set_logs sl
+                    INNER JOIN session_exercises se2 ON sl.sessionExerciseId = se2.id
+                    WHERE se2.sessionId = s.id AND sl.completed = 1) AS completedSetCount,
+               (SELECT COUNT(*) FROM set_logs sl2
+                    INNER JOIN session_exercises se3 ON sl2.sessionExerciseId = se3.id
+                    WHERE se3.sessionId = s.id) AS plannedSetCount
+        FROM sessions s
+        WHERE s.endTime IS NULL
+          -- 必须至少完成过一组才算「训练进行中」，只打开没练不显示
+          AND EXISTS (
+              SELECT 1 FROM set_logs slx
+              INNER JOIN session_exercises sex ON slx.sessionExerciseId = sex.id
+              WHERE sex.sessionId = s.id AND slx.completed = 1
+          )
+        ORDER BY COALESCE(s.activeStartedAt, s.startTime) DESC LIMIT 1
+        """
+    )
+    fun observeActiveSummary(): Flow<ActiveSessionSummary?>
+
+    /**
+     * 历史列表摘要（已完成的）。
+     *
+     * [limit] 是必需的：历史页只显示最近 200 条，但 CSV 导出要全量——
+     * 以前导出复用这个查询，练满 200 场之后导出的文件会静默截断。
+     * SQLite 里 `LIMIT -1` 表示不限条数。
+     */
+    @Query(
+        """
+        SELECT s.id AS id,
+               CASE WHEN s.name = '' THEN '训练' ELSE s.name END AS name,
+               s.templateId AS templateId,
+               COALESCE(s.activeStartedAt, s.startTime) AS startTime,
+               s.endTime AS endTime,
+               s.note AS note,
+               (SELECT COUNT(*) FROM set_logs slp
+                    INNER JOIN session_exercises sep ON slp.sessionExerciseId = sep.id
+                    WHERE sep.sessionId = s.id AND slp.isPr = 1 AND slp.completed = 1) AS prCount,
+               (SELECT COUNT(DISTINCT se.exerciseId) FROM session_exercises se WHERE se.sessionId = s.id) AS exerciseCount,
+               (SELECT COUNT(*) FROM set_logs sl
+                    INNER JOIN session_exercises se2 ON sl.sessionExerciseId = se2.id
+                    WHERE se2.sessionId = s.id AND sl.completed = 1) AS setCount,
+               COALESCE((SELECT SUM(
+                        -- 有效负荷：自重动作的重量栏是「额外负重」，容量要把体重算进去。
+                        -- 不改 weightKg 本身，因为次数/RPE/PR 都还要用原始值。
+                        -- 与 data/Load.kt 的 effectiveKg 保持一致
+                        -- 递减段同样要算进来：100×6 + 80×6 是一组练了两个重量，
+                        -- 只算主组会把练过的量记少
+                        CASE WHEN e2.equipment = '自重'
+                             THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                             ORDER BY bm.date DESC LIMIT 1), 0) + sl2.weightKg) * sl2.reps
+                                  + COALESCE((SELECT SUM(
+                                        (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                                   ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                                        FROM set_segments sg WHERE sg.setLogId = sl2.id), 0)
+                             ELSE sl2.weightKg * sl2.reps
+                                  + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                                        FROM set_segments sg WHERE sg.setLogId = sl2.id), 0) END)
+                    FROM set_logs sl2
+                    INNER JOIN session_exercises se3 ON sl2.sessionExerciseId = se3.id
+                    INNER JOIN exercises e2 ON se3.exerciseId = e2.id
+                    WHERE se3.sessionId = s.id AND sl2.completed = 1 AND sl2.isWarmup = 0), 0) AS totalVolume
+        FROM sessions s
+        WHERE s.endTime IS NOT NULL
+        -- 排序用「真正开始计时」的时刻，和上面 SELECT 出来的 startTime 必须是同一个口径：
+        -- 用裸 startTime 排，列表里会出现「显示 11 月 18 日的那条排到 11 月 19 日下面」。
+        ORDER BY COALESCE(s.activeStartedAt, s.startTime) DESC
+        LIMIT :limit
+        """
+    )
+    fun observeSummaries(limit: Int): Flow<List<SessionSummary>>
+
+    @Transaction
+    @Query("SELECT * FROM sessions WHERE id = :id")
+    suspend fun getWithDetails(id: Long): SessionWithDetails?
+
+    @Transaction
+    @Query("SELECT * FROM sessions WHERE id = :id")
+    fun observeSession(id: Long): Flow<SessionWithDetails?>
+
+    @Transaction
+    @Query("SELECT * FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1")
+    suspend fun getActiveDraft(): SessionWithDetails?
+
+    @Insert
+    suspend fun insert(session: WorkoutSession): Long
+
+    @Update
+    suspend fun update(session: WorkoutSession)
+
+    @Query("SELECT * FROM sessions WHERE id = :id")
+    suspend fun getById(id: Long): WorkoutSession?
+
+    @Query("UPDATE sessions SET name = :name, note = :note WHERE id = :id")
+    suspend fun rename(id: Long, name: String, note: String)
+
+    @Query("UPDATE sessions SET endTime = :endTime, name = :name, note = :note WHERE id = :id")
+    suspend fun finish(id: Long, endTime: Long, name: String, note: String)
+
+    @Query("UPDATE sessions SET templateId = :templateId WHERE id = :id")
+    suspend fun setTemplateId(id: Long, templateId: Long?)
+
+    @Query("UPDATE sessions SET activeStartedAt = :time WHERE id = :id AND activeStartedAt IS NULL")
+    suspend fun markStarted(id: Long, time: Long)
+
+    @Query("DELETE FROM sessions WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    /** 清理多余的进行中草稿，只保留最近一个（级联删除其动作与组，避免孤儿数据） */
+    @Query(
+        """
+        DELETE FROM set_logs WHERE sessionExerciseId IN (
+            SELECT se.id FROM session_exercises se WHERE se.sessionId IN (
+                SELECT id FROM sessions WHERE endTime IS NULL AND id NOT IN (
+                    SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+                )
+            )
+        )
+        """
+    )
+    suspend fun deleteStaleDraftSets()
+
+    @Query(
+        """
+        DELETE FROM session_exercises WHERE sessionId IN (
+            SELECT id FROM sessions WHERE endTime IS NULL AND id NOT IN (
+                SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+            )
+        )
+        """
+    )
+    suspend fun deleteStaleDraftExercises()
+
+    @Query(
+        """
+        DELETE FROM sessions WHERE endTime IS NULL AND id NOT IN (
+            SELECT id FROM sessions WHERE endTime IS NULL ORDER BY startTime DESC LIMIT 1
+        )
+        """
+    )
+    suspend fun deleteStaleDraftSessions()
+
+    // ---- 统计 ----
+
+    /**
+     * 近 N 天每场训练的容量（不做分桶）。
+     *
+     * 以前是在 SQL 里 `(startTime / weekMs) * weekMs` 分桶，桶边界是
+     * 1970-01-01（周四）起每 7 天，而界面按「本地时区周一」去查，
+     * 两边永远对不上 —— 「近 8 周容量」因此长期是空图。
+     * 分桶改由 Kotlin 按本地日历做，SQL 只回原始行。
+     */
+    @Query(
+        """
+        SELECT COALESCE(s.activeStartedAt, s.startTime) AS startTime, SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END) AS volume
+        FROM sessions s
+        INNER JOIN session_exercises se ON se.sessionId = s.id
+        INNER JOIN set_logs sl ON sl.sessionExerciseId = se.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
+          AND COALESCE(s.activeStartedAt, s.startTime) >= :since
+        GROUP BY s.id ORDER BY COALESCE(s.activeStartedAt, s.startTime)
+        """
+    )
+    suspend fun sessionVolumeRows(since: Long): List<SessionVolumeRow>
+
+    /** 近 N 天各分类容量 */
+    @Query(
+        """
+        SELECT e.category AS category, SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END) AS volume
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
+          AND COALESCE(s.activeStartedAt, s.startTime) >= :since
+        GROUP BY e.category ORDER BY volume DESC
+        """
+    )
+    suspend fun volumeByCategory(since: Long): List<CategoryVolume>
+
+    /**
+     * PR 计算的原始行。
+     *
+     * 不在这里做聚合：1RM 是多条公式的加权融合（见 OneRepMax），SQL 表达不出来。
+     * 也不做成 Flow：原来的写法是「任意一组数据变更就重跑整个历史的三表 join」，
+     * 训练中每填一次重量都会触发。现在是一次性查询，由仓库层缓存 + 显式失效。
+     */
+    @Query(
+        """
+        SELECT e.id AS exerciseId, e.name AS exerciseName, e.pattern AS pattern,
+               e.equipment AS equipment,
+               sl.weightKg AS weightKg, sl.reps AS reps
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE sl.completed = 1 AND sl.isWarmup = 0 AND sl.reps > 0
+        """
+    )
+    suspend fun workingSetsForPr(): List<PrSetRow>
+
+    /**
+     * 该动作所有已完成工作组（含 PR 组，排除热身）。
+     *
+     * 不在 SQL 里排序：最佳组要按估算 1RM 挑，
+     * 而 `ORDER BY weightKg DESC` 会让 100 kg × 1 赢过 95 kg × 8。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND sl.completed = 1
+          AND sl.isWarmup = 0 AND sl.reps > 0 AND s.endTime IS NOT NULL
+        """
+    )
+    suspend fun workingSetsForExercise(exerciseId: Long): List<SetLog>
+
+    /**
+     * 近 N 天训练次数。
+     *
+     * 时间口径必须和别处一致：`startTime` 是「打开训练页建这场」的时刻，
+     * 只看不练、隔天才练都停在那一刻。按它算「本周练了几次」，
+     * 周三建、周四练完的那一场会被算进周三。
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM sessions
+        WHERE endTime IS NOT NULL
+          AND COALESCE(activeStartedAt, startTime) >= :since
+        """
+    )
+    fun observeSessionCount(since: Long): Flow<Int>
+
+    /** 近 N 天总容量（自重动作按「体重 + 额外负重」折算，见 data/Load.kt） */
+    @Query(
+        """
+        SELECT COALESCE(SUM(
+            CASE WHEN e.equipment = '自重'
+                 THEN (COALESCE((SELECT bm.weightKg FROM body_metrics bm
+                                 ORDER BY bm.date DESC LIMIT 1), 0) + sl.weightKg) * sl.reps
+                      -- 递减段一并计入（自重动作同样按体重折算）
+                      + COALESCE((SELECT SUM(
+                            (COALESCE((SELECT bm2.weightKg FROM body_metrics bm2
+                                       ORDER BY bm2.date DESC LIMIT 1), 0) + sg.weightKg) * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0)
+                 ELSE sl.weightKg * sl.reps
+                      + COALESCE((SELECT SUM(sg.weightKg * sg.reps)
+                            FROM set_segments sg WHERE sg.setLogId = sl.id), 0) END), 0)
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
+          AND COALESCE(s.activeStartedAt, s.startTime) >= :since
+        """
+    )
+    fun observeTotalVolume(since: Long): Flow<Float>
+
+    // ---- 历史搜索 / 进阶 / 热力图 ----
+
+    /** 含有匹配动作名的训练 id（历史页按动作筛选） */
+    @Query(
+        """
+        SELECT DISTINCT se.sessionId FROM session_exercises se
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE e.name LIKE '%' || :keyword || '%'
+        """
+    )
+    suspend fun sessionIdsMatchingExercise(keyword: String): List<Long>
+
+    /**
+     * 某动作的 e1RM 原始行，按时间升序。
+     *
+     * 不在这里做聚合：1RM 要按这条曲线查表换算（见 `RepMaxCurve`），
+     * 曲线不覆盖时还要回落到七公式加权融合，SQL 表达不出来；
+     * 也不在这里按组聚合，一次训练里的高低起伏由调用方取最好一组。
+     */
+    @Query(
+        """
+        SELECT s.id AS sessionId, COALESCE(s.activeStartedAt, s.startTime) AS startTime,
+               sl.weightKg AS weightKg, sl.reps AS reps
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND sl.completed = 1 AND sl.isWarmup = 0
+          AND sl.reps > 0 AND s.endTime IS NOT NULL
+        ORDER BY COALESCE(s.activeStartedAt, s.startTime)
+        """
+    )
+    suspend fun e1rmRowsForExercise(exerciseId: Long): List<E1rmRow>
+
+    /**
+     * 全库「每动作 × 每次数」的最重一组，供 rep-max 曲线校准使用。
+     *
+     * 在 SQL 里就按 (动作, 次数) 聚合，不把全表拉回 Kotlin 再分桶：
+     * 练了两年的人 set_logs 上万行，逐行映射的开销远大于 GROUP BY；
+     * 每动作每次数只出一行，几百行就到顶。
+     */
+    @Query(
+        """
+        SELECT e.id AS exerciseId, e.pattern AS pattern, sl.reps AS reps,
+               MAX(sl.weightKg) AS weightKg, COUNT(*) AS setCount
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE sl.completed = 1 AND sl.isWarmup = 0 AND sl.weightKg > 0
+          AND sl.reps >= 1 AND sl.reps <= 12 AND s.endTime IS NOT NULL
+        GROUP BY e.id, e.pattern, sl.reps
+        """
+    )
+    suspend fun repMaxPoints(): List<RepMaxRow>
+
+    /**
+     * 最近一次「已完成」训练里某动作的工作组。
+     * 进阶建议只看上一次，看得太多反而会把中断前的旧记录算进来。
+     *
+     * **包含 PR 组**：以前这里排了 `isPr = 0`，理由是极限组会把预填带偏；
+     * 结果是「上次那组最重的 100×3 标了 PR，下次预填却只有前面的 80×8」，
+     * 用户看到的是「上次最好的重量和次数没被引用」。
+     * 预填本来就该是「上次怎么练的」，极限组也是那天真实做过的一组；
+     * 真正怕被带偏的是进阶建议，它在 [com.yfantasyxx.data.Progression] 里
+     * 自己把 PR 组滤掉，不需要在这一层替它挡。
+     *
+     * 「上一次」必须是**真正练过这个动作**的那一场，判据是那一场里有该动作的
+     * 已完成工作组（下面那个 EXISTS）。只按「这场里出现过该动作」找的话，
+     * 练到一半退出的那一场会占住位置：它一组都没打勾，过滤后什么都不剩，
+     * 再上一次 70×8 的好记录永远引不到，界面还显示「首次训练」。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.completed = 1
+          AND sl.isWarmup = 0
+          AND COALESCE(s.activeStartedAt, s.startTime) = (
+              SELECT MAX(COALESCE(s2.activeStartedAt, s2.startTime)) FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM set_logs sl2
+                    WHERE sl2.sessionExerciseId = se2.id
+                      AND sl2.completed = 1 AND sl2.isWarmup = 0
+                )
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun lastSessionSets(exerciseId: Long): List<SetLog>
+
+    /**
+     * 该动作最近一次已完成训练里的**热身组**。
+     *
+     * 模板里同一个动作可以有两行：一行标热身、一行正式。以前热身的预填也走
+     * [lastSessionSets]，而它写死了 `isWarmup = 0`，于是热身区拿到的组数、次数
+     * 全是正式组的 —— 界面上就是两组数据重叠。
+     *
+     * 热身组不进 PR，所以这里不排 `isPr`；口径只按 `isWarmup = 1`。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.completed = 1
+          AND sl.isWarmup = 1
+          AND COALESCE(s.activeStartedAt, s.startTime) = (
+              SELECT MAX(COALESCE(s2.activeStartedAt, s2.startTime)) FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM set_logs sl2
+                    WHERE sl2.sessionExerciseId = se2.id
+                      AND sl2.completed = 1 AND sl2.isWarmup = 1
+                )
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun lastSessionWarmupSets(exerciseId: Long): List<SetLog>
+
+    /**
+     * 该动作最近一次已完成训练里的**全部组**，不区分热身 / PR。
+     *
+     * 只给预填做最后一级兜底：一个动作从来没练成过正式组（比如只做了几组热身
+     * 就收工），[lastSessionSets] 会返回空，预填整片归零，界面上连「上次」
+     * 都变成「首次训练」。这时候拿热身组顶上，至少重量量级和次数是真实做过的。
+     *
+     * 正常情况下用不到这条：只要有过一组非热身完成组，[lastSessionSets] 就有值。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL AND sl.completed = 1
+          AND COALESCE(s.activeStartedAt, s.startTime) = (
+              SELECT MAX(COALESCE(s2.activeStartedAt, s2.startTime)) FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM set_logs sl2
+                    WHERE sl2.sessionExerciseId = se2.id AND sl2.completed = 1
+                )
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun lastSessionAnySets(exerciseId: Long): List<SetLog>
+
+    /**
+     * 某动作「练得最好」那一次训练里的全部工作组（设置里「历史最好」预填用）。
+     *
+     * 「最好」按单组容量 `重量 × 次数` 排，不是单看重量：
+     * 20kg×10 和 10kg×20 容量相同，但后者更像耐力组，
+     * 真按重量挑会漏掉高次数那次的完成度。容量相同时先比重、再比次数：
+     * 自重动作（重量栏是额外负重，纯自重时记 0）容量恒为 0，
+     * 这时唯一有意义的「更好」就是那次做了更多下。
+     * 最后按时间倒序，保证结果稳定（不然每次查询可能挑出不同的一次）。
+     *
+     * 排除热身组；**PR 组保留**——「练得最好」本来多半就是极限组贡献的，
+     * 把它排掉会让「历史最好」预填不到那次真正的巅峰。
+     * 一次训练里同一动作出现两次（分在两个 sessionExercise 里）时
+     * 会一起返回，按组号排序对使用方来说正好是「接着练」。
+     */
+    @Query(
+        """
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId
+          AND s.endTime IS NOT NULL
+          AND sl.completed = 1 AND sl.isWarmup = 0
+          AND se.sessionId = (
+              SELECT se2.sessionId FROM set_logs sl2
+              INNER JOIN session_exercises se2 ON sl2.sessionExerciseId = se2.id
+              INNER JOIN sessions s2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId
+                AND s2.endTime IS NOT NULL
+                AND sl2.completed = 1 AND sl2.isWarmup = 0
+              GROUP BY se2.sessionId
+              ORDER BY MAX(sl2.weightKg * sl2.reps) DESC,
+                       MAX(sl2.weightKg) DESC,
+                       MAX(sl2.reps) DESC,
+                       COALESCE(s2.activeStartedAt, s2.startTime) DESC
+              LIMIT 1
+          )
+        ORDER BY sl.setNumber
+        """
+    )
+    suspend fun bestSessionSets(exerciseId: Long): List<SetLog>
+
+    /**
+     * 历史详情用：某动作在「这次训练之前」最近一次训练里的最强工作组。
+     *
+     * 排序先按会话时间倒序、再按重量次数，所以 `LIMIT 1` 拿到的是
+     * 「上一次练这个动作时最重的那组」，而不是把好几次训练混在一起比。
+     *
+     * 只排热身、**不排 PR**：上次最重的那组往往正好被标成 PR，排掉之后
+     * 对照值会退化成次重的一组，看起来就是「上次最好的一组没被引用」。
+     * 口径和 [lastSessionSets] 保持一致。
+     */
+    @Query(
+        """
+        SELECT sl.*, COALESCE(s.activeStartedAt, s.startTime) AS sessionStart
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId
+          AND s.endTime IS NOT NULL
+          AND s.id != :excludeSessionId
+          AND COALESCE(s.activeStartedAt, s.startTime) < :before
+          AND sl.completed = 1 AND sl.isWarmup = 0
+        ORDER BY COALESCE(s.activeStartedAt, s.startTime) DESC, sl.weightKg DESC, sl.reps DESC
+        LIMIT 1
+        """
+    )
+    suspend fun previousBestSet(
+        exerciseId: Long,
+        before: Long,
+        excludeSessionId: Long,
+    ): PreviousSetRow?
+
+    /**
+     * 某动作的历史：最近 [limit] 次「已完成」训练里的**已完成工作组**。
+     *
+     * 一次查完再用 sessionId 分组，避免「先查会话列表、再逐个查组」的 N+1。
+     * 正在进行的训练 `endTime IS NULL`，天然被排除。
+     *
+     * 只回打勾的组：没打勾的那些只是界面上的草稿，可能压根没做（或者做了没记），
+     * 混进历史里会让「上一场 60×8 · 60×8 · 0×0 · 0×0」这种串出现在弹窗里，
+     * 点「套用」还会把 0 铺进新训练。
+     *
+     * 场次那层子查询要求「这一场确实有该动作的已完成工作组」：
+     * 只按「这一场里出现过这个动作」找的话，练到一半退出的空场会占掉
+     * `LIMIT :limit` 的名额，历史上少好几个真实场次。
+     */
+    @Query(
+        """
+        SELECT sl.*, se.sessionId AS sessionId,
+               COALESCE(s.activeStartedAt, s.startTime) AS sessionStart
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        WHERE se.exerciseId = :exerciseId AND s.endTime IS NOT NULL
+          AND sl.completed = 1 AND sl.isWarmup = 0
+          AND se.sessionId IN (
+              SELECT s2.id FROM sessions s2
+              INNER JOIN session_exercises se2 ON se2.sessionId = s2.id
+              WHERE se2.exerciseId = :exerciseId AND s2.endTime IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM set_logs slx
+                    WHERE slx.sessionExerciseId = se2.id
+                      AND slx.completed = 1 AND slx.isWarmup = 0
+                )
+              ORDER BY COALESCE(s2.activeStartedAt, s2.startTime) DESC
+              LIMIT :limit
+          )
+        ORDER BY COALESCE(s.activeStartedAt, s.startTime) DESC, sl.setNumber
+        """
+    )
+    suspend fun historySetsFor(exerciseId: Long, limit: Int): List<ExerciseHistoryRow>
+
+    /** 窗口期内每个动作练了多少组、最后一次是什么时候（热力图用） */
+    @Query(
+        """
+        SELECT e.primaryMuscle AS primaryMuscle, e.secondaryMuscles AS secondaryMuscles,
+               COUNT(*) AS sets, MAX(COALESCE(s.activeStartedAt, s.startTime)) AS lastTrainedAt
+        FROM set_logs sl
+        INNER JOIN session_exercises se ON sl.sessionExerciseId = se.id
+        INNER JOIN sessions s ON se.sessionId = s.id
+        INNER JOIN exercises e ON se.exerciseId = e.id
+        WHERE s.endTime IS NOT NULL AND sl.completed = 1 AND sl.isWarmup = 0
+          AND COALESCE(s.activeStartedAt, s.startTime) >= :since
+        GROUP BY se.exerciseId
+        """
+    )
+    suspend fun muscleSetRows(since: Long): List<MuscleSetRow>
+
+    /**
+     * 某个训练计划（= 一个轮换文件夹里的模板集合）最近一次练到哪。
+     *
+     * 只在这个集合里找，回的是「模板 id + 开始时间」两列：
+     * 前者用来定位练到第几个，后者用来算离那天过了几天（休息日靠它推）。
+     */
+    @Query(
+        """
+        SELECT templateId, COALESCE(activeStartedAt, startTime) AS startTime FROM sessions
+        WHERE endTime IS NOT NULL AND templateId IN (:templateIds)
+        ORDER BY COALESCE(activeStartedAt, startTime) DESC LIMIT 1
+        """
+    )
+    suspend fun lastSessionForTemplates(templateIds: List<Long>): LastPlanSession?
+}
+
+/** 计划推算用的最小投影：练的哪个模板、什么时候练的 */
+data class LastPlanSession(
+    val templateId: Long,
+    val startTime: Long,
+)
+
+data class BucketVolume(
+    val bucket: Long,
+    val volume: Float,
+)
+
+/** 一场训练的开始时间与总容量（周容量在 Kotlin 侧按本地周一归桶） */
+data class SessionVolumeRow(
+    val startTime: Long,
+    val volume: Float,
+)
+
+@Dao
+interface SessionExerciseDao {
+    @Insert
+    suspend fun insert(item: SessionExercise): Long
+
+    @Update
+    suspend fun update(item: SessionExercise)
+
+    @Query("DELETE FROM session_exercises WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("SELECT * FROM session_exercises WHERE sessionId = :sessionId ORDER BY sortOrder, id")
+    suspend fun getForSession(sessionId: Long): List<SessionExercise>
+
+    @Query("SELECT restSeconds FROM session_exercises WHERE id = :id")
+    suspend fun restSecondsOf(id: Long): Int?
+
+    @Query("UPDATE session_exercises SET sortOrder = :order WHERE id = :id")
+    suspend fun updateSortOrder(id: Long, order: Int)
+
+    @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM session_exercises WHERE sessionId = :sessionId")
+    suspend fun nextSortOrder(sessionId: Long): Int
+
+    /**
+     * 训练中换动作：只改 exerciseId。
+     *
+     * 组记录、组号、排序、超级组编号全部保留 —— 这正是「器械被占」时想要的效果：
+     * 换成同类动作，已经打过的勾不用重打。
+     */
+    @Query("UPDATE session_exercises SET exerciseId = :exerciseId WHERE id = :id")
+    suspend fun replaceExercise(id: Long, exerciseId: Long)
+
+    @Query("UPDATE session_exercises SET supersetGroup = :group WHERE id = :id")
+    suspend fun setSupersetGroup(id: Long, group: Int?)
+
+    /** 新超级组编号：当前最大值 +1，同一个训练内不重复 */
+    @Query("SELECT COALESCE(MAX(supersetGroup), 0) + 1 FROM session_exercises WHERE sessionId = :sessionId")
+    suspend fun nextSupersetGroup(sessionId: Long): Int
+
+    @Query("SELECT * FROM session_exercises WHERE sessionId = :sessionId ORDER BY sortOrder, id")
+    fun observeForSession(sessionId: Long): kotlinx.coroutines.flow.Flow<List<SessionExercise>>
+}
+
+@Dao
+interface SetLogDao {
+    @Insert
+    suspend fun insert(log: SetLog): Long
+
+    @Insert
+    suspend fun insertAll(logs: List<SetLog>)
+
+    @Update
+    suspend fun update(log: SetLog)
+
+    /**
+     * 只改「是否完成」这一列。
+     *
+     * 界面手里的 [SetLog] 可能是几百毫秒前的快照：刚打完重量还没回包时，
+     * 用整行 @Update 写回会把刚填的重量/次数一起覆盖掉（表现为「打勾后数值归零」）。
+     * 所以打勾、打 PR 这类单列操作一律走列级 UPDATE。
+     */
+    @Query(
+        "UPDATE set_logs SET completed = :completed, durationMs = :durationMs, " +
+            "completedAt = :completedAt WHERE id = :id"
+    )
+    suspend fun updateCompleted(id: Long, completed: Boolean, durationMs: Long, completedAt: Long)
+
+    /**
+     * 这次训练里最后一组打勾的时刻；一组都没打过勾返回 null。
+     *
+     * set_logs 只挂 sessionExerciseId，所以要 join 回 session_exercises 才能按训练过滤。
+     * 只认 completedAt > 0：v16 及更早的历史没有这个字段，返回 null 让调用方退回「现在」。
+     */
+    @Query(
+        """
+        SELECT MAX(s.completedAt) FROM set_logs s
+        INNER JOIN session_exercises se ON se.id = s.sessionExerciseId
+        WHERE se.sessionId = :sessionId AND s.completed = 1 AND s.completedAt > 0
+        """
+    )
+    suspend fun lastCompletedAt(sessionId: Long): Long?
+
+    /**
+     * 只改「PR」这一列。标 PR 时顺手清热身：一组不可能既是热身又是极限组，
+     * 两条一起写在同一条语句里，避免出现「热身 + PR」这种中间态。
+     */
+    @Query(
+        "UPDATE set_logs SET isPr = :isPr, " +
+            "isWarmup = CASE WHEN :isPr = 1 THEN 0 ELSE isWarmup END WHERE id = :id"
+    )
+    suspend fun updatePr(id: Long, isPr: Boolean)
+
+    /**
+     * 只改「热身」这一列，方向与 [updatePr] 相反：标热身时清掉 PR。
+     */
+    @Query(
+        "UPDATE set_logs SET isWarmup = :isWarmup, " +
+            "isPr = CASE WHEN :isWarmup = 1 THEN 0 ELSE isPr END WHERE id = :id"
+    )
+    suspend fun updateWarmup(id: Long, isWarmup: Boolean)
+
+    @Query("UPDATE set_logs SET weightKg = :weightKg, reps = :reps WHERE id = :id")
+    suspend fun updateWeightReps(id: Long, weightKg: Float, reps: Int)
+
+    /**
+     * 只改组号。
+     *
+     * 删组重排以前走整行 `@Update`：界面手里的那行快照会把同时发生的
+     * 打勾 / 改重量一起写回旧值。重排只该碰 setNumber 这一列。
+     */
+    @Query("UPDATE set_logs SET setNumber = :setNumber WHERE id = :id")
+    suspend fun updateSetNumber(id: Long, setNumber: Int)
+
+    @Query("DELETE FROM set_logs WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("SELECT * FROM set_logs WHERE sessionExerciseId = :sessionExerciseId ORDER BY setNumber")
+    suspend fun getForSessionExercise(sessionExerciseId: Long): List<SetLog>
+
+    @Query("SELECT * FROM set_logs WHERE id = :id")
+    suspend fun getById(id: Long): SetLog?
+
+    @Query("SELECT COALESCE(MAX(setNumber), 0) FROM set_logs WHERE sessionExerciseId = :sessionExerciseId")
+    suspend fun maxSetNumber(sessionExerciseId: Long): Int
+
+    /**
+     * 追加一组，组号由 SQL 在同一条语句里算出来。
+     *
+     * `MAX(setNumber)+1` 再 `INSERT` 是两次调用、中间有挂起点：
+     * 连点两下会各自读到同一个 max，插出两条同号组，后面的
+     * 「复制上一组」「套用历史」按组号对齐就会错位。
+     */
+    @Query(
+        """
+        INSERT INTO set_logs (sessionExerciseId, setNumber, weightKg, reps, completed, isWarmup, isPr, durationMs, loggedAt)
+        SELECT :sessionExerciseId,
+               COALESCE(MAX(setNumber), 0) + 1,
+               :weightKg, :reps, :completed, 0, 0, 0, :loggedAt
+        FROM set_logs WHERE sessionExerciseId = :sessionExerciseId
+        """
+    )
+    suspend fun appendSet(
+        sessionExerciseId: Long,
+        weightKg: Float,
+        reps: Int,
+        completed: Boolean,
+        loggedAt: Long,
+    )
+}
+
+/**
+ * 递减组的续做段（主组之外的第二、第三段）。
+ *
+ * 主组自己在 set_logs 里，这里只放「降重量接着做」的那些段；
+ * 一段都没有时，这一组就是普通组，行为与以前完全一致。
+ */
+@Dao
+interface SetSegmentDao {
+    /**
+     * 这次训练的全部递减段，按主组 + 段号排好。
+     *
+     * set_segments 只挂 setLogId，要 join 两层才能按训练过滤（和 [SetLogDao.lastCompletedAt] 同样的做法）。
+     * 界面按 setLogId 分组挂到对应组行下面。
+     */
+    @Query(
+        """
+        SELECT sg.* FROM set_segments sg
+        INNER JOIN set_logs sl ON sl.id = sg.setLogId
+        INNER JOIN session_exercises se ON se.id = sl.sessionExerciseId
+        WHERE se.sessionId = :sessionId
+        ORDER BY sg.setLogId, sg.seq
+        """
+    )
+    fun observeForSession(sessionId: Long): Flow<List<SetSegment>>
+
+    @Query(
+        """
+        SELECT sg.* FROM set_segments sg
+        INNER JOIN set_logs sl ON sl.id = sg.setLogId
+        INNER JOIN session_exercises se ON se.id = sl.sessionExerciseId
+        WHERE se.sessionId = :sessionId
+        ORDER BY sg.setLogId, sg.seq
+        """
+    )
+    suspend fun getForSession(sessionId: Long): List<SetSegment>
+
+    @Query("SELECT * FROM set_segments WHERE setLogId = :setLogId ORDER BY seq")
+    suspend fun getForSet(setLogId: Long): List<SetSegment>
+
+    @Query("SELECT * FROM set_segments WHERE id = :id")
+    suspend fun getById(id: Long): SetSegment?
+
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM set_segments WHERE setLogId = :setLogId")
+    suspend fun maxSeq(setLogId: Long): Int
+
+    @Insert
+    suspend fun insert(segment: SetSegment): Long
+
+    /**
+     * 追加一段，段号在同一条语句里算。
+     *
+     * 和 [SetLogDao.appendSet] 同样的坑：先 `MAX(seq)` 再 INSERT 是两次调用、
+     * 中间有挂起点，连点两下会插出两段同号。
+     */
+    @Query(
+        """
+        INSERT INTO set_segments (setLogId, seq, weightKg, reps)
+        VALUES (:setLogId,
+                (SELECT COALESCE(MAX(seq), 0) + 1 FROM set_segments WHERE setLogId = :setLogId),
+                :weightKg, :reps)
+        """
+    )
+    suspend fun appendSegment(setLogId: Long, weightKg: Float, reps: Int)
+
+    /** 和组行一样只写数值列：界面手里的快照可能已经过期 */
+    @Query("UPDATE set_segments SET weightKg = :weightKg, reps = :reps WHERE id = :id")
+    suspend fun updateValues(id: Long, weightKg: Float, reps: Int)
+
+    @Query("UPDATE set_segments SET seq = :seq WHERE id = :id")
+    suspend fun updateSeq(id: Long, seq: Int)
+
+    @Query("DELETE FROM set_segments WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    /** 主组被删时兜底清一遍；正常路径由外键级联负责 */
+    @Query("DELETE FROM set_segments WHERE setLogId = :setLogId")
+    suspend fun deleteForSet(setLogId: Long)
+}
+
+@Dao
+interface BodyMetricDao {
+    @Query("SELECT * FROM body_metrics ORDER BY date DESC")
+    fun observeAll(): Flow<List<BodyMetric>>
+
+    @Query("SELECT * FROM body_metrics WHERE date = :date LIMIT 1")
+    suspend fun getByDate(date: Long): BodyMetric?
+
+    /** 最近一次体重（kg）；没记过返回 null */
+    @Query("SELECT weightKg FROM body_metrics ORDER BY date DESC LIMIT 1")
+    suspend fun latestWeightKg(): Float?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(metric: BodyMetric): Long
+
+    @Upsert
+    suspend fun upsert(metric: BodyMetric)
+
+    /**
+     * 删掉同一天里除 [keepId] 之外的行。
+     *
+     * 旧版本用 `@Upsert` 写过体重：主键是自增 id、传的是 0，永远匹配不到
+     * 已有行，所以同一天记两次就会留下两行。这里在下次记录时顺手清掉，
+     * 否则 `ORDER BY date DESC LIMIT 1` 取到哪条全看 rowid。
+     */
+    @Query("DELETE FROM body_metrics WHERE date = :date AND id != :keepId")
+    suspend fun deleteOthersOfDate(date: Long, keepId: Long)
+
+    @Query("DELETE FROM body_metrics WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Dao
+interface PlanDao {
+    @Query("SELECT * FROM training_plans ORDER BY createdAt, id")
+    fun observePlans(): Flow<List<PlanEntity>>
+
+    @Query("SELECT * FROM plan_days ORDER BY planId, position, id")
+    fun observeDays(): Flow<List<PlanDay>>
+
+    @Query("SELECT * FROM training_plans WHERE isActive = 1 LIMIT 1")
+    suspend fun activePlan(): PlanEntity?
+
+    @Query("SELECT * FROM training_plans WHERE id = :id")
+    suspend fun plan(id: Long): PlanEntity?
+
+    @Query("SELECT * FROM plan_days WHERE planId = :planId ORDER BY position, id")
+    suspend fun daysOf(planId: Long): List<PlanDay>
+
+    @Insert
+    suspend fun insertPlan(plan: PlanEntity): Long
+
+    @Query("UPDATE training_plans SET name = :name WHERE id = :id")
+    suspend fun renamePlan(id: Long, name: String)
+
+    @Query("DELETE FROM training_plans WHERE id = :id")
+    suspend fun deletePlan(id: Long)
+
+    /** 只允许一个计划激活：先全关，再开一个 */
+    @Query("UPDATE training_plans SET isActive = 0")
+    suspend fun deactivateAll()
+
+    @Query("UPDATE training_plans SET isActive = 1 WHERE id = :id")
+    suspend fun activate(id: Long)
+
+    @Query("UPDATE training_plans SET nextIndex = :nextIndex, dayStartedAt = :dayStartedAt WHERE id = :id")
+    suspend fun setProgress(id: Long, nextIndex: Int, dayStartedAt: Long)
+
+    @Insert
+    suspend fun insertDay(day: PlanDay): Long
+
+    @Query("DELETE FROM plan_days WHERE planId = :planId")
+    suspend fun deleteDays(planId: Long)
+}
+
+/**
+ * 有氧记录。
+ *
+ * 列表按 startedAt 倒序取最近 [limit] 条；本周统计用 since 过滤后
+ * 在内存里求和 —— 一周的条数本来就只有个位数，不值得再写一条聚合查询。
+ */
+@Dao
+interface CardioDao {
+    @Query("SELECT * FROM cardio_sessions ORDER BY startedAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<CardioSession>>
+
+    @Query("SELECT * FROM cardio_sessions WHERE startedAt >= :since ORDER BY startedAt DESC")
+    fun observeSince(since: Long): Flow<List<CardioSession>>
+
+    // 历史页要按月份往回翻，不能带 LIMIT：翻到半年前时，最近 200 条
+    // 那条查询根本覆盖不到那个月，日历上会出现「那天没记录」的假空白
+    @Query("SELECT * FROM cardio_sessions ORDER BY startedAt DESC")
+    fun observeAll(): Flow<List<CardioSession>>
+
+    @Query("SELECT * FROM cardio_sessions ORDER BY startedAt DESC LIMIT 1")
+    fun observeLatest(): Flow<CardioSession?>
+
+    @Query("SELECT * FROM cardio_sessions WHERE id = :id")
+    suspend fun getById(id: Long): CardioSession?
+
+    @Insert
+    suspend fun insert(session: CardioSession): Long
+
+    @Update
+    suspend fun update(session: CardioSession)
+
+    @Query("DELETE FROM cardio_sessions WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Database(
+    entities = [
+        Exercise::class,
+        WorkoutTemplate::class,
+        TemplateFolder::class,
+        TemplateExercise::class,
+        WorkoutSession::class,
+        SessionExercise::class,
+        SetLog::class,
+        SetSegment::class,
+        BodyMetric::class,
+        PlanEntity::class,
+        PlanDay::class,
+        CardioSession::class,
+    ],
+    version = 20,
+    exportSchema = true
+) abstract class AppDatabase : RoomDatabase() {
+    abstract fun exerciseDao(): ExerciseDao
+    abstract fun templateDao(): TemplateDao
+    abstract fun sessionDao(): SessionDao
+    abstract fun sessionExerciseDao(): SessionExerciseDao
+    abstract fun setLogDao(): SetLogDao
+    abstract fun setSegmentDao(): SetSegmentDao
+    abstract fun bodyMetricDao(): BodyMetricDao
+    abstract fun planDao(): PlanDao
+    abstract fun cardioDao(): CardioDao
+
+    companion object {
+        const val NAME = "yfantasyxx.db"
+
+        /**
+         * v11 -> v12：
+         * - 动作补次要肌群（热力图折算用）
+         * - 模板/训练动作把「目标次数」从文本拆成 min/max 两列（进阶判断要用整数比较）
+         * - 进阶策略、超级组编号
+         * - 模板文件夹可标记为「轮换计划」
+         *
+         * 旧文本列保留（Room 不允许悄悄少列），迁移时把 `8-12` 解析后回填到新列。
+         * 解析分两步做：先收集，再写回 —— 一边遍历游标一边 UPDATE 同一张表
+         * 在部分设备上会让游标错位。
+         */
+        val MIGRATION_11_12 = object : androidx.room.migration.Migration(11, 12) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE exercises ADD COLUMN secondaryMuscles TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetRepsMin INTEGER")
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetRepsMax INTEGER")
+                db.execSQL(
+                    "ALTER TABLE template_exercises ADD COLUMN progression INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN supersetGroup INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedRepsMin INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedRepsMax INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN supersetGroup INTEGER")
+
+                backfillRepRange(
+                    db, "template_exercises", "targetReps", "targetRepsMin", "targetRepsMax"
+                )
+                backfillRepRange(
+                    db, "session_exercises", "plannedReps", "plannedRepsMin", "plannedRepsMax"
+                )
+            }
+        }
+
+        /**
+         * v12 -> v13：`exercises.pattern` —— rep-max 曲线的分档，见 `LiftPattern`。
+         *
+         * 同一档次数下不同动作离 1RM 的距离不一样（硬拉最远、孤立动作最近），
+         * 之前全库共用一条曲线，硬拉 10RM 会被低估十几个百分点。
+         *
+         * 回填按「动作名关键词 → 分类兜底」推断，和新建自定义动作走同一套规则
+         * （[com.yfantasyxx.data.LiftPattern.infer]），不另写一份。
+         * 同样是先收集再写回：边遍历游标边 UPDATE 同一张表会让游标错位。
+         */
+        val MIGRATION_12_13 = object : androidx.room.migration.Migration(12, 13) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN pattern INTEGER NOT NULL DEFAULT 0")
+
+                val inferred = mutableListOf<Pair<Long, Int>>()
+                db.query("SELECT id, name, category, equipment FROM exercises").use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val pattern = com.yfantasyxx.data.LiftPattern
+                            .infer(cursor.getString(1), cursor.getString(2), cursor.getString(3))
+                        if (pattern != com.yfantasyxx.data.LiftPattern.UNKNOWN) {
+                            inferred += cursor.getLong(0) to pattern.value
+                        }
+                    }
+                }
+                // 拼进 SQL 的只能是数值：value 是枚举常量，id 是 Cursor.getLong。
+                // 维护提醒——不要在这里加任何来自用户输入（动作名、文件名）的字符串，
+                // SQLite 不支持参数化标识符，一旦混进字符串就是注入面
+                inferred.forEach { (id, value) ->
+                    db.execSQL("UPDATE exercises SET pattern = $value WHERE id = $id")
+                }
+            }
+        }
+
+        /**
+         * v13 -> v14：训练计划从「按顺序现推」改成「有游标的循环」。
+         *
+         * - `restDays`：每轮结束休息几天（0 = 老行为，不停歇地循环）
+         * - `cycleNextTemplateId` / `cycleEndedAt`：进度游标。
+         *   老用户升级时都是 null，第一次读计划会按训练历史推一次，进度不会丢。
+         */
+        val MIGRATION_13_14 = object : androidx.room.migration.Migration(13, 14) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN restDays INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN cycleNextTemplateId INTEGER"
+                )
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN cycleEndedAt INTEGER"
+                )
+            }
+        }
+
+        /**
+         * v14 -> v15：训练计划独立成表。
+         *
+         * 旧做法把「计划」挂在文件夹上（rotation + restDays + 游标），只能整个文件夹当循环，
+         * 休息日也只能统一加在轮末，看不懂也没法排「推 / 拉 / 休息 / 腿」这种。
+         * 新模型是一个计划 = 一串天，每天一个模板或休息日。
+         *
+         * 老数据搬一次：第一个开了 rotation 的文件夹 → 一个激活的计划，
+         * 模板按原顺序排成训练日，restDays 接在末尾。
+         */
+        /**
+         * v19 -> v20：有氧记录的器械参数。
+         *
+         * 只加一列 TEXT，不碰老数据：空串表示「这次没调过参数」，
+         * 列表和详情里那一行摘要也就不画。
+         */
+        val MIGRATION_19_20 = object : androidx.room.migration.Migration(19, 20) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `cardio_sessions` " +
+                        "ADD COLUMN `settings` TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        /**
+         * v18 -> v19：有氧记录。
+         *
+         * 单独一张表，和 sessions / set_logs 之间没有任何外键：
+         * 有氧是训练计划之外的模块，删掉训练记录不该顺带删掉当天的跑步。
+         * 建表语句与 Room 生成的 schema 保持一致。
+         */
+        val MIGRATION_18_19 = object : androidx.room.migration.Migration(18, 19) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `cardio_sessions` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`type` TEXT NOT NULL, " +
+                        "`startedAt` INTEGER NOT NULL, " +
+                        "`durationMs` INTEGER NOT NULL, " +
+                        "`distanceKm` REAL NOT NULL, " +
+                        "`note` TEXT NOT NULL, " +
+                        "`manual` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_cardio_sessions_startedAt` " +
+                        "ON `cardio_sessions` (`startedAt`)"
+                )
+            }
+        }
+
+        /**
+         * v17 -> v18：递减组。
+         *
+         * 主组仍然是 set_logs 的一行，这张表只存「降重量接着做」的那些段。
+         * 单独成表而不是往 set_logs 里多插行：组数、勾选、休息计时、
+         * 「上次这个动作」全是按「一行 = 一组」写的，多插行会把它们全都搞乱。
+         *
+         * 外键用 CASCADE：删掉主组时，它的段跟着消失，不留孤儿行。
+         * 建表语句必须与 Room 生成的 schema 完全一致，否则打开库时校验不过。
+         */
+        val MIGRATION_17_18 = object : androidx.room.migration.Migration(17, 18) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `set_segments` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`setLogId` INTEGER NOT NULL, " +
+                        "`seq` INTEGER NOT NULL, " +
+                        "`weightKg` REAL NOT NULL, " +
+                        "`reps` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`setLogId`) REFERENCES `set_logs`(`id`) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_set_segments_setLogId` " +
+                        "ON `set_segments` (`setLogId`)"
+                )
+            }
+        }
+
+        /**
+         * v16 -> v17：每组补「这一组是哪一刻打完勾的」。
+         *
+         * 训练结束时间要按最后一组的完成时刻算（见 [WorkoutSession.endTime]），
+         * 光有 durationMs 推不出来 —— 那只记了组内时长，没有绝对时刻。
+         * 旧数据统一 0（未知），完成训练时退回「现在」。
+         */
+        val MIGRATION_16_17 = object : androidx.room.migration.Migration(16, 17) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE set_logs ADD COLUMN completedAt INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        /**
+         * v15 -> v16：每组补「这一组做了多久」。
+         *
+         * 旧数据没记过时间，统一 0（未知），组行上就不显示这一格；
+         * 不能拿 loggedAt 去反推 —— 那是建行（排计划组）的时刻，不是做完的时刻。
+         */
+        val MIGRATION_15_16 = object : androidx.room.migration.Migration(15, 16) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE set_logs ADD COLUMN durationMs INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        val MIGRATION_14_15 = object : androidx.room.migration.Migration(14, 15) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `training_plans` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `isActive` INTEGER NOT NULL,
+                        `nextIndex` INTEGER NOT NULL,
+                        `dayStartedAt` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `plan_days` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `planId` INTEGER NOT NULL,
+                        `position` INTEGER NOT NULL,
+                        `templateId` INTEGER,
+                        FOREIGN KEY(`planId`) REFERENCES `training_plans`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`templateId`) REFERENCES `templates`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_plan_days_planId` ON `plan_days` (`planId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_plan_days_templateId` " +
+                        "ON `plan_days` (`templateId`)"
+                )
+                migrateFolderRotationToPlan(db)
+            }
+        }
+
+        /** 把老的「文件夹轮换」搬成一个真正的计划；没有就什么都不做 */
+        private fun migrateFolderRotationToPlan(
+            db: androidx.sqlite.db.SupportSQLiteDatabase
+        ) {
+            var folderId = -1L
+            var folderName = ""
+            var restDays = 0
+            var nextTemplateId: Long? = null
+            db.query(
+                "SELECT id, name, restDays, cycleNextTemplateId FROM template_folders " +
+                    "WHERE rotation = 1 ORDER BY sortOrder, id LIMIT 1"
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    folderId = cursor.getLong(0)
+                    folderName = cursor.getString(1)
+                    restDays = cursor.getInt(2)
+                    nextTemplateId = if (cursor.isNull(3)) null else cursor.getLong(3)
+                }
+            }
+            if (folderId < 0) return
+
+            val templateIds = mutableListOf<Long>()
+            db.query(
+                "SELECT id FROM templates WHERE folderId = $folderId " +
+                    "ORDER BY sortOrder, createdAt DESC"
+            ).use { cursor ->
+                while (cursor.moveToNext()) templateIds += cursor.getLong(0)
+            }
+            if (templateIds.isEmpty()) return
+
+            val now = System.currentTimeMillis()
+            val startedAt = java.util.Calendar.getInstance().apply {
+                timeInMillis = now
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }.timeInMillis
+
+            // ContentValues.put 是按类型重载的，Any? 传不进去，这里按实际类型分派
+            fun values(vararg pairs: Pair<String, Any?>): android.content.ContentValues {
+                val values = android.content.ContentValues()
+                pairs.forEach { (key, value) ->
+                    when (value) {
+                        null -> values.putNull(key)
+                        is Int -> values.put(key, value)
+                        is Long -> values.put(key, value)
+                        is String -> values.put(key, value)
+                        else -> values.put(key, value.toString())
+                    }
+                }
+                return values
+            }
+
+            val planId = db.insert(
+                "training_plans",
+                android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                values(
+                    "name" to folderName,
+                    "isActive" to 1,
+                    "nextIndex" to templateIds.indexOf(nextTemplateId).coerceAtLeast(0),
+                    "dayStartedAt" to startedAt,
+                    "createdAt" to now,
+                ),
+            )
+
+            var position = 0
+            templateIds.forEach { id ->
+                db.insert(
+                    "plan_days",
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                    values(
+                        "planId" to planId,
+                        "position" to position++,
+                        "templateId" to id,
+                    ),
+                )
+            }
+            repeat(restDays.coerceIn(0, 7)) {
+                db.insert(
+                    "plan_days",
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT,
+                    values(
+                        "planId" to planId,
+                        "position" to position++,
+                        "templateId" to null,
+                    ),
+                )
+            }
+        }
+
+
+        /** 把旧的自由文本次数解析成 min/max（`8-12` → 8,12；`10` → 10,10） */
+        private fun backfillRepRange(
+            db: androidx.sqlite.db.SupportSQLiteDatabase,
+            table: String,
+            source: String,
+            minColumn: String,
+            maxColumn: String,
+        ) {
+            val parsed = mutableListOf<Pair<Long, com.yfantasyxx.data.RepRange>>()
+            db.query("SELECT id, $source FROM $table WHERE $source IS NOT NULL").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val range = com.yfantasyxx.data.RepRange.parse(cursor.getString(1))
+                        ?: continue
+                    parsed += id to range
+                }
+            }
+            // 拼进 SQL 的只有两类：表名/列名（编译期常量，见各 MIGRATION 调用点）
+            // 和 RepRange.min/max（由正则从文本里抠出的整数）。都是数值或常量，
+            // 没有注入面。维护提醒——别把动作名、标签这类自由文本拼进来。
+            parsed.forEach { (id, range) ->
+                db.execSQL(
+                    "UPDATE $table SET $minColumn = ${range.min}, $maxColumn = ${range.max} WHERE id = $id"
+                )
+            }
+        }
+
+        /**
+         * v10 -> v11：sessions 的 startTime / endTime 建索引。
+         * 统计查询全部按 startTime 范围过滤，草稿查询按 endTime IS NULL 过滤，
+         * 没有索引时两者都是全表扫描。索引名必须是 Room 的默认命名格式
+         * （index_<表>_<列>），否则启动时 schema 校验会报 IllegalStateException。
+         */
+        val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sessions_startTime` ON `sessions` (`startTime`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sessions_endTime` ON `sessions` (`endTime`)"
+                )
+            }
+        }
+
+        /** v9 -> v10：训练动作记录模板设定的目标次数 */
+        val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedReps TEXT")
+            }
+        }
+
+        /** v8 -> v9：训练动作记录模板计划的组数 */
+        val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN plannedSets INTEGER")
+            }
+        }
+
+        /** v7 -> v8：文件夹可控制是否在首页展示其模板 */
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE template_folders ADD COLUMN showOnHome INTEGER NOT NULL DEFAULT 1"
+                )
+            }
+        }
+
+        /** v6 -> v7：组可标记为 PR 极限组 */
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE set_logs ADD COLUMN isPr INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v5 -> v6：模板动作与训练动作支持独立休息时长 */
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN restSeconds INTEGER")
+                db.execSQL("ALTER TABLE session_exercises ADD COLUMN restSeconds INTEGER")
+            }
+        }
+
+        /** v4 -> v5：模板支持文件夹分类与自定义排序 */
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS template_folders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        sortOrder INTEGER NOT NULL DEFAULT 0
+                    )"""
+                )
+                db.execSQL("ALTER TABLE templates ADD COLUMN folderId INTEGER")
+                db.execSQL("ALTER TABLE templates ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v3 -> v4：训练记录增加实际开始计时时刻 */
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN activeStartedAt INTEGER")
+            }
+        }
+
+        /** v2 -> v3：模板动作支持目标重量与热身标记 */
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE template_exercises ADD COLUMN targetWeightKg REAL")
+                db.execSQL(
+                    "ALTER TABLE template_exercises ADD COLUMN isWarmup INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        /** v1 -> v2：动作支持自定义休息时长 */
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercises ADD COLUMN restSeconds INTEGER")
+            }
+        }
+    }
+}

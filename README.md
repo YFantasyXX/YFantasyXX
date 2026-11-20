@@ -1,0 +1,196 @@
+# YFantasyXX
+
+一个用 **MIUIX（HyperOS 风格 Compose UI）** 打造的 Android 健身训练记录 App。
+
+本地优先：所有数据存在自己的手机里（Room / SQLite），不注册账号、不上传第三方服务器；需要多端备份时，可接入**你自己的 WebDAV 网盘**（坚果云 / Nextcloud / InfiniCLOUD 等）。
+
+> **下载**：最新版见 [Releases](https://github.com/YFantasyXX/YFantasyXX/releases/latest)，直接装 `YFantasyXX-*.apk`。要求 Android 12（API 32）以上。
+
+## 功能
+
+- **训练记录**：开始空训练或从模板开始，逐个动作记录组数、重量、次数，自动记录训练时长
+- **有氧记录**：跑步机 / 跑步 / 快走 / 骑行 / 椭圆机 / 划船机 / 跳绳 / 爬楼机 / 游泳 / 其他。秒表按**真实流逝时间**算——切后台、锁屏、甚至杀掉 App 再回来，数字都对得上；可调坡度 / 速度 / 阻力等器械参数（跟着秒表一起落盘），结束后填距离与备注，也能补录「昨天跑了 5 公里」。本周的次数 / 时长 / 距离在页面顶部汇总
+- **组间休息计时**：完成一组自动开始倒计时（默认 90s，可调），支持 +30s / 跳过
+- **动作库**：内置 775 个动作（胸 / 背 / 腿 / 肩 / 手臂 / 核心 / 有氧 / 全身），带主次肌群；支持搜索、分类筛选、自定义动作
+- **训练模板**：把常练的动作组合存成模板（如"推日""腿日"），一键开练；可设目标次数区间与进阶策略
+- **训练中快捷操作**：
+  - **复制上一组**：一键把上组重量次数填进下一组
+  - **长按重量 → 刻度盘**：0 在正上方、顺时针一圈走完整个量程，每格 2.5 kg；绕圈拖动即可大跨度调重（70 → 100 不用点 12 下），跨格有轻震
+  - **左滑标记热身**：某组今天只是热身，左滑点一下就行；热身组不计容量、不进 PR 榜、也不作为下次的参考重量，行底色和组号会变青（与 PR 的金色区分）
+  - **替换动作**：器械被占时换成同类动作，已完成的组全部保留
+  - **杠铃片计算器**：按当前重量反推每边挂什么片（杆重与配片可设）
+  - **超级组**：两个动作交替做，只在组末休息
+  - **拖动排序**：按住左侧把手上下拖，贴边自动滚动，相邻卡片实时让位
+- **自动进阶**：模板动作可选「线性加重」或「双重进阶」，训练页按上次表现给出本次该上的重量，一键应用
+- **历史记录**：日历视图 + 月度汇总（次数 / 总时长 / 总容量）；卡片上直接写明这次练了多久、出了几组 PR、备注写了什么，搜索支持训练名 / 备注 / 动作名；点进详情能看到开始与结束时刻、每组明细、以及每个动作「上次练了多少」的对照，可编辑、删除、分享成卡片
+- **已完成记录可改**：练完发现重量填错、漏记一组，直接进详情页点铅笔改——加减重量次数、删组、补组、补动作、改名称备注，改动即时生效并重算 PR 与容量；**训练日期、结束时间与计划进度都不动**，改的是这一次练了什么，不是它发生在什么时候
+- **分享卡片**：一次训练的时长 / 容量 / 亮点动作生成图片分享
+- **数据统计**：
+  - 近 8 周训练容量柱状图
+  - 近 30 天部位训练分布
+  - 近 7 天肌群负荷热力图（主肌群记 1 组、次要肌群记 0.5 组，含恢复状态）
+  - 体重趋势折线图
+  - 个人纪录（PR）排行：按**估算 1RM** 排序，100 kg × 10 强于 110 kg × 3
+- **e1RM 曲线**：动作详情页画估算 1RM 趋势，一次训练一个点，能看出有没有真的在进步；曲线会随着训练记录变多，自动从「群体均值」换成「按你自己历史校准的版本」。换的是哪条、差多少，动作详情页会列出各次数档「群体 vs 你的」占比对照，统计页有各分档的校准状态与指数
+  - 换算按动作类型分档（硬拉 / 深蹲 / 推 / 拉 / 孤立），不是一条曲线套所有动作：同一次数下硬拉离 1RM 比卧推更远，用同一条线算会低估硬拉十几个百分点
+- **训练计划（自己排的循环，不看周）**：新建一个计划，一天一格地排——第 1 天推、第 2 天拉、第 3 天腿、第 4 天休息；休息日和训练日一样占一格，练完最后一个回到第 1 天。**同时只开一个计划**（列表里用开关切换，开一个自动关掉别的），首页就显示「今天第几天 / 练什么 / 休息日 / 下次练什么」，开始按钮直接带出那一天该用的模板。**训练日练完才往后走，休息日占满一整天自动流过**——不按星期几排，周三练完、周日才回来也不会错位；中间断了几天不会跳天。改计划（改名字、加减天、换模板、调顺序）不会重置进度，也不会动已经练过的记录；删掉训练记录会把计划退回那天。另可设每周训练次数目标（只作统计，不参与计划推进）
+- **WebDAV 备份**：整库备份 / 恢复 / 保留最近 5 份；支持训练完成后自动备份
+- **CSV 导出**：训练记录导出为 CSV，方便二次分析
+- **应用内更新**：启动时静默查一次 GitHub 上的最新 Release（6 小时内不重复），「我的 → 应用更新」里能看到这次改了什么、下载 APK 并直接调起系统安装器，不用再跑到网页上下包。下载完成后先校验 sha256（Release 自带摘要）、包名与签名证书，任何一项对不上就拒绝安装——GitHub 账号被盗也塞不进假包
+- **底栏**：HyperOS 风格的**实心悬浮胶囊**（浅色白 / 深色 `#2A2A2A`），五个页签等分排布，选中指示是一颗与胶囊**严格同心**的淡蓝药丸。切换页签时全场只有这一颗药丸，从上一格弹簧滑到下一格（连续点击能继承速度），图标做「线框 ↔ 实心」交叉淡入，文字延迟 130ms 才变白（等药丸滑到脚下）。支持在底栏上左右拖动、松手切到最近的页签；可单独开毛玻璃（真实采样下方内容，有额外 GPU 开销）
+- **深色模式**：跟随系统 / 浅色 / 深色
+- **单位切换**：kg / lb
+- **高刷新率**：启动时请求屏幕最高刷新率（设置页可查看当前实际 Hz）
+
+## UI
+
+界面完全使用 [MIUIX](https://github.com/compose-miuix-ui/miuix) 组件构建，视觉风格贴近小米 HyperOS：大标题顶栏、卡片式分组、squircle 圆角、HyperOS 蓝主题。
+
+## 技术栈
+
+| 模块 | 方案 |
+| --- | --- |
+| 语言 | Kotlin |
+| UI | Jetpack Compose + [MIUIX](https://github.com/compose-miuix-ui/miuix) `0.9.1` |
+| 架构 | MVVM + 单向数据流，手动依赖容器（无 Hilt） |
+| 数据库 | Room `2.8.x` |
+| 导航 | Navigation Compose |
+| 异步 | Kotlin Coroutines / Flow |
+| 网络 | OkHttp `5.x`（自实现轻量 WebDAV 客户端） |
+| 偏好存储 | DataStore Preferences + AndroidKeyStore 加密密码 |
+| 构建 | AGP `8.13.x` / Gradle `8.14.3` / Kotlin `2.3.20` |
+| 运行要求 | Android 12L+（minSdk 32）、compileSdk 37 |
+
+## 构建
+
+环境要求：JDK 17+、Android SDK Platform 37。
+
+> 本应用 minSdk 为 **32（Android 12L）**。底栏的可选毛玻璃由
+> [`io.github.kyant0:backdrop`](https://github.com/Kyant0/AndroidLiquidGlass) 提供（Apache-2.0）；
+> 关掉「底栏毛玻璃」后这一层离屏采集完全不挂载，低端机上没有额外开销。
+
+```bash
+git clone https://github.com/YFantasyXX/YFantasyXX.git
+cd YFantasyXX
+./gradlew assembleDebug
+```
+
+产物：`app/build/outputs/apk/debug/app-debug.apk`
+
+> Wrapper 的 `distributionUrl` 指向腾讯云 Gradle 镜像，国内下载更快；如在海外，可改回 `https://services.gradle.org/distributions/gradle-8.14.3-bin.zip`。
+>
+> 首次构建请确保 `local.properties` 中 `sdk.dir` 指向你的 Android SDK。
+
+## WebDAV 配置
+
+设置页 → WebDAV 同步，填入：
+
+| 服务 | 服务器地址示例 |
+| --- | --- |
+| 坚果云 | `https://dav.jianguoyun.com/dav/` （需在坚果云「安全选项」生成**应用密码**） |
+| Nextcloud | `https://your-domain/remote.php/dav/files/用户名/` |
+| InfiniCLOUD | `https://your-id.teracloud.jp/dav/` |
+
+备份文件保存于该目录下的 `YFantasyXX/` 子目录，文件名为 `yfantasyxx-backup-yyyyMMdd-HHmmss.db`，仅保留最近 5 份。恢复会覆盖本地数据库，恢复后应用自动重建数据库连接。
+
+> 密码使用 AndroidKeyStore（AES/GCM）加密后保存在本机 DataStore，不会明文落盘。
+
+## 项目结构
+
+```
+app/src/main/java/com/yfantasyxx/
+├── data/
+│   ├── db/              # Room 实体、DAO、数据库
+│   ├── prefs/           # DataStore 设置 + 密码加密
+│   ├── seed/            # 内置动作库种子数据（775 条，末段由脚本生成）
+│   └── WorkoutRepository.kt
+├── sync/
+│   ├── WebDavClient.kt  # 极简 WebDAV 客户端（PROPFIND/MKCOL/PUT/GET/DELETE）
+│   └── BackupManager.kt # 整库备份 / 恢复 / 清理
+├── update/
+│   └── UpdateRepository.kt  # 查 GitHub Release → 下载 APK → 校验 → 调起安装器
+├── ui/
+│   ├── home/            # 今日概览
+│   ├── workout/         # 训练进行中（组记录 + 休息计时）
+│   ├── exercises/       # 动作库与动作详情
+│   ├── templates/       # 训练模板
+│   ├── history/         # 历史与单次训练详情
+│   ├── stats/           # 图表统计与 PR
+│   ├── settings/        # 设置与 WebDAV
+│   ├── components/      # 通用组件 + Canvas 图表
+│   └── theme/           # MIUIX 主题
+└── YFantasyXXApplication.kt
+```
+
+```
+tools/
+└── exercise-import/     # 动作库导入脚本 + 数据来源说明
+```
+
+## 动作数据来源
+
+内置动作库分两部分：
+
+| 来源 | 条数 | 许可 |
+| --- | --- | --- |
+| 手写整理（常用动作，按训练习惯命名与划分肌群） | 118 | 本项目 |
+| [hasaneyldrm/exercises-dataset](https://github.com/hasaneyldrm/exercises-dataset) + [简体中文语言包](https://github.com/marcomarcogd/exercises-dataset-zh-cn) | 657 | MIT |
+
+数据集共 1324 条，其中 704 条有经过审校的简体中文译名，去掉与手写部分重复的之后剩 657 条。
+**只取文字字段（部位 / 器械 / 目标肌 / 协同肌 / 译名），没有使用任何图片或 GIF**——
+那部分媒体的版权归 Gym visual，有独立的使用限制，本项目不涉及。
+
+中文名不做机器翻译补全，所以 id ≥ 1000 的 620 条新动作没有收录。
+生成过程可复现，见 [`tools/exercise-import/`](tools/exercise-import/)。
+
+## 借鉴与参考
+
+训练智能与交互细节的一部分，是读完 [DuarteSantos8/openGym](https://github.com/DuarteSantos8/openGym) 的源码之后重新设计的。
+对方是 React + Node 的 Web 应用、AGPL-3.0；这里是 Kotlin + Compose + Room、Apache-2.0，
+**没有复制任何代码**，借鉴的是思路、公式与判定方式，实现全部重写。
+
+| 本项目位置 | 借鉴了什么 | 具体实现 |
+| --- | --- | --- |
+| `data/LiftPattern.kt` + `data/OneRepMax.kt` | 单条 1RM 公式只在低次数区间可信，应多公式加权融合 | 分档优先：`LiftPattern` 给每类动作一张「次数 → 占 1RM 比例」表（硬拉 / 深蹲 / 推 / 拉 / 孤立），`1RM = 重量 / 比例`；分档不明时才回落到七条公式（Epley / Brzycki / Lombardi / O'Conner / Wathan / Lander / Mayhew）按固有可靠度加权；超过 12 次返回 `null`，不猜 |
+| `data/RepMaxCalibration.kt` | 群体均值曲线对个人未必准（有人天生 rep-max 更平），但直接拟合重量又不可比 | 用**幂变换** `table(r)^γ` 保留原表的凸形状，只调「掉得多快」；取对数后是直线 `ln w = ln 1RM + γ·ln table(r)`，单个动作做最小二乘求 γ；跨动作只合并**无量纲的 γ**（组数加权中位数），不合并重量；γ 向 1 收缩，攒够 3 个动作才完全采信 |
+| `WorkoutRepository` 的 PR 口径 | 力量指标用**估算 1RM**排序，而不是最大重量 | 100 kg × 10（推类，e1RM ≈ 143）排在 110 kg × 3（≈ 120）之前；PR 卡片上的「最佳组」和「e1RM」来自同一组，不再出现「最大重量 × 最大次数」这种从未发生过的组合 |
+| `ui/workout/WorkoutDragSort.kt` | 拖动排序在**起手时一次性快照**所有行的几何，整场手势只读快照；落点用「数有多少行的中心在我之上」 | `buildDragSnapshot()` + `DragSnapshot.targetFor()`。原来是每帧读实时布局，容易形成「读布局 → 改视觉 → 再读」的反馈环；改成快照后反馈环从设计上消失，落点判据也从上下两个分支收敛成一句 `count { 中心在我之上 }` |
+| `data/Progression.kt` | 进阶引擎的判定顺序：先看上次是否全部摸到次数上限，再决定「加重」还是「加次数」；下肢的绝对增量大于上肢 | `Progression.suggest()` 是纯函数：`allHitTop` 时才加重并把次数打回下限，否则按 double / linear 分别给「次数 +1」或「重量不变重来」；深蹲一类 +5 kg、上肢 +2.5 kg |
+| `WorkoutRepository.muscleLoads()` | 疲劳度要按肌群累加，且**次要肌群也要计入**（否则卧推只算胸） | 主肌群记 1 组、次要肌群记 0.5 组，窗口 7 天；再按「最近一次训练距今多久」给出恢复中 / 恢复期 / 可练 |
+
+补充两点说明：
+
+- 拖动排序的快照方案不能直接照搬到 `LazyColumn`——它只对非虚拟化列表成立。这里做了改造：只快照**当前可见**的 item，下标加上 `baseIndex` 基址，因此拖出屏幕外的部分不会被误算。
+- 快照方案还有一个已知边界：**拖不到可视区之外**。解决办法是贴边自动滚动——滚动后重拍快照，并把「槽位走动」折算成视觉位移的补偿（`scrollCompensation`），三者必须一起对齐，否则卡片会从手指底下溜走。
+- e1RM 的曲线分两层：底层是**群体均值**（常用 RPE 对照表 + Richens & Cleather 2014 对深蹲 / 卧推 / 硬拉 rep-max 关系的量级），上层是**个人校准**（`RepMaxCalibration`）。校准有明确的冷启动边界：一个动作至少要有两个次数档、且跨度 ≥ 3 次，才连得出斜率；整档攒够 3 个动作才完全采信个人数据，之前都向群体均值收缩。所以新装或刚加的动作一律先按群体曲线走——不是没生效，是样本不够。
+- 校准结果必须在界面上能看见。γ > 1（掉得更快）会让同一组重量估出**更高**的 1RM，这层关系反直觉：不摆出「群体 76% / 你的 73%」的对照，用户只会看到 PR 莫名其妙变大，分不清是校准还是算错。所以动作详情页给对照表，统计页给各档的 γ 与样本量。
+
+## 路线图
+
+- [x] 训练过程中的组间休息通知（后台计时）
+- [x] 1RM 估算（按动作类型分档查表，分档不明时七公式加权融合；PR 按 e1RM 排序）
+- [x] e1RM 个人校准（用自己不同次数档的最好成绩拟合 rep-max 曲线，样本不足时向群体均值收缩）
+- [x] e1RM 进步曲线（动作详情页）
+- [x] 自动进阶（线性 / 双重进阶）
+- [x] 肌群热力图与恢复状态
+- [x] 训练计划：自己排「几天一轮」，休息日占一格，同时只开一个
+- [x] 训练日练完才推进、休息日按自然日流过（不按周）
+- [x] 超级组
+- [x] 已完成记录可编辑（改重量次数 / 增删组 / 增删动作 / 改名备注，不动日期与计划进度）
+- [x] 应用内更新（GitHub Release 检查 + 下载 + sha256 / 包名 / 签名三重校验）
+- [ ] 训练周期化（把轮换扩展成 4~6 周一个中周期，带减载周）
+- [ ] 数据导入（CSV）
+- [ ] 小组件（今日训练概览）
+- [ ] 动作动图 / 教学视频（受包体积限制，考虑按需下载）
+
+## 致谢
+
+- [MIUIX](https://github.com/compose-miuix-ui/miuix) — HyperOS 风格 Compose UI 组件库
+- [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) — 底栏可选毛玻璃的离屏采样（`backdrop`，Apache-2.0）
+- [compose-miuix-ui/miuix-material](https://github.com/compose-miuix-ui/miuix) — OS4 柔光玻璃的材质参数与边缘光着色器（收编在 `ui/glass/material/`，Apache-2.0）
+- [DuarteSantos8/openGym](https://github.com/DuarteSantos8/openGym) — 1RM 估算与拖动排序的设计参考（见上节）
+- 数据模型与交互设计参考了 [flandyw/Workout](https://github.com/flandyw/Workout)、[mihretu-dev/HomeWorkoutApp](https://github.com/mihretu-dev/HomeWorkoutApp) 等优秀开源健身项目
+
+## License
+
+[Apache-2.0](LICENSE)
